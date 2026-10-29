@@ -21,13 +21,14 @@ Manifold is not a selectable backend. It may survive only as an internal mesh fa
 crates/
   app/          binary entry point
   core/         HIR, evaluator, model tree (placeholder)
-  kernel-api/   Kernel trait, ShapeId, capability flags (placeholder)
+  kernel-api/   Kernel trait, ShapeId, capabilities, neutral mesh
+  kernel-truck/ Truck adapter: cuboid, cylinder, boolean, tessellation
   scad-syntax/  lossless CST, lexer, parser, and text edits
 ```
 
-The first implemented layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits.
+The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, booleans, and tessellation.
 
-The planned backend crates (`kernel-occt`, `kernel-solidcore`, `kernel-truck`) and the UI/render crates are not created yet.
+The planned backend crates (`kernel-occt`, `kernel-solidcore`) and the UI/render crates are not created yet.
 
 ## Build
 

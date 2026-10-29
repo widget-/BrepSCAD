@@ -4,6 +4,7 @@ members = [
     "crates/app",
     "crates/core",
     "crates/kernel-api",
+    "crates/kernel-truck",
     "crates/scad-syntax",
 ]
 
@@ -17,6 +18,9 @@ license = "BSD-3-Clause"
 anyhow = "1"
 rowan = "0.16"
 thiserror = "2"
+truck-meshalgo = { version = "0.4", default-features = false, features = ["analyzers", "tessellation"] }
+truck-modeling = "0.6"
+truck-shapeops = { version = "0.4", default-features = false }
 
 visual-openscad-core = { path = "crates/core" }
 visual-openscad-kernel-api = { path = "crates/kernel-api" }

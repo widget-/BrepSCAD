@@ -10,8 +10,7 @@ impl Kernel for PlaceholderKernel {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             booleans: true,
-            fillet: false,
-            step_io: false,
+            ..Capabilities::default()
         }
     }
 }
