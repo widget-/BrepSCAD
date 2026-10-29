@@ -1,14 +1,18 @@
 mod camera;
 mod renderer;
 
+use std::ops::Range;
+use std::time::Instant;
+
 use camera::Camera;
 use eframe::egui;
 use eframe::wgpu;
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use renderer::MeshRenderer;
 use visual_openscad_kernel_api::Mesh;
 use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::evaluate_to_meshes;
+use visual_openscad_scad_eval::{Evaluation, evaluate};
+use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
 const SAMPLE: &str = r#"size = [2, 2, 2];
 difference() {
@@ -33,13 +37,24 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ShapePart {
+    shape_index: usize,
+    triangle_start: usize,
+    triangle_count: usize,
+}
+
 struct ViewerApp {
     source: String,
+    evaluation: Evaluation,
     mesh: Mesh,
+    parts: Vec<ShapePart>,
     renderer: MeshRenderer,
     camera: Camera,
+    selected_shape: Option<usize>,
     error: Option<String>,
     pending_evaluate: bool,
+    last_eval_ms: f64,
 }
 
 impl ViewerApp {
@@ -49,32 +64,113 @@ impl ViewerApp {
             .as_ref()
             .expect("the viewer requires the wgpu backend");
 
-        let (mesh, error) = evaluate(SAMPLE);
+        let (evaluation, error) = evaluate_source(SAMPLE);
+        let (mesh, parts) = combine_evaluation(&evaluation);
         let mut camera = Camera::default();
         camera.fit(&mesh);
         let renderer = MeshRenderer::new(&render_state.device, &mesh);
 
         Self {
             source: SAMPLE.to_owned(),
+            evaluation,
             mesh,
+            parts,
             renderer,
             camera,
+            selected_shape: None,
             error,
             pending_evaluate: false,
+            last_eval_ms: 0.0,
         }
     }
 
     fn reload(&mut self, device: &wgpu::Device) {
-        let mut kernel = TruckKernel::new();
-        match evaluate_to_meshes(&self.source, &mut kernel, 0.01) {
-            Ok(meshes) => {
-                let mesh = combine_meshes(&meshes);
-                self.camera.fit(&mesh);
-                self.renderer.set_mesh(device, &mesh);
-                self.mesh = mesh;
-                self.error = None;
+        let started = Instant::now();
+        let (evaluation, error) = evaluate_source(&self.source);
+
+        if error.is_none() {
+            let (mesh, parts) = combine_evaluation(&evaluation);
+            self.camera.fit(&mesh);
+            self.renderer.set_mesh(device, &mesh);
+            self.mesh = mesh;
+            self.parts = parts;
+            self.evaluation = evaluation;
+            self.selected_shape = None;
+        }
+
+        self.error = error;
+        self.last_eval_ms = started.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    fn apply_parameter_edit(&mut self, range: Range<usize>, replacement: String) {
+        let text_range = TextRange::new(
+            TextSize::from(range.start as u32),
+            TextSize::from(range.end as u32),
+        );
+        match apply_edit(&self.source, &TextEdit::new(text_range, replacement)) {
+            Ok(source) => {
+                self.source = source;
+                self.selected_shape = None;
+                self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    fn pick_shape(&self, ndc: Vec2, aspect: f32) -> Option<usize> {
+        let (origin, direction) = self.camera.ray(ndc, aspect);
+        let triangle = nearest_triangle(&self.mesh, origin, direction)?;
+        self.parts
+            .iter()
+            .find(|part| {
+                triangle >= part.triangle_start
+                    && triangle < part.triangle_start + part.triangle_count
+            })
+            .map(|part| part.shape_index)
+    }
+
+    fn properties_ui(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.heading("Properties");
+
+        let Some(selected) = self.selected_shape else {
+            ui.label("Click the model to select a shape.");
+            return;
+        };
+
+        let (source_range, mut parameters) = match self.evaluation.shapes.get(selected) {
+            Some(shape) => (shape.source_range.clone(), shape.parameters.clone()),
+            None => {
+                self.selected_shape = None;
+                return;
+            }
+        };
+
+        ui.label(format!(
+            "Shape {selected} · bytes {}..{}",
+            source_range.start, source_range.end
+        ));
+
+        if parameters.is_empty() {
+            ui.label("No editable numbers in this shape.");
+            return;
+        }
+
+        let mut apply = None;
+        for parameter in &mut parameters {
+            ui.horizontal(|ui| {
+                let line = line_number(&self.source, parameter.range.start);
+                ui.label(format!("line {line}"));
+                let response = ui.add(egui::DragValue::new(&mut parameter.value).speed(0.01));
+                ui.monospace(&parameter.source);
+                if response.drag_stopped() || response.lost_focus() {
+                    apply = Some((parameter.range.clone(), format!("{}", parameter.value)));
+                }
+            });
+        }
+
+        if let Some((range, replacement)) = apply {
+            self.apply_parameter_edit(range, replacement);
         }
     }
 }
@@ -100,6 +196,10 @@ impl eframe::App for ViewerApp {
                     self.pending_evaluate = true;
                 }
                 ui.label("Ctrl+Enter");
+                if self.last_eval_ms > 0.0 {
+                    ui.separator();
+                    ui.label(format!("{:.0} ms", self.last_eval_ms));
+                }
             });
         });
 
@@ -107,26 +207,32 @@ impl eframe::App for ViewerApp {
             .resizable(true)
             .default_width(420.0)
             .show(ctx, |ui| {
-                ui.heading("Source");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.source)
-                        .code_editor()
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(24),
-                );
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.heading("Source");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.source)
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(20),
+                    );
 
-                if let Some(error) = &self.error {
-                    ui.colored_label(egui::Color32::RED, error);
-                }
+                    if let Some(error) = &self.error {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
 
-                ui.separator();
-                ui.label(format!("{} triangles", self.mesh.triangle_count()));
-                ui.label(format!("{} vertices", self.mesh.positions.len()));
+                    ui.separator();
+                    ui.label(format!("{} shape(s)", self.evaluation.shapes.len()));
+                    ui.label(format!("{} triangles", self.mesh.triangle_count()));
+                    ui.label(format!("{} vertices", self.mesh.positions.len()));
+
+                    self.properties_ui(ui);
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let (rect, response) =
                 ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+            let aspect = rect.width() / rect.height().max(1.0);
 
             if response.dragged() {
                 let delta = response.drag_motion();
@@ -140,12 +246,21 @@ impl eframe::App for ViewerApp {
                 }
             }
 
+            if response.clicked() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let ndc = Vec2::new(
+                        ((pointer.x - rect.left()) / rect.width()) * 2.0 - 1.0,
+                        1.0 - ((pointer.y - rect.top()) / rect.height()) * 2.0,
+                    );
+                    self.selected_shape = self.pick_shape(ndc, aspect);
+                }
+            }
+
             let pixels_per_point = ctx.pixels_per_point();
             let size_px = [
                 (rect.width() * pixels_per_point).round().max(1.0) as u32,
                 (rect.height() * pixels_per_point).round().max(1.0) as u32,
             ];
-            let aspect = rect.width() / rect.height().max(1.0);
 
             if let Some(render_state) = frame.wgpu_render_state() {
                 let mut egui_renderer = render_state.renderer.write();
@@ -167,7 +282,7 @@ impl eframe::App for ViewerApp {
             ui.painter().text(
                 rect.left_top() + egui::vec2(12.0, 12.0),
                 egui::Align2::LEFT_TOP,
-                "drag to orbit · scroll to zoom",
+                "drag to orbit · scroll to zoom · click to select",
                 egui::FontId::proportional(14.0),
                 egui::Color32::from_gray(180),
             );
@@ -175,22 +290,147 @@ impl eframe::App for ViewerApp {
     }
 }
 
-fn evaluate(source: &str) -> (Mesh, Option<String>) {
+fn evaluate_source(source: &str) -> (Evaluation, Option<String>) {
     let mut kernel = TruckKernel::new();
-    match evaluate_to_meshes(source, &mut kernel, 0.01) {
-        Ok(meshes) => (combine_meshes(&meshes), None),
-        Err(error) => (Mesh::default(), Some(error.to_string())),
+    match evaluate(source, &mut kernel, 0.01) {
+        Ok(evaluation) => (evaluation, None),
+        Err(error) => (Evaluation { shapes: Vec::new() }, Some(error.to_string())),
     }
 }
 
-fn combine_meshes(meshes: &[Mesh]) -> Mesh {
+fn combine_evaluation(evaluation: &Evaluation) -> (Mesh, Vec<ShapePart>) {
     let mut combined = Mesh::default();
-    for mesh in meshes {
+    let mut parts = Vec::new();
+
+    for (shape_index, shape) in evaluation.shapes.iter().enumerate() {
+        let triangle_start = combined.indices.len() / 3;
         let offset = combined.positions.len() as u32;
-        combined.positions.extend_from_slice(&mesh.positions);
+        combined.positions.extend_from_slice(&shape.mesh.positions);
         combined
             .indices
-            .extend(mesh.indices.iter().map(|index| index + offset));
+            .extend(shape.mesh.indices.iter().map(|index| index + offset));
+        parts.push(ShapePart {
+            shape_index,
+            triangle_start,
+            triangle_count: shape.mesh.triangle_count(),
+        });
     }
-    combined
+
+    (combined, parts)
+}
+
+fn nearest_triangle(mesh: &Mesh, origin: Vec3, direction: Vec3) -> Option<usize> {
+    let mut nearest: Option<(f32, usize)> = None;
+
+    for (index, triangle) in mesh.indices.chunks_exact(3).enumerate() {
+        if let Some(distance) = ray_triangle(mesh, triangle, origin, direction) {
+            if nearest.is_none_or(|(best, _)| distance < best) {
+                nearest = Some((distance, index));
+            }
+        }
+    }
+
+    nearest.map(|(_, index)| index)
+}
+
+fn ray_triangle(mesh: &Mesh, triangle: &[u32], origin: Vec3, direction: Vec3) -> Option<f32> {
+    let a = mesh_point(mesh, triangle[0]);
+    let b = mesh_point(mesh, triangle[1]);
+    let c = mesh_point(mesh, triangle[2]);
+
+    let edge1 = b - a;
+    let edge2 = c - a;
+    let h = direction.cross(edge2);
+    let det = edge1.dot(h);
+    if det.abs() < 1.0e-6 {
+        return None;
+    }
+
+    let inv_det = 1.0 / det;
+    let s = origin - a;
+    let u = inv_det * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+
+    let q = s.cross(edge1);
+    let v = inv_det * direction.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+
+    let t = inv_det * edge2.dot(q);
+    (t > 0.0).then_some(t)
+}
+
+fn mesh_point(mesh: &Mesh, index: u32) -> Vec3 {
+    let point = mesh.positions[index as usize];
+    Vec3::new(point[0] as f32, point[1] as f32, point[2] as f32)
+}
+
+fn line_number(source: &str, offset: usize) -> usize {
+    source[..offset.min(source.len())]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use visual_openscad_scad_eval::EvaluatedShape;
+
+    fn triangle_mesh() -> Mesh {
+        Mesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    #[test]
+    fn ray_hits_a_triangle() {
+        let mesh = triangle_mesh();
+        let hit = nearest_triangle(&mesh, Vec3::new(0.2, 0.2, 1.0), Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(hit, Some(0));
+    }
+
+    #[test]
+    fn ray_misses_a_triangle() {
+        let mesh = triangle_mesh();
+        let hit = nearest_triangle(&mesh, Vec3::new(2.0, 2.0, 1.0), Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(hit, None);
+    }
+
+    #[test]
+    fn combine_offsets_indices_and_tracks_parts() {
+        let evaluation = Evaluation {
+            shapes: vec![
+                EvaluatedShape {
+                    mesh: triangle_mesh(),
+                    source_range: 0..1,
+                    parameters: Vec::new(),
+                },
+                EvaluatedShape {
+                    mesh: triangle_mesh(),
+                    source_range: 2..3,
+                    parameters: Vec::new(),
+                },
+            ],
+        };
+
+        let (mesh, parts) = combine_evaluation(&evaluation);
+
+        assert_eq!(mesh.indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1].shape_index, 1);
+        assert_eq!(parts[1].triangle_start, 1);
+        assert_eq!(parts[1].triangle_count, 1);
+    }
+
+    #[test]
+    fn line_numbers_are_one_based() {
+        assert_eq!(line_number("a\nb\nc", 2), 2);
+        assert_eq!(line_number("a\nb\nc", 0), 1);
+    }
 }

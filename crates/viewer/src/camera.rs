@@ -49,6 +49,19 @@ impl Camera {
         projection * view
     }
 
+    /// Returns a world-space ray through normalized device coordinates.
+    pub fn ray(&self, ndc: Vec2, aspect: f32) -> (Vec3, Vec3) {
+        let forward = (self.target - self.eye()).normalize();
+        let right = forward.cross(Vec3::Y).normalize();
+        let up = right.cross(forward);
+        let tan_half_fov = (self.fov_y * 0.5).tan();
+        let direction = (forward
+            + right * (ndc.x * tan_half_fov * aspect.max(0.01))
+            + up * (ndc.y * tan_half_fov))
+            .normalize();
+        (self.eye(), direction)
+    }
+
     pub fn fit(&mut self, mesh: &Mesh) {
         if mesh.positions.is_empty() {
             *self = Self::default();
@@ -108,5 +121,13 @@ mod tests {
         assert!(camera.pitch <= 1.45);
         camera.orbit(Vec2::new(0.0, -10_000.0));
         assert!(camera.pitch >= -1.45);
+    }
+
+    #[test]
+    fn center_ray_points_at_the_target() {
+        let camera = Camera::default();
+        let (_, direction) = camera.ray(Vec2::ZERO, 16.0 / 9.0);
+        let expected = (camera.target - camera.eye()).normalize();
+        assert!(direction.dot(expected) > 0.999);
     }
 }

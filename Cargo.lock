@@ -2992,6 +2992,7 @@ dependencies = [
  "visual-openscad-kernel-api",
  "visual-openscad-kernel-truck",
  "visual-openscad-scad-eval",
+ "visual-openscad-scad-syntax",
  "wgpu",
 ]
 

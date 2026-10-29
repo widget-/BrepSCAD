@@ -91,7 +91,7 @@ The first GUI prototype renders the evaluated mesh with a depth-tested wgpu view
 cargo run -p visual-openscad-viewer
 ```
 
-Drag to orbit and scroll to zoom. The source panel is the current edit loop; selection and parameter-bound property editing are not implemented yet. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
+Drag to orbit and scroll to zoom. Click a shape to select it; the Properties panel lists numeric literals in that shape and in the assignments it references. Drag a value to write it back to the source and re-evaluate. Selection is currently per top-level shape, not per boolean operand. The source panel remains the general edit loop. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
 
 ## Documentation
 

@@ -4,11 +4,12 @@
 //! `cube`, `cylinder`, and the boolean modules `difference`, `union`, and
 //! `intersection` with brace-delimited children.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::Range;
 
 use thiserror::Error;
 use visual_openscad_kernel_api::{BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId};
-use visual_openscad_scad_syntax::{SyntaxKind, SyntaxNode, parse};
+use visual_openscad_scad_syntax::{SyntaxKind, SyntaxNode, TextRange, parse};
 
 #[derive(Debug, Error)]
 pub enum EvalError {
@@ -22,6 +23,28 @@ pub enum EvalError {
     BadArguments { module: String, message: String },
     #[error("kernel error: {0}")]
     Kernel(#[from] KernelError),
+}
+
+/// The result of evaluating a source file.
+#[derive(Debug, Clone)]
+pub struct Evaluation {
+    pub shapes: Vec<EvaluatedShape>,
+}
+
+/// One top-level shape, its mesh, and the source numbers that drive it.
+#[derive(Debug, Clone)]
+pub struct EvaluatedShape {
+    pub mesh: Mesh,
+    pub source_range: Range<usize>,
+    pub parameters: Vec<Parameter>,
+}
+
+/// A numeric literal reachable from a shape's source range.
+#[derive(Debug, Clone)]
+pub struct Parameter {
+    pub range: Range<usize>,
+    pub value: f64,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,12 +70,13 @@ impl Value {
     }
 }
 
-/// Parses and evaluates `source`, returning one mesh per top-level shape.
-pub fn evaluate_to_meshes<K: Kernel>(
+/// Parses and evaluates `source`, returning each top-level shape with its
+/// source range and numeric parameter bindings.
+pub fn evaluate<K: Kernel>(
     source: &str,
     kernel: &mut K,
     tolerance: f64,
-) -> Result<Vec<Mesh>, EvalError> {
+) -> Result<Evaluation, EvalError> {
     let parsed = parse(source);
     if !parsed.errors().is_empty() {
         let messages = parsed
@@ -64,29 +88,56 @@ pub fn evaluate_to_meshes<K: Kernel>(
         return Err(EvalError::Parse(messages));
     }
 
-    let shapes = {
+    let mut shapes = Vec::new();
+    {
         let mut evaluator = Evaluator {
             kernel,
             variables: HashMap::new(),
+            assignments: HashMap::new(),
         };
-        let mut shapes = Vec::new();
+
         for statement in parsed.syntax().children() {
+            let bindings_node = statement.clone();
             if let Some(shape) = evaluator.statement(statement)? {
-                shapes.push(shape);
+                let source_range = text_range_to_range(bindings_node.text_range());
+                let parameters = collect_parameters(&bindings_node, &evaluator.assignments);
+                shapes.push((shape, source_range, parameters));
             }
         }
-        shapes
-    };
+    }
 
-    shapes
+    let shapes = shapes
         .into_iter()
-        .map(|shape| kernel.tessellate(shape, tolerance).map_err(EvalError::from))
-        .collect()
+        .map(|(shape, source_range, parameters)| {
+            let mesh = kernel.tessellate(shape, tolerance)?;
+            Ok(EvaluatedShape {
+                mesh,
+                source_range,
+                parameters,
+            })
+        })
+        .collect::<Result<Vec<_>, EvalError>>()?;
+
+    Ok(Evaluation { shapes })
+}
+
+/// Convenience wrapper for callers that only need meshes.
+pub fn evaluate_to_meshes<K: Kernel>(
+    source: &str,
+    kernel: &mut K,
+    tolerance: f64,
+) -> Result<Vec<Mesh>, EvalError> {
+    Ok(evaluate(source, kernel, tolerance)?
+        .shapes
+        .into_iter()
+        .map(|shape| shape.mesh)
+        .collect())
 }
 
 struct Evaluator<'a, K: Kernel> {
     kernel: &'a mut K,
     variables: HashMap<String, Value>,
+    assignments: HashMap<String, SyntaxNode>,
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
@@ -107,6 +158,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         let value = self
             .expression_after_eq(&node)?
             .ok_or_else(|| EvalError::Parse(format!("missing expression for {name}")))?;
+        self.assignments.insert(name.clone(), node);
         self.variables.insert(name, value);
         Ok(())
     }
@@ -272,5 +324,80 @@ fn bad_args(module: &str, message: impl Into<String>) -> EvalError {
     EvalError::BadArguments {
         module: module.to_owned(),
         message: message.into(),
+    }
+}
+
+fn text_range_to_range(range: TextRange) -> Range<usize> {
+    usize::from(range.start())..usize::from(range.end())
+}
+
+fn collect_parameters(
+    node: &SyntaxNode,
+    assignments: &HashMap<String, SyntaxNode>,
+) -> Vec<Parameter> {
+    let mut parameters = BTreeMap::new();
+    collect_numbers(node, &mut parameters);
+
+    let mut names = BTreeSet::new();
+    collect_identifiers(node, &mut names);
+
+    let mut visited = BTreeSet::new();
+    for name in names {
+        collect_assignment_numbers(&name, assignments, &mut parameters, &mut visited);
+    }
+
+    parameters.into_values().collect()
+}
+
+fn collect_numbers(node: &SyntaxNode, parameters: &mut BTreeMap<usize, Parameter>) {
+    for element in node.descendants_with_tokens() {
+        let Some(token) = element.as_token() else {
+            continue;
+        };
+        if token.kind() != SyntaxKind::NUMBER {
+            continue;
+        }
+        let Ok(value) = token.text().parse::<f64>() else {
+            continue;
+        };
+        let range = text_range_to_range(token.text_range());
+        parameters.entry(range.start).or_insert_with(|| Parameter {
+            range,
+            value,
+            source: token.text().to_owned(),
+        });
+    }
+}
+
+fn collect_identifiers(node: &SyntaxNode, names: &mut BTreeSet<String>) {
+    for element in node.descendants_with_tokens() {
+        let Some(token) = element.as_token() else {
+            continue;
+        };
+        if token.kind() == SyntaxKind::IDENT {
+            names.insert(token.text().to_owned());
+        }
+    }
+}
+
+fn collect_assignment_numbers(
+    name: &str,
+    assignments: &HashMap<String, SyntaxNode>,
+    parameters: &mut BTreeMap<usize, Parameter>,
+    visited: &mut BTreeSet<String>,
+) {
+    if !visited.insert(name.to_owned()) {
+        return;
+    }
+    let Some(node) = assignments.get(name) else {
+        return;
+    };
+
+    collect_numbers(node, parameters);
+
+    let mut names = BTreeSet::new();
+    collect_identifiers(node, &mut names);
+    for nested in names {
+        collect_assignment_numbers(&nested, assignments, parameters, visited);
     }
 }

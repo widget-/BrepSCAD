@@ -19,3 +19,4 @@ wgpu = { version = "25", default-features = false, features = ["vulkan", "gles",
 visual-openscad-kernel-api.workspace = true
 visual-openscad-kernel-truck.workspace = true
 visual-openscad-scad-eval.workspace = true
+visual-openscad-scad-syntax.workspace = true

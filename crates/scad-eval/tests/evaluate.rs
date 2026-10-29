@@ -1,5 +1,5 @@
 use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{EvalError, evaluate_to_meshes};
+use visual_openscad_scad_eval::{EvalError, evaluate, evaluate_to_meshes};
 
 #[test]
 fn evaluates_a_cube() {
@@ -18,6 +18,19 @@ fn evaluates_a_cube_with_a_hole() {
 
     assert_eq!(meshes.len(), 1);
     assert!(meshes[0].triangle_count() > 0);
+}
+
+#[test]
+fn exposes_numeric_parameters_for_selection() {
+    let source = "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    cylinder(0.5, 4);\n}\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    let parameters = &evaluation.shapes[0].parameters;
+    assert_eq!(parameters.len(), 5);
+    assert!(parameters.iter().any(|parameter| parameter.value == 0.5));
+    assert!(parameters.iter().any(|parameter| parameter.source == "4"));
 }
 
 #[test]
