@@ -17,6 +17,28 @@ pkgs.mkShell {
     git
   ];
 
+  buildInputs = with pkgs; [
+    libxkbcommon
+    wayland
+    vulkan-loader
+    mesa
+    xorg.libX11
+    xorg.libXcursor
+    xorg.libXrandr
+    xorg.libXi
+  ];
+
+  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+    pkgs.libxkbcommon
+    pkgs.wayland
+    pkgs.vulkan-loader
+    pkgs.mesa
+    pkgs.xorg.libX11
+    pkgs.xorg.libXcursor
+    pkgs.xorg.libXrandr
+    pkgs.xorg.libXi
+  ];
+
   RUST_BACKTRACE = "1";
   PKG_CONFIG_PATH = pkgs.lib.makeSearchPath "lib/pkgconfig" [ pkgs.openssl.dev ];
 

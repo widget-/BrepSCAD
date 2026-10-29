@@ -25,9 +25,10 @@ crates/
   kernel-truck/ Truck adapter: cuboid, cylinder, boolean, tessellation
   scad-eval/    minimal evaluator: assignments, cube/cylinder, difference
   scad-syntax/  lossless CST, lexer, parser, and text edits
+  viewer/       egui + wgpu viewer with source editor and orbit camera
 ```
 
-The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, and `difference`.
+The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, and `difference`. The `viewer` binary renders the evaluated mesh with an egui source editor and a wgpu viewport.
 
 The planned backend crates (`kernel-occt`, `kernel-solidcore`) and the UI/render crates are not created yet.
 
@@ -74,13 +75,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Run
 
-The binary evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses a built-in cube-with-hole sample.
+The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses a built-in cube-with-hole sample.
 
 ```sh
 cargo run -p visual-openscad -- path/to/model.scad
 ```
 
 The current subset supports top-level assignments, `cube`, `cylinder`, and the `difference` / `union` / `intersection` blocks.
+
+## Viewer
+
+The first GUI prototype renders the evaluated mesh with a depth-tested wgpu viewport, an editable source panel, and an Evaluate button.
+
+```sh
+cargo run -p visual-openscad-viewer
+```
+
+Drag to orbit and scroll to zoom. The source panel is the current edit loop; selection and parameter-bound property editing are not implemented yet. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
 
 ## Documentation
 
