@@ -4,6 +4,7 @@ members = [
     "crates/app",
     "crates/core",
     "crates/kernel-api",
+    "crates/scad-syntax",
 ]
 
 [workspace.package]
@@ -14,6 +15,7 @@ license = "BSD-3-Clause"
 
 [workspace.dependencies]
 anyhow = "1"
+rowan = "0.16"
 thiserror = "2"
 
 visual-openscad-core = { path = "crates/core" }
