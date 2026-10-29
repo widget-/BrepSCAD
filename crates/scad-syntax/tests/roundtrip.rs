@@ -63,6 +63,21 @@ fn parses_assignment_and_module_call() {
 }
 
 #[test]
+fn round_trips_boolean_block() {
+    let source = "difference() {\n    cube([2, 2, 2]);\n    cylinder(0.5, 4);\n}\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert!(
+        parsed
+            .syntax()
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::BLOCK)
+    );
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),

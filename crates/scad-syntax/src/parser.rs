@@ -40,6 +40,7 @@ struct Parser<'a> {
     pos: usize,
     builder: GreenNodeBuilder<'static>,
     errors: Vec<SyntaxError>,
+    block_depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -49,6 +50,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             builder: GreenNodeBuilder::new(),
             errors,
+            block_depth: 0,
         }
     }
 
@@ -98,9 +100,41 @@ impl<'a> Parser<'a> {
     fn module_call(&mut self) {
         self.start(SyntaxKind::MODULE_CALL);
         self.bump();
-        if !self.arg_list() || !self.expect(SyntaxKind::SEMICOLON) {
+        if self.arg_list() {
+            if self.at(SyntaxKind::L_BRACE) {
+                self.block();
+            } else if !self.expect(SyntaxKind::SEMICOLON) {
+                self.recover_statement();
+            }
+        } else {
             self.recover_statement();
         }
+        self.finish();
+    }
+
+    fn block(&mut self) {
+        self.start(SyntaxKind::BLOCK);
+        self.bump();
+        self.block_depth += 1;
+        loop {
+            self.eat_trivia();
+            if self.at(SyntaxKind::R_BRACE) {
+                self.bump();
+                break;
+            }
+            if self.at(SyntaxKind::EOF) {
+                self.error("unterminated block");
+                break;
+            }
+            match self.current() {
+                SyntaxKind::IDENT => self.statement(),
+                _ => {
+                    self.error("expected a statement");
+                    self.recover_statement();
+                }
+            }
+        }
+        self.block_depth -= 1;
         self.finish();
     }
 
@@ -184,6 +218,9 @@ impl<'a> Parser<'a> {
         self.start(SyntaxKind::ERROR);
         loop {
             if self.at(SyntaxKind::EOF) {
+                break;
+            }
+            if self.block_depth > 0 && self.at(SyntaxKind::R_BRACE) {
                 break;
             }
             if self.at(SyntaxKind::SEMICOLON) {

@@ -141,6 +141,8 @@ impl<'a> Lexer<'a> {
                 ']' => Some(SyntaxKind::R_BRACK),
                 '(' => Some(SyntaxKind::L_PAREN),
                 ')' => Some(SyntaxKind::R_PAREN),
+                '{' => Some(SyntaxKind::L_BRACE),
+                '}' => Some(SyntaxKind::R_BRACE),
                 ',' => Some(SyntaxKind::COMMA),
                 ';' => Some(SyntaxKind::SEMICOLON),
                 '=' => Some(SyntaxKind::EQ),
