@@ -38,8 +38,9 @@ fn main() -> eframe::Result<()> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ShapePart {
+struct PickPart {
     shape_index: usize,
+    part_index: usize,
     triangle_start: usize,
     triangle_count: usize,
 }
@@ -48,10 +49,11 @@ struct ViewerApp {
     source: String,
     evaluation: Evaluation,
     mesh: Mesh,
-    parts: Vec<ShapePart>,
+    pick_mesh: Mesh,
+    pick_parts: Vec<PickPart>,
     renderer: MeshRenderer,
     camera: Camera,
-    selected_shape: Option<usize>,
+    selected_part: Option<(usize, usize)>,
     error: Option<String>,
     pending_evaluate: bool,
     last_eval_ms: f64,
@@ -65,7 +67,8 @@ impl ViewerApp {
             .expect("the viewer requires the wgpu backend");
 
         let (evaluation, error) = evaluate_source(SAMPLE);
-        let (mesh, parts) = combine_evaluation(&evaluation);
+        let mesh = combine_evaluation(&evaluation);
+        let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
         camera.fit(&mesh);
         let renderer = MeshRenderer::new(&render_state.device, &mesh);
@@ -74,10 +77,11 @@ impl ViewerApp {
             source: SAMPLE.to_owned(),
             evaluation,
             mesh,
-            parts,
+            pick_mesh,
+            pick_parts,
             renderer,
             camera,
-            selected_shape: None,
+            selected_part: None,
             error,
             pending_evaluate: false,
             last_eval_ms: 0.0,
@@ -89,13 +93,15 @@ impl ViewerApp {
         let (evaluation, error) = evaluate_source(&self.source);
 
         if error.is_none() {
-            let (mesh, parts) = combine_evaluation(&evaluation);
+            let mesh = combine_evaluation(&evaluation);
+            let (pick_mesh, pick_parts) = combine_parts(&evaluation);
             self.camera.fit(&mesh);
             self.renderer.set_mesh(device, &mesh);
             self.mesh = mesh;
-            self.parts = parts;
+            self.pick_mesh = pick_mesh;
+            self.pick_parts = pick_parts;
             self.evaluation = evaluation;
-            self.selected_shape = None;
+            self.selected_part = None;
         }
 
         self.error = error;
@@ -110,49 +116,58 @@ impl ViewerApp {
         match apply_edit(&self.source, &TextEdit::new(text_range, replacement)) {
             Ok(source) => {
                 self.source = source;
-                self.selected_shape = None;
+                self.selected_part = None;
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error.to_string()),
         }
     }
 
-    fn pick_shape(&self, ndc: Vec2, aspect: f32) -> Option<usize> {
+    fn pick_part(&self, ndc: Vec2, aspect: f32) -> Option<(usize, usize)> {
         let (origin, direction) = self.camera.ray(ndc, aspect);
-        let triangle = nearest_triangle(&self.mesh, origin, direction)?;
-        self.parts
+        let triangle = nearest_triangle(&self.pick_mesh, origin, direction)?;
+        self.pick_parts
             .iter()
             .find(|part| {
                 triangle >= part.triangle_start
                     && triangle < part.triangle_start + part.triangle_count
             })
-            .map(|part| part.shape_index)
+            .map(|part| (part.shape_index, part.part_index))
     }
 
     fn properties_ui(&mut self, ui: &mut egui::Ui) {
         ui.separator();
         ui.heading("Properties");
 
-        let Some(selected) = self.selected_shape else {
-            ui.label("Click the model to select a shape.");
+        let Some((shape_index, part_index)) = self.selected_part else {
+            ui.label("Click the model to select a part.");
             return;
         };
 
-        let (source_range, mut parameters) = match self.evaluation.shapes.get(selected) {
-            Some(shape) => (shape.source_range.clone(), shape.parameters.clone()),
+        let (module, source_range, mut parameters) = match self
+            .evaluation
+            .shapes
+            .get(shape_index)
+            .and_then(|shape| shape.parts.get(part_index))
+        {
+            Some(part) => (
+                part.module.clone(),
+                part.source_range.clone(),
+                part.parameters.clone(),
+            ),
             None => {
-                self.selected_shape = None;
+                self.selected_part = None;
                 return;
             }
         };
 
         ui.label(format!(
-            "Shape {selected} · bytes {}..{}",
+            "{module} · shape {shape_index} part {part_index} · bytes {}..{}",
             source_range.start, source_range.end
         ));
 
         if parameters.is_empty() {
-            ui.label("No editable numbers in this shape.");
+            ui.label("No editable numbers in this part.");
             return;
         }
 
@@ -252,7 +267,7 @@ impl eframe::App for ViewerApp {
                         ((pointer.x - rect.left()) / rect.width()) * 2.0 - 1.0,
                         1.0 - ((pointer.y - rect.top()) / rect.height()) * 2.0,
                     );
-                    self.selected_shape = self.pick_shape(ndc, aspect);
+                    self.selected_part = self.pick_part(ndc, aspect);
                 }
             }
 
@@ -298,22 +313,39 @@ fn evaluate_source(source: &str) -> (Evaluation, Option<String>) {
     }
 }
 
-fn combine_evaluation(evaluation: &Evaluation) -> (Mesh, Vec<ShapePart>) {
+fn combine_evaluation(evaluation: &Evaluation) -> Mesh {
     let mut combined = Mesh::default();
-    let mut parts = Vec::new();
 
-    for (shape_index, shape) in evaluation.shapes.iter().enumerate() {
-        let triangle_start = combined.indices.len() / 3;
+    for shape in &evaluation.shapes {
         let offset = combined.positions.len() as u32;
         combined.positions.extend_from_slice(&shape.mesh.positions);
         combined
             .indices
             .extend(shape.mesh.indices.iter().map(|index| index + offset));
-        parts.push(ShapePart {
-            shape_index,
-            triangle_start,
-            triangle_count: shape.mesh.triangle_count(),
-        });
+    }
+
+    combined
+}
+
+fn combine_parts(evaluation: &Evaluation) -> (Mesh, Vec<PickPart>) {
+    let mut combined = Mesh::default();
+    let mut parts = Vec::new();
+
+    for (shape_index, shape) in evaluation.shapes.iter().enumerate() {
+        for (part_index, part) in shape.parts.iter().enumerate() {
+            let triangle_start = combined.indices.len() / 3;
+            let offset = combined.positions.len() as u32;
+            combined.positions.extend_from_slice(&part.mesh.positions);
+            combined
+                .indices
+                .extend(part.mesh.indices.iter().map(|index| index + offset));
+            parts.push(PickPart {
+                shape_index,
+                part_index,
+                triangle_start,
+                triangle_count: part.mesh.triangle_count(),
+            });
+        }
     }
 
     (combined, parts)
@@ -379,7 +411,7 @@ fn line_number(source: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use visual_openscad_scad_eval::EvaluatedShape;
+    use visual_openscad_scad_eval::{EvaluatedShape, Part};
 
     fn triangle_mesh() -> Mesh {
         Mesh {
@@ -403,27 +435,40 @@ mod tests {
     }
 
     #[test]
-    fn combine_offsets_indices_and_tracks_parts() {
+    fn combine_parts_offsets_indices_and_tracks_operands() {
         let evaluation = Evaluation {
-            shapes: vec![
-                EvaluatedShape {
-                    mesh: triangle_mesh(),
-                    source_range: 0..1,
-                    parameters: Vec::new(),
-                },
-                EvaluatedShape {
-                    mesh: triangle_mesh(),
-                    source_range: 2..3,
-                    parameters: Vec::new(),
-                },
-            ],
+            shapes: vec![EvaluatedShape {
+                mesh: triangle_mesh(),
+                source_range: 0..1,
+                parameters: Vec::new(),
+                parts: vec![
+                    Part {
+                        module: "cube".to_owned(),
+                        source_range: 0..1,
+                        parameters: Vec::new(),
+                        mesh: triangle_mesh(),
+                    },
+                    Part {
+                        module: "cylinder".to_owned(),
+                        source_range: 2..3,
+                        parameters: Vec::new(),
+                        mesh: triangle_mesh(),
+                    },
+                ],
+            }],
         };
 
-        let (mesh, parts) = combine_evaluation(&evaluation);
+        let mesh = combine_evaluation(&evaluation);
+        assert_eq!(mesh.indices, vec![0, 1, 2]);
 
-        assert_eq!(mesh.indices, vec![0, 1, 2, 3, 4, 5]);
+        let (pick_mesh, parts) = combine_parts(&evaluation);
+        assert_eq!(pick_mesh.indices, vec![0, 1, 2, 3, 4, 5]);
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[1].shape_index, 1);
+        assert_eq!(parts[0].shape_index, 0);
+        assert_eq!(parts[0].part_index, 0);
+        assert_eq!(parts[0].triangle_start, 0);
+        assert_eq!(parts[1].shape_index, 0);
+        assert_eq!(parts[1].part_index, 1);
         assert_eq!(parts[1].triangle_start, 1);
         assert_eq!(parts[1].triangle_count, 1);
     }

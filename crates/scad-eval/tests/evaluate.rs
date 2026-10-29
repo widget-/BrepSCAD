@@ -34,6 +34,26 @@ fn exposes_numeric_parameters_for_selection() {
 }
 
 #[test]
+fn exposes_selectable_operand_parts() {
+    let source = "size = [2, 2, 2];\ndifference() { cube(size); cylinder(0.5, 4); }\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    assert_eq!(shape.parts.len(), 2);
+    assert_eq!(shape.parts[0].module, "cube");
+    assert_eq!(shape.parts[1].module, "cylinder");
+    assert_eq!(shape.parts[0].parameters.len(), 3);
+    assert_eq!(shape.parts[1].parameters.len(), 2);
+    assert!(
+        shape
+            .parts
+            .iter()
+            .all(|part| !part.mesh.positions.is_empty())
+    );
+}
+
+#[test]
 fn reports_unknown_identifiers() {
     let mut kernel = TruckKernel::new();
     let error = evaluate_to_meshes("cube(size);", &mut kernel, 0.01).expect_err("unknown size");

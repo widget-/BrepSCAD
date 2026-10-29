@@ -31,15 +31,25 @@ pub struct Evaluation {
     pub shapes: Vec<EvaluatedShape>,
 }
 
-/// One top-level shape, its mesh, and the source numbers that drive it.
+/// One top-level shape, its final mesh, and its selectable operands.
 #[derive(Debug, Clone)]
 pub struct EvaluatedShape {
     pub mesh: Mesh,
     pub source_range: Range<usize>,
     pub parameters: Vec<Parameter>,
+    pub parts: Vec<Part>,
 }
 
-/// A numeric literal reachable from a shape's source range.
+/// A selectable operand, usually a primitive inside a boolean.
+#[derive(Debug, Clone)]
+pub struct Part {
+    pub module: String,
+    pub source_range: Range<usize>,
+    pub parameters: Vec<Parameter>,
+    pub mesh: Mesh,
+}
+
+/// A numeric literal reachable from a shape or part's source range.
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub range: Range<usize>,
@@ -71,7 +81,7 @@ impl Value {
 }
 
 /// Parses and evaluates `source`, returning each top-level shape with its
-/// source range and numeric parameter bindings.
+/// source range, numeric parameter bindings, and selectable operands.
 pub fn evaluate<K: Kernel>(
     source: &str,
     kernel: &mut K,
@@ -88,7 +98,7 @@ pub fn evaluate<K: Kernel>(
         return Err(EvalError::Parse(messages));
     }
 
-    let mut shapes = Vec::new();
+    let mut roots = Vec::new();
     {
         let mut evaluator = Evaluator {
             kernel,
@@ -97,31 +107,28 @@ pub fn evaluate<K: Kernel>(
         };
 
         for statement in parsed.syntax().children() {
-            let bindings_node = statement.clone();
-            if let Some(shape) = evaluator.statement(statement)? {
-                let source_range = text_range_to_range(bindings_node.text_range());
-                let parameters = collect_parameters(&bindings_node, &evaluator.assignments);
-                shapes.push((shape, source_range, parameters));
+            if let Some(node) = evaluator.statement(statement)? {
+                roots.push(node);
             }
         }
     }
 
-    let shapes = shapes
-        .into_iter()
-        .map(|(shape, source_range, parameters)| {
-            let mesh = kernel.tessellate(shape, tolerance)?;
-            Ok(EvaluatedShape {
-                mesh,
-                source_range,
-                parameters,
-            })
-        })
-        .collect::<Result<Vec<_>, EvalError>>()?;
+    let mut shapes = Vec::new();
+    for root in roots {
+        let mesh = kernel.tessellate(root.shape, tolerance)?;
+        let parts = collect_parts(&root, root.shape, &mesh, kernel, tolerance)?;
+        shapes.push(EvaluatedShape {
+            mesh,
+            source_range: root.source_range,
+            parameters: root.parameters,
+            parts,
+        });
+    }
 
     Ok(Evaluation { shapes })
 }
 
-/// Convenience wrapper for callers that only need meshes.
+/// Convenience wrapper for callers that only need final meshes.
 pub fn evaluate_to_meshes<K: Kernel>(
     source: &str,
     kernel: &mut K,
@@ -134,6 +141,15 @@ pub fn evaluate_to_meshes<K: Kernel>(
         .collect())
 }
 
+#[derive(Debug)]
+struct Node {
+    shape: ShapeId,
+    module: String,
+    source_range: Range<usize>,
+    parameters: Vec<Parameter>,
+    children: Vec<Node>,
+}
+
 struct Evaluator<'a, K: Kernel> {
     kernel: &'a mut K,
     variables: HashMap<String, Value>,
@@ -141,7 +157,7 @@ struct Evaluator<'a, K: Kernel> {
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
-    fn statement(&mut self, node: SyntaxNode) -> Result<Option<ShapeId>, EvalError> {
+    fn statement(&mut self, node: SyntaxNode) -> Result<Option<Node>, EvalError> {
         match node.kind() {
             SyntaxKind::ASSIGNMENT => {
                 self.assignment(node)?;
@@ -163,9 +179,13 @@ impl<K: Kernel> Evaluator<'_, K> {
         Ok(())
     }
 
-    fn module_call(&mut self, node: SyntaxNode) -> Result<ShapeId, EvalError> {
+    fn module_call(&mut self, node: SyntaxNode) -> Result<Node, EvalError> {
         let name =
             first_ident(&node).ok_or_else(|| EvalError::Parse("missing module name".to_owned()))?;
+        let module = name.clone();
+        let source_range = text_range_to_range(node.text_range());
+        let parameters = collect_parameters(&node, &self.assignments);
+
         let args = match node
             .children()
             .find(|child| child.kind() == SyntaxKind::ARG_LIST)
@@ -180,7 +200,14 @@ impl<K: Kernel> Evaluator<'_, K> {
         match name.as_str() {
             "cube" => {
                 let size = single_arg(&args, "cube")?.as_size("cube")?;
-                Ok(self.kernel.primitive(Primitive::Cuboid { size })?)
+                let shape = self.kernel.primitive(Primitive::Cuboid { size })?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    children: Vec::new(),
+                })
             }
             "cylinder" => {
                 if args.len() != 2 {
@@ -188,14 +215,21 @@ impl<K: Kernel> Evaluator<'_, K> {
                 }
                 let radius = args[0].as_number("cylinder")?;
                 let height = args[1].as_number("cylinder")?;
-                Ok(self
+                let shape = self
                     .kernel
-                    .primitive(Primitive::Cylinder { radius, height })?)
+                    .primitive(Primitive::Cylinder { radius, height })?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    children: Vec::new(),
+                })
             }
             "difference" | "union" | "intersection" => {
                 let block = block.ok_or_else(|| bad_args(name.as_str(), "expected a block"))?;
-                let shapes = self.block(block)?;
-                if shapes.is_empty() {
+                let children = self.block(block)?;
+                if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
 
@@ -204,25 +238,32 @@ impl<K: Kernel> Evaluator<'_, K> {
                     "union" => BooleanOp::Union,
                     _ => BooleanOp::Intersection,
                 };
-                let mut shapes = shapes.into_iter();
+                let mut shapes = children.iter().map(|child| child.shape);
                 let mut result = shapes.next().expect("checked non-empty");
                 for shape in shapes {
                     result = self.kernel.boolean(op, result, shape)?;
                 }
-                Ok(result)
+
+                Ok(Node {
+                    shape: result,
+                    module,
+                    source_range,
+                    parameters,
+                    children,
+                })
             }
             _ => Err(EvalError::UnsupportedModule(name)),
         }
     }
 
-    fn block(&mut self, node: SyntaxNode) -> Result<Vec<ShapeId>, EvalError> {
-        let mut shapes = Vec::new();
+    fn block(&mut self, node: SyntaxNode) -> Result<Vec<Node>, EvalError> {
+        let mut nodes = Vec::new();
         for statement in node.children() {
-            if let Some(shape) = self.statement(statement)? {
-                shapes.push(shape);
+            if let Some(node) = self.statement(statement)? {
+                nodes.push(node);
             }
         }
-        Ok(shapes)
+        Ok(nodes)
     }
 
     fn arg_list(&mut self, node: SyntaxNode) -> Result<Vec<Value>, EvalError> {
@@ -298,6 +339,46 @@ impl<K: Kernel> Evaluator<'_, K> {
             .cloned()
             .ok_or_else(|| EvalError::UnknownIdentifier(name.to_owned()))
     }
+}
+
+fn collect_parts<K: Kernel>(
+    node: &Node,
+    root_shape: ShapeId,
+    root_mesh: &Mesh,
+    kernel: &mut K,
+    tolerance: f64,
+) -> Result<Vec<Part>, EvalError> {
+    let mut parts = Vec::new();
+    collect_parts_inner(node, root_shape, root_mesh, kernel, tolerance, &mut parts)?;
+    Ok(parts)
+}
+
+fn collect_parts_inner<K: Kernel>(
+    node: &Node,
+    root_shape: ShapeId,
+    root_mesh: &Mesh,
+    kernel: &mut K,
+    tolerance: f64,
+    parts: &mut Vec<Part>,
+) -> Result<(), EvalError> {
+    if node.children.is_empty() {
+        let mesh = if node.shape == root_shape {
+            root_mesh.clone()
+        } else {
+            kernel.tessellate(node.shape, tolerance)?
+        };
+        parts.push(Part {
+            module: node.module.clone(),
+            source_range: node.source_range.clone(),
+            parameters: node.parameters.clone(),
+            mesh,
+        });
+    } else {
+        for child in &node.children {
+            collect_parts_inner(child, root_shape, root_mesh, kernel, tolerance, parts)?;
+        }
+    }
+    Ok(())
 }
 
 fn first_ident(node: &SyntaxNode) -> Option<String> {

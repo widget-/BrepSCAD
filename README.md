@@ -91,7 +91,7 @@ The first GUI prototype renders the evaluated mesh with a depth-tested wgpu view
 cargo run -p visual-openscad-viewer
 ```
 
-Drag to orbit and scroll to zoom. Click a shape to select it; the Properties panel lists numeric literals in that shape and in the assignments it references. Drag a value to write it back to the source and re-evaluate. Selection is currently per top-level shape, not per boolean operand. The source panel remains the general edit loop. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
+Drag to orbit and scroll to zoom. Click the model to select an operand. Picking uses operand meshes, so for the built-in cube-with-hole, clicking an outer face selects the cube and clicking the protruding cutter selects the cylinder. The Properties panel lists numeric literals in that operand and in the assignments it references. Drag a value to write it back to the source and re-evaluate. The selected operand is not highlighted yet, and a cutter fully enclosed by its base may be difficult to hit without a parts list. The source panel remains the general edit loop. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
 
 ## Documentation
 
