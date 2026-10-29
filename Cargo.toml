@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/kernel-api",
     "crates/kernel-truck",
+    "crates/scad-eval",
     "crates/scad-syntax",
 ]
 
@@ -24,3 +25,4 @@ truck-shapeops = { version = "0.4", default-features = false }
 
 visual-openscad-core = { path = "crates/core" }
 visual-openscad-kernel-api = { path = "crates/kernel-api" }
+visual-openscad-scad-syntax = { path = "crates/scad-syntax" }

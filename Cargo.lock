@@ -954,6 +954,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "visual-openscad-scad-eval"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "visual-openscad-kernel-api",
+ "visual-openscad-kernel-truck",
+ "visual-openscad-scad-syntax",
+]
+
+[[package]]
 name = "visual-openscad-scad-syntax"
 version = "0.1.0"
 dependencies = [

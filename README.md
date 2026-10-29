@@ -23,10 +23,11 @@ crates/
   core/         HIR, evaluator, model tree (placeholder)
   kernel-api/   Kernel trait, ShapeId, capabilities, neutral mesh
   kernel-truck/ Truck adapter: cuboid, cylinder, boolean, tessellation
+  scad-eval/    minimal evaluator: assignments, cube/cylinder, difference
   scad-syntax/  lossless CST, lexer, parser, and text edits
 ```
 
-The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, booleans, and tessellation.
+The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, and `difference`.
 
 The planned backend crates (`kernel-occt`, `kernel-solidcore`) and the UI/render crates are not created yet.
 
