@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/app",
+    "crates/core",
+    "crates/kernel-api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "BSD-3-Clause"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+
+visual-openscad-core = { path = "crates/core" }
+visual-openscad-kernel-api = { path = "crates/kernel-api" }

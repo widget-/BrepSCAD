@@ -1,0 +1,23 @@
+# Rust build output
+/target/
+**/*.rs.bk
+
+# Generated model exports
+*.stl
+*.3mf
+*.step
+*.stp
+*.obj
+*.glb
+*.gltf
+/out/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Nix / direnv
+.direnv/
+result
+result-*
