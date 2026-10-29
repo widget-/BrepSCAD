@@ -8,5 +8,5 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-visual-openscad-core.workspace = true
-visual-openscad-kernel-api.workspace = true
+visual-openscad-kernel-truck.workspace = true
+visual-openscad-scad-eval.workspace = true

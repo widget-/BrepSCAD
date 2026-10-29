@@ -928,8 +928,8 @@ name = "visual-openscad"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "visual-openscad-core",
- "visual-openscad-kernel-api",
+ "visual-openscad-kernel-truck",
+ "visual-openscad-scad-eval",
 ]
 
 [[package]]

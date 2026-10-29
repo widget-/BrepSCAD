@@ -25,4 +25,6 @@ truck-shapeops = { version = "0.4", default-features = false }
 
 visual-openscad-core = { path = "crates/core" }
 visual-openscad-kernel-api = { path = "crates/kernel-api" }
+visual-openscad-kernel-truck = { path = "crates/kernel-truck" }
+visual-openscad-scad-eval = { path = "crates/scad-eval" }
 visual-openscad-scad-syntax = { path = "crates/scad-syntax" }

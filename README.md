@@ -72,6 +72,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 `Cargo.lock` should be committed once generated; this is a binary workspace, not a library published to crates.io.
 
+## Run
+
+The binary evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses a built-in cube-with-hole sample.
+
+```sh
+cargo run -p visual-openscad -- path/to/model.scad
+```
+
+The current subset supports top-level assignments, `cube`, `cylinder`, and the `difference` / `union` / `intersection` blocks.
+
 ## Documentation
 
 - [`docs/research.md`](docs/research.md) — prior art, source-first architecture, kernel trade-offs, native library fast paths.
