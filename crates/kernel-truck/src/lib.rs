@@ -9,17 +9,23 @@ use primitives::{cuboid, cylinder, sphere};
 use truck_meshalgo::prelude::*;
 use truck_modeling::*;
 use visual_openscad_kernel_api::{
-    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Transform,
+    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
 };
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
 
 const BOOLEAN_TOLERANCES: [f64; 3] = [0.05, 0.02, 0.01];
 
-/// A kernel that owns Truck solids in a simple arena.
+#[derive(Debug)]
+enum OwnedShape {
+    Face(Face),
+    Solid(Solid),
+}
+
+/// A kernel that owns Truck faces and solids in a simple arena.
 #[derive(Debug, Default)]
 pub struct TruckKernel {
-    shapes: Vec<Solid>,
+    shapes: Vec<OwnedShape>,
 }
 
 impl TruckKernel {
@@ -27,16 +33,34 @@ impl TruckKernel {
         Self::default()
     }
 
-    fn insert(&mut self, shape: Solid) -> ShapeId {
+    fn insert(&mut self, shape: OwnedShape) -> ShapeId {
         let id = ShapeId(self.shapes.len() as u64);
         self.shapes.push(shape);
         id
     }
 
-    fn shape(&self, id: ShapeId) -> KernelResult<&Solid> {
+    fn shape(&self, id: ShapeId) -> KernelResult<&OwnedShape> {
         self.shapes
             .get(id.0 as usize)
             .ok_or(KernelError::UnknownShape(id))
+    }
+
+    fn solid(&self, id: ShapeId) -> KernelResult<&Solid> {
+        match self.shape(id)? {
+            OwnedShape::Solid(solid) => Ok(solid),
+            OwnedShape::Face(_) => Err(KernelError::Backend(
+                "operation requires a solid, not a sketch".to_owned(),
+            )),
+        }
+    }
+
+    fn face(&self, id: ShapeId) -> KernelResult<&Face> {
+        match self.shape(id)? {
+            OwnedShape::Face(face) => Ok(face),
+            OwnedShape::Solid(_) => Err(KernelError::Backend(
+                "operation requires a sketch, not a solid".to_owned(),
+            )),
+        }
     }
 }
 
@@ -48,6 +72,8 @@ impl Kernel for TruckKernel {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             primitives: true,
+            sketches: true,
+            extrusions: true,
             transforms: true,
             booleans: true,
             tessellation: true,
@@ -61,24 +87,51 @@ impl Kernel for TruckKernel {
             Primitive::Cylinder { radius, height } => cylinder(radius, height)?,
             Primitive::Sphere { radius } => sphere(radius)?,
         };
-        Ok(self.insert(shape))
+        Ok(self.insert(OwnedShape::Solid(shape)))
+    }
+
+    fn sketch(&mut self, sketch: Sketch) -> KernelResult<ShapeId> {
+        let face = match sketch {
+            Sketch::Square { size } => primitives::square(size)?,
+            Sketch::Circle { radius } => primitives::circle(radius)?,
+            Sketch::Polygon { points } => primitives::polygon(&points)?,
+        };
+        Ok(self.insert(OwnedShape::Face(face)))
+    }
+
+    fn extrude(&mut self, shape: ShapeId, height: f64) -> KernelResult<ShapeId> {
+        if height <= 0.0 {
+            return Err(KernelError::Backend(
+                "extrusion height must be positive".to_owned(),
+            ));
+        }
+        let face = self.face(shape)?;
+        let centered = builder::translated(face, Vector3::new(0.0, 0.0, -height / 2.0));
+        let solid = builder::tsweep(&centered, Vector3::new(0.0, 0.0, height));
+        Ok(self.insert(OwnedShape::Solid(solid)))
     }
 
     fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
-        let solid = self.shape(shape)?;
+        let shape = self.shape(shape)?;
         let matrix = matrix4(transform);
-        let mut transformed = builder::transformed(solid, matrix);
-        // A reflection reverses handedness, so the mapped faces need their
-        // orientation restored.
-        if transform.determinant() < 0.0 {
-            transformed.not();
-        }
+        let transformed = match shape {
+            OwnedShape::Solid(solid) => {
+                let mut transformed = builder::transformed(solid, matrix);
+                // A reflection reverses handedness, so the mapped faces need
+                // their orientation restored.
+                if transform.determinant() < 0.0 {
+                    transformed.not();
+                }
+                OwnedShape::Solid(transformed)
+            }
+            OwnedShape::Face(face) => OwnedShape::Face(builder::transformed(face, matrix)),
+        };
         Ok(self.insert(transformed))
     }
 
     fn boolean(&mut self, op: BooleanOp, a: ShapeId, b: ShapeId) -> KernelResult<ShapeId> {
-        let a = self.shape(a)?.clone();
-        let b = self.shape(b)?.clone();
+        let a = self.solid(a)?.clone();
+        let b = self.solid(b)?.clone();
 
         for tolerance in BOOLEAN_TOLERANCES {
             let result = match op {
@@ -91,7 +144,7 @@ impl Kernel for TruckKernel {
                 }
             };
             if let Some(result) = result {
-                return Ok(self.insert(result));
+                return Ok(self.insert(OwnedShape::Solid(result)));
             }
         }
 
@@ -101,8 +154,20 @@ impl Kernel for TruckKernel {
     }
 
     fn tessellate(&self, shape: ShapeId, tolerance: f64) -> KernelResult<Mesh> {
-        let solid = self.shape(shape)?;
-        let mut mesh = solid.triangulation(tolerance).to_polygon();
+        let mut mesh = match self.shape(shape)? {
+            OwnedShape::Solid(solid) => solid.triangulation(tolerance).to_polygon(),
+            OwnedShape::Face(face) => {
+                let shell: Shell = vec![face.clone()].into_iter().collect();
+                let meshed = shell.triangulation(tolerance);
+                let mut mesh = PolygonMesh::default();
+                for poly_face in meshed.iter() {
+                    if let Some(part) = poly_face.surface() {
+                        mesh.merge(part);
+                    }
+                }
+                mesh
+            }
+        };
         mesh.put_together_same_attrs(TOLERANCE)
             .remove_degenerate_faces()
             .remove_unused_attrs();
@@ -156,6 +221,8 @@ mod tests {
         let kernel = TruckKernel::new();
         let capabilities = kernel.capabilities();
         assert!(capabilities.primitives);
+        assert!(capabilities.sketches);
+        assert!(capabilities.extrusions);
         assert!(capabilities.transforms);
         assert!(capabilities.booleans);
         assert!(capabilities.tessellation);
@@ -330,6 +397,121 @@ mod tests {
 
         assert!(mesh.triangle_count() > 0);
         assert!(signed_volume(&mesh) > 0.0);
+    }
+
+    #[test]
+    fn square_and_circle_sketches_are_planar() {
+        let mut kernel = TruckKernel::new();
+
+        let square = kernel
+            .sketch(Sketch::Square { size: [2.0, 4.0] })
+            .expect("square");
+        let mesh = kernel.tessellate(square, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+        assert!((min[0] + 1.0).abs() < 1e-6, "min = {min:?}");
+        assert!((max[0] - 1.0).abs() < 1e-6, "max = {max:?}");
+        assert!((min[1] + 2.0).abs() < 1e-6);
+        assert!((max[1] - 2.0).abs() < 1e-6);
+        assert!(min[2].abs() < 1e-6 && max[2].abs() < 1e-6);
+        assert!(mesh.triangle_count() > 0);
+
+        let circle = kernel
+            .sketch(Sketch::Circle { radius: 1.0 })
+            .expect("circle");
+        let mesh = kernel.tessellate(circle, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+        assert!((min[0] + 1.0).abs() < 0.01, "min = {min:?}");
+        assert!((max[1] - 1.0).abs() < 0.01, "max = {max:?}");
+        assert!(min[2].abs() < 1e-6 && max[2].abs() < 1e-6);
+    }
+
+    #[test]
+    fn polygon_sketch_tessellates() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Polygon {
+                points: vec![[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]],
+            })
+            .expect("polygon");
+        let mesh = kernel.tessellate(sketch, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+
+        assert!((min[0] - 0.0).abs() < 1e-6);
+        assert!((max[0] - 2.0).abs() < 1e-6);
+        assert!((max[1] - 2.0).abs() < 1e-6);
+        assert!(min[2].abs() < 1e-6 && max[2].abs() < 1e-6);
+        assert!(mesh.triangle_count() > 0);
+    }
+
+    #[test]
+    fn extrudes_a_square() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [2.0, 2.0] })
+            .expect("square");
+        let solid = kernel.extrude(sketch, 2.0).expect("extrude");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+
+        assert!((min[2] + 1.0).abs() < 1e-6, "min = {min:?}");
+        assert!((max[2] - 1.0).abs() < 1e-6, "max = {max:?}");
+        let volume = signed_volume(&mesh);
+        assert!((volume - 8.0).abs() < 0.01, "volume = {volume}");
+    }
+
+    #[test]
+    fn extrudes_a_circle() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Circle { radius: 1.0 })
+            .expect("circle");
+        let solid = kernel.extrude(sketch, 2.0).expect("extrude");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+
+        assert!((min[2] + 1.0).abs() < 1e-6, "min = {min:?}");
+        assert!((max[2] - 1.0).abs() < 1e-6, "max = {max:?}");
+        let volume = signed_volume(&mesh);
+        let expected = 2.0 * std::f64::consts::PI;
+        assert!(
+            (volume - expected).abs() < expected * 0.02,
+            "volume = {volume}"
+        );
+    }
+
+    #[test]
+    fn transforms_sketches_before_extrusion() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [2.0, 2.0] })
+            .expect("square");
+        let moved = kernel
+            .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
+            .expect("translate");
+        let solid = kernel.extrude(moved, 2.0).expect("extrude");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+
+        assert!((min[0] - 0.0).abs() < 1e-6, "min = {min:?}");
+        assert!((max[0] - 2.0).abs() < 1e-6, "max = {max:?}");
+    }
+
+    #[test]
+    fn boolean_rejects_sketches() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [2.0, 2.0] })
+            .expect("square");
+
+        let error = kernel
+            .boolean(BooleanOp::Union, cube, sketch)
+            .expect_err("sketch boolean");
+        assert!(matches!(error, KernelError::Backend(message) if message.contains("sketch")));
     }
 
     fn bounds(mesh: &Mesh) -> ([f64; 3], [f64; 3]) {

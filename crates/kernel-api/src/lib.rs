@@ -18,6 +18,17 @@ pub enum Primitive {
     Sphere { radius: f64 },
 }
 
+/// A planar sketch requested from a kernel.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Sketch {
+    /// Axis-aligned rectangle centered on the origin in the XY plane.
+    Square { size: [f64; 2] },
+    /// Disk centered on the origin in the XY plane.
+    Circle { radius: f64 },
+    /// Simple polygon in the XY plane; points are used as given.
+    Polygon { points: Vec<[f64; 2]> },
+}
+
 /// A boolean operation between two shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BooleanOp {
@@ -43,6 +54,8 @@ impl Mesh {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
     pub primitives: bool,
+    pub sketches: bool,
+    pub extrusions: bool,
     pub transforms: bool,
     pub booleans: bool,
     pub tessellation: bool,
@@ -69,6 +82,14 @@ pub trait Kernel {
 
     fn primitive(&mut self, _primitive: Primitive) -> Result<ShapeId, KernelError> {
         Err(KernelError::Unsupported("primitive"))
+    }
+
+    fn sketch(&mut self, _sketch: Sketch) -> Result<ShapeId, KernelError> {
+        Err(KernelError::Unsupported("sketch"))
+    }
+
+    fn extrude(&mut self, _shape: ShapeId, _height: f64) -> Result<ShapeId, KernelError> {
+        Err(KernelError::Unsupported("extrude"))
     }
 
     fn transform(
@@ -104,6 +125,8 @@ mod tests {
     fn default_capabilities_are_empty() {
         let caps = Capabilities::default();
         assert!(!caps.primitives);
+        assert!(!caps.sketches);
+        assert!(!caps.extrusions);
         assert!(!caps.transforms);
         assert!(!caps.booleans);
         assert!(!caps.tessellation);

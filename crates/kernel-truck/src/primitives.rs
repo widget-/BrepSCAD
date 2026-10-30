@@ -18,6 +18,83 @@ pub(crate) fn cuboid(size: [f64; 3]) -> KernelResult<Solid> {
     Ok(builder::tsweep(&face, Vector3::unit_z() * size[2]))
 }
 
+pub(crate) fn square(size: [f64; 2]) -> KernelResult<Face> {
+    if size.iter().any(|value| *value <= 0.0) {
+        return Err(KernelError::Backend(
+            "square dimensions must be positive".to_owned(),
+        ));
+    }
+    let [width, height] = size;
+    polygon(&[
+        [-width / 2.0, -height / 2.0],
+        [width / 2.0, -height / 2.0],
+        [width / 2.0, height / 2.0],
+        [-width / 2.0, height / 2.0],
+    ])
+}
+
+pub(crate) fn circle(radius: f64) -> KernelResult<Face> {
+    if radius <= 0.0 {
+        return Err(KernelError::Backend(
+            "circle radius must be positive".to_owned(),
+        ));
+    }
+
+    let vertex = builder::vertex(Point3::new(radius, 0.0, 0.0));
+    let wire = builder::rsweep(
+        &vertex,
+        Point3::origin(),
+        Vector3::unit_z(),
+        Rad(std::f64::consts::TAU),
+    );
+    builder::try_attach_plane(&[wire])
+        .map_err(|error| KernelError::Backend(format!("circle failed: {error:?}")))
+}
+
+pub(crate) fn polygon(points: &[[f64; 2]]) -> KernelResult<Face> {
+    if points.len() < 3 {
+        return Err(KernelError::Backend(
+            "polygon needs at least three points".to_owned(),
+        ));
+    }
+    if points.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(KernelError::Backend(
+            "polygon points must be finite".to_owned(),
+        ));
+    }
+
+    let area = signed_area(points);
+    if area.abs() < f64::EPSILON {
+        return Err(KernelError::Backend("polygon has zero area".to_owned()));
+    }
+
+    let ordered: Vec<[f64; 2]> = if area < 0.0 {
+        points.iter().rev().copied().collect()
+    } else {
+        points.to_vec()
+    };
+    let vertices: Vec<Vertex> = ordered
+        .iter()
+        .map(|[x, y]| builder::vertex(Point3::new(*x, *y, 0.0)))
+        .collect();
+    let edges: Vec<Edge> = (0..vertices.len())
+        .map(|index| builder::line(&vertices[index], &vertices[(index + 1) % vertices.len()]))
+        .collect();
+    let wire: Wire = edges.into_iter().collect();
+    builder::try_attach_plane(&[wire])
+        .map_err(|error| KernelError::Backend(format!("polygon failed: {error:?}")))
+}
+
+fn signed_area(points: &[[f64; 2]]) -> f64 {
+    let mut area = 0.0;
+    for index in 0..points.len() {
+        let [x0, y0] = points[index];
+        let [x1, y1] = points[(index + 1) % points.len()];
+        area += x0 * y1 - x1 * y0;
+    }
+    area / 2.0
+}
+
 pub(crate) fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
     if radius <= 0.0 || height <= 0.0 {
         return Err(KernelError::Backend(
