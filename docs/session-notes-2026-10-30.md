@@ -6,7 +6,7 @@
 - Branch: `main`
 - HEAD: `4c6d29d refactor: use composed matrix transforms`
 - Working tree: clean before this note was added
-- Test suite: 37 tests passing
+- Test suite: 41 tests passing
 
 ## What this project is
 
@@ -61,6 +61,7 @@ docs/
   - numeric parameter bindings
   - selectable operand parts (leaf primitives) with their own meshes,
     source ranges, and parameter bindings
+  - a source-shaped tree of groups and leaves; leaves index into `parts`
 - Transform parameters are inherited by the leaf operands, so they appear in
   the properties panel and remain editable.
 
@@ -82,6 +83,8 @@ docs/
 - Source editor + Evaluate button (Ctrl+Enter).
 - Orbit camera: drag to orbit, scroll to zoom.
 - CPU ray picking against operand meshes.
+- Shapes panel showing the source-shaped tree of groups and leaf primitives.
+  Clicking a leaf selects it, including cutters enclosed by other geometry.
 - Properties panel with drag-editable numeric parameters.
 - Parameter edits apply on drag release, Enter, or focus loss.
 - Edits write back to the source, then re-evaluate.
@@ -152,9 +155,6 @@ Exit code `124` means it stayed alive until the timeout and did not panic.
   - no `sphere`, `polyhedron`, extrusions, or 2D primitives
 - Booleans currently require brace blocks; single-child boolean forms are not
   supported.
-- `cylinder` is built along Truck's Y axis, while OpenSCAD cylinders are Z-up.
-  This is a prototype mismatch and should be fixed before orientation-sensitive
-  work.
 - No `multmatrix`, `mirror`, `resize`, color, or `$fn` handling. The matrix API
   makes `multmatrix`/`mirror` straightforward to add.
 - Non-uniform scale and reflections still need kernel-specific validation;
@@ -166,7 +166,8 @@ Exit code `124` means it stayed alive until the timeout and did not panic.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight
-  - enclosed cutters can be hard to hit; a parts list or cycling is needed
+  - enclosed cutters are reachable from the Shapes tree, but there is no
+    cycling between overlapping parts
 - No file open/save, export, undo, or persistence beyond the in-memory source.
 - Truck transitive dependencies `nom 3.2.1` and `quick-xml 0.22.0` emit
   future-incompatibility warnings.
@@ -175,34 +176,27 @@ Exit code `124` means it stayed alive until the timeout and did not panic.
 
 ## Recommended next steps
 
-1. **Source-shaped tree panel**
-   - Show top-level shapes and nested operands.
-   - Click-to-select and parameter editing from the tree.
-   - Gives access to enclosed cutters and makes the editor feel source-shaped.
-2. **Evaluation cache**
+1. **Evaluation cache**
    - Cache parts by source range/content hash.
    - Avoid re-tessellating every operand on each parameter edit.
-3. **Complete the transform set**
+2. **Complete the transform set**
    - `multmatrix`, `mirror`, `resize`.
    - Validate singular matrices and reflections.
    - Decide on non-uniform scale policy per kernel.
-4. **Expand the language subset**
+3. **Expand the language subset**
    - Named arguments, expressions, `sphere`, extrusions.
    - Single-child boolean forms.
    - `for` / `if` and module/function definitions later.
-5. **Native intrinsics**
+4. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-6. **Kernel adapters**
+5. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-7. **Selection polish**
+6. **Selection polish**
    - Highlight selected operand.
-   - Ghost/parts list for cutters.
-8. **Fix cylinder orientation**
-   - Convert OpenSCAD Z-up semantics at the boundary or build Truck cylinders
-     on Z.
+   - Ghost or cycle overlapping parts.
 
 ## Relevant docs
 

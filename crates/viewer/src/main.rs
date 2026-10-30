@@ -12,7 +12,7 @@ use glam::{Vec2, Vec3};
 use renderer::MeshRenderer;
 use visual_openscad_kernel_api::Mesh;
 use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{Evaluation, evaluate};
+use visual_openscad_scad_eval::{Evaluation, TreeNode, evaluate};
 use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
 const SAMPLE: &str = r#"size = [2, 2, 2];
@@ -182,6 +182,32 @@ impl ViewerApp {
             .map(|part| (part.shape_index, part.part_index))
     }
 
+    fn shapes_ui(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.heading("Shapes");
+
+        if self.evaluation.shapes.is_empty() {
+            ui.label("Evaluate the source to build a tree.");
+            return;
+        }
+
+        let mut clicked = None;
+        for (shape_index, shape) in self.evaluation.shapes.iter().enumerate() {
+            tree_ui(
+                ui,
+                &shape.tree,
+                shape_index,
+                self.selected_part,
+                &self.source,
+                &mut clicked,
+            );
+        }
+
+        if clicked.is_some() {
+            self.select_part(clicked);
+        }
+    }
+
     fn properties_ui(&mut self, ui: &mut egui::Ui) {
         ui.separator();
         ui.heading("Properties");
@@ -296,6 +322,7 @@ impl eframe::App for ViewerApp {
                         ui.label(format!("{} triangles", self.mesh.triangle_count()));
                         ui.label(format!("{} vertices", self.mesh.positions.len()));
 
+                        self.shapes_ui(ui);
                         self.properties_ui(ui);
                     });
             });
@@ -361,6 +388,42 @@ impl eframe::App for ViewerApp {
 
         if self.pending_evaluate {
             ctx.request_repaint();
+        }
+    }
+}
+
+fn tree_ui(
+    ui: &mut egui::Ui,
+    node: &TreeNode,
+    shape_index: usize,
+    selected: Option<(usize, usize)>,
+    source: &str,
+    clicked: &mut Option<(usize, usize)>,
+) {
+    let label = format!(
+        "{}  ·  line {}",
+        node.module,
+        line_number(source, node.source_range.start)
+    );
+
+    match node.part_index {
+        Some(part_index) => {
+            if ui
+                .selectable_label(selected == Some((shape_index, part_index)), label)
+                .clicked()
+            {
+                *clicked = Some((shape_index, part_index));
+            }
+        }
+        None => {
+            egui::CollapsingHeader::new(label)
+                .id_salt((shape_index, node.source_range.start))
+                .default_open(true)
+                .show(ui, |ui| {
+                    for child in &node.children {
+                        tree_ui(ui, child, shape_index, selected, source, clicked);
+                    }
+                });
         }
     }
 }
@@ -536,6 +599,12 @@ mod tests {
                         mesh: triangle_mesh(),
                     },
                 ],
+                tree: TreeNode {
+                    module: "difference".to_owned(),
+                    source_range: 0..1,
+                    children: Vec::new(),
+                    part_index: None,
+                },
             }],
         };
 

@@ -141,6 +141,38 @@ fn transforms_each_child_in_a_block() {
 }
 
 #[test]
+fn exposes_a_source_shaped_tree() {
+    let source =
+        "difference() {\n    cube([2, 2, 2]);\n    translate([0.2, 0, 0]) cylinder(0.5, 4);\n}\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    let tree = &shape.tree;
+    assert_eq!(tree.module, "difference");
+    assert_eq!(tree.part_index, None);
+    assert_eq!(tree.children.len(), 2);
+
+    let cube = &tree.children[0];
+    assert_eq!(cube.module, "cube");
+    assert_eq!(cube.part_index, Some(0));
+    assert!(cube.children.is_empty());
+    assert_eq!(shape.parts[0].module, "cube");
+    assert_eq!(shape.parts[0].source_range, cube.source_range);
+
+    let translate = &tree.children[1];
+    assert_eq!(translate.module, "translate");
+    assert_eq!(translate.part_index, None);
+    assert_eq!(translate.children[0].module, "cylinder");
+    assert_eq!(translate.children[0].part_index, Some(1));
+    assert_eq!(shape.parts[1].module, "cylinder");
+    assert_eq!(
+        shape.parts[1].source_range,
+        translate.children[0].source_range
+    );
+}
+
+#[test]
 fn reports_unknown_identifiers() {
     let mut kernel = TruckKernel::new();
     let error = evaluate_to_meshes("cube(size);", &mut kernel, 0.01).expect_err("unknown size");

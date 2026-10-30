@@ -40,6 +40,18 @@ pub struct EvaluatedShape {
     pub source_range: Range<usize>,
     pub parameters: Vec<Parameter>,
     pub parts: Vec<Part>,
+    pub tree: TreeNode,
+}
+
+/// One node in the source-shaped tree of a top-level shape.
+///
+/// Leaf nodes carry the index of their entry in [`EvaluatedShape::parts`].
+#[derive(Debug, Clone)]
+pub struct TreeNode {
+    pub module: String,
+    pub source_range: Range<usize>,
+    pub children: Vec<TreeNode>,
+    pub part_index: Option<usize>,
 }
 
 /// A selectable operand, usually a primitive inside a boolean.
@@ -133,12 +145,13 @@ pub fn evaluate<K: Kernel>(
     let mut shapes = Vec::new();
     for root in roots {
         let mesh = kernel.tessellate(root.shape, tolerance)?;
-        let parts = collect_parts(&root, root.shape, &mesh, kernel, tolerance)?;
+        let (parts, tree) = collect_parts(&root, root.shape, &mesh, kernel, tolerance)?;
         shapes.push(EvaluatedShape {
             mesh,
             source_range: root.source_range,
             parameters: root.parameters,
             parts,
+            tree,
         });
     }
 
@@ -437,9 +450,9 @@ fn collect_parts<K: Kernel>(
     root_mesh: &Mesh,
     kernel: &mut K,
     tolerance: f64,
-) -> Result<Vec<Part>, EvalError> {
+) -> Result<(Vec<Part>, TreeNode), EvalError> {
     let mut parts = Vec::new();
-    collect_parts_inner(
+    let tree = collect_parts_inner(
         node,
         root_shape,
         root_mesh,
@@ -448,7 +461,7 @@ fn collect_parts<K: Kernel>(
         &BTreeMap::new(),
         &mut parts,
     )?;
-    Ok(parts)
+    Ok((parts, tree))
 }
 
 fn collect_parts_inner<K: Kernel>(
@@ -459,7 +472,7 @@ fn collect_parts_inner<K: Kernel>(
     tolerance: f64,
     inherited: &BTreeMap<usize, Parameter>,
     parts: &mut Vec<Part>,
-) -> Result<(), EvalError> {
+) -> Result<TreeNode, EvalError> {
     let mut scope = inherited.clone();
     if let Some(transform_parameters) = &node.transform_parameters {
         for parameter in transform_parameters {
@@ -480,20 +493,33 @@ fn collect_parts_inner<K: Kernel>(
                 .entry(parameter.range.start)
                 .or_insert_with(|| parameter.clone());
         }
+        let part_index = parts.len();
         parts.push(Part {
             module: node.module.clone(),
             source_range: node.source_range.clone(),
             parameters: scope.into_values().collect(),
             mesh,
         });
+        Ok(TreeNode {
+            module: node.module.clone(),
+            source_range: node.source_range.clone(),
+            children: Vec::new(),
+            part_index: Some(part_index),
+        })
     } else {
+        let mut children = Vec::new();
         for child in &node.children {
-            collect_parts_inner(
+            children.push(collect_parts_inner(
                 child, root_shape, root_mesh, kernel, tolerance, &scope, parts,
-            )?;
+            )?);
         }
+        Ok(TreeNode {
+            module: node.module.clone(),
+            source_range: node.source_range.clone(),
+            children,
+            part_index: None,
+        })
     }
-    Ok(())
 }
 
 fn first_ident(node: &SyntaxNode) -> Option<String> {
