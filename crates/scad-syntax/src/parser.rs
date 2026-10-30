@@ -91,6 +91,14 @@ impl<'a> Parser<'a> {
                     self.function_declaration();
                     return;
                 }
+                "include" if matches!(self.peek(1), SyntaxKind::STRING | SyntaxKind::LT) => {
+                    self.include_statement(SyntaxKind::INCLUDE);
+                    return;
+                }
+                "use" if matches!(self.peek(1), SyntaxKind::STRING | SyntaxKind::LT) => {
+                    self.include_statement(SyntaxKind::USE);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -124,6 +132,33 @@ impl<'a> Parser<'a> {
         } else {
             self.error("expected a module body");
             self.recover_statement();
+        }
+        self.finish();
+    }
+
+    fn include_statement(&mut self, kind: SyntaxKind) {
+        self.start(kind);
+        self.bump();
+        if self.at(SyntaxKind::STRING) {
+            self.bump();
+        } else if self.at(SyntaxKind::LT) {
+            self.bump();
+            while !self.at(SyntaxKind::GT) && !self.at(SyntaxKind::EOF) {
+                self.bump();
+            }
+            if !self.expect(SyntaxKind::GT) {
+                self.recover_statement();
+                self.finish();
+                return;
+            }
+        } else {
+            self.error("expected a quoted or angle-bracket path");
+            self.recover_statement();
+            self.finish();
+            return;
+        }
+        if self.at(SyntaxKind::SEMICOLON) {
+            self.bump();
         }
         self.finish();
     }
@@ -431,7 +466,7 @@ impl<'a> Parser<'a> {
                     true
                 }
             },
-            SyntaxKind::NUMBER | SyntaxKind::TRUE | SyntaxKind::FALSE => {
+            SyntaxKind::NUMBER | SyntaxKind::TRUE | SyntaxKind::FALSE | SyntaxKind::STRING => {
                 self.bump();
                 true
             }

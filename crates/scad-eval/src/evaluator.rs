@@ -1,6 +1,7 @@
 //! Evaluator connecting the source tree to a kernel.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
@@ -143,6 +144,57 @@ pub fn evaluate_with_cache_options<K: Kernel>(
     options: EvaluationOptions,
     cache: &mut MeshCache,
 ) -> Result<Evaluation, EvalError> {
+    evaluate_with_context(source, None, kernel, options, cache)
+}
+
+/// Parses and evaluates a source file, resolving `include` and `use` paths
+/// relative to that file.
+pub fn evaluate_file<K: Kernel>(
+    path: impl AsRef<Path>,
+    kernel: &mut K,
+    tolerance: f64,
+) -> Result<Evaluation, EvalError> {
+    evaluate_file_with_options(
+        path,
+        kernel,
+        EvaluationOptions {
+            tolerance,
+            legacy_centering: false,
+        },
+    )
+}
+
+/// Like [`evaluate_file`], with explicit evaluation options.
+pub fn evaluate_file_with_options<K: Kernel>(
+    path: impl AsRef<Path>,
+    kernel: &mut K,
+    options: EvaluationOptions,
+) -> Result<Evaluation, EvalError> {
+    evaluate_file_with_cache_options(path, kernel, options, &mut MeshCache::default())
+}
+
+/// Like [`evaluate_file_with_options`], but reuses leaf meshes from `cache`.
+pub fn evaluate_file_with_cache_options<K: Kernel>(
+    path: impl AsRef<Path>,
+    kernel: &mut K,
+    options: EvaluationOptions,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvalError> {
+    let path = path.as_ref();
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let source = std::fs::read_to_string(&canonical).map_err(|error| {
+        EvalError::Source(format!("failed to read {}: {error}", canonical.display()))
+    })?;
+    evaluate_with_context(&source, Some(canonical), kernel, options, cache)
+}
+
+fn evaluate_with_context<K: Kernel>(
+    source: &str,
+    source_path: Option<PathBuf>,
+    kernel: &mut K,
+    options: EvaluationOptions,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvalError> {
     let parsed = parse(source);
     if !parsed.errors().is_empty() {
         let messages = parsed
@@ -151,25 +203,28 @@ pub fn evaluate_with_cache_options<K: Kernel>(
             .map(|error| format!("{} at offset {}", error.message, error.offset))
             .collect::<Vec<_>>()
             .join("; ");
+        let messages = match &source_path {
+            Some(path) => format!("{}: {messages}", path.display()),
+            None => messages,
+        };
         return Err(EvalError::Parse(messages));
     }
 
     let tolerance = options.tolerance;
-    let mut roots = Vec::new();
-    {
-        let mut evaluator = Evaluator {
-            kernel,
-            scopes: vec![Scope::default()],
-            children_stack: Vec::new(),
-            tolerance,
-            legacy_centering: options.legacy_centering,
-        };
-
-        evaluator.register_declarations(&parsed.syntax());
-        for statement in parsed.syntax().children() {
-            roots.extend(evaluator.statement(statement, Transform::IDENTITY)?);
-        }
-    }
+    let (source_dir, include_stack) = match source_path {
+        Some(path) => (path.parent().map(Path::to_path_buf), vec![path]),
+        None => (None, Vec::new()),
+    };
+    let mut evaluator = Evaluator {
+        kernel,
+        scopes: vec![Scope::default()],
+        children_stack: Vec::new(),
+        tolerance,
+        legacy_centering: options.legacy_centering,
+        source_dir,
+        include_stack,
+    };
+    let roots = evaluator.evaluate_source_tree(&parsed.syntax(), Transform::IDENTITY)?;
 
     let mut shapes = Vec::new();
     for root in roots {
@@ -222,6 +277,8 @@ struct Evaluator<'a, K: Kernel> {
     children_stack: Vec<ChildrenFrame>,
     tolerance: f64,
     legacy_centering: bool,
+    source_dir: Option<PathBuf>,
+    include_stack: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -248,6 +305,8 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             SyntaxKind::MODULE_DECLARATION => Ok(Vec::new()),
             SyntaxKind::FUNCTION_DECLARATION => Ok(Vec::new()),
+            SyntaxKind::INCLUDE => self.include_file(node, parent, false),
+            SyntaxKind::USE => self.include_file(node, parent, true),
             SyntaxKind::MODULE_CALL => self.module_call(node, parent),
             _ => Ok(Vec::new()),
         }
@@ -501,6 +560,106 @@ impl<K: Kernel> Evaluator<'_, K> {
             .iter()
             .rev()
             .find_map(|scope| scope.functions.get(name).cloned())
+    }
+
+    fn evaluate_source_tree(
+        &mut self,
+        root: &SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        self.register_declarations(root);
+        let mut nodes = Vec::new();
+        for statement in root.children() {
+            nodes.extend(self.statement(statement, parent)?);
+        }
+        Ok(nodes)
+    }
+
+    fn include_file(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+        use_only: bool,
+    ) -> Result<Vec<Node>, EvalError> {
+        let request = include_path(&node)
+            .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
+        let path = self.resolve_source(&request)?;
+        let source = std::fs::read_to_string(&path).map_err(|error| {
+            EvalError::Source(format!("failed to read {}: {error}", path.display()))
+        })?;
+        let parsed = parse(&source);
+        if !parsed.errors().is_empty() {
+            return Err(parse_error(&path, &parsed));
+        }
+        let root = parsed.syntax();
+
+        self.with_source_file(path, |evaluator| {
+            if use_only {
+                evaluator.register_declarations_deep(&root)?;
+                Ok(Vec::new())
+            } else {
+                evaluator.evaluate_source_tree(&root, parent)
+            }
+        })
+    }
+
+    fn register_declarations_deep(&mut self, root: &SyntaxNode) -> Result<(), EvalError> {
+        self.register_declarations(root);
+        for statement in root.children() {
+            if !matches!(statement.kind(), SyntaxKind::INCLUDE | SyntaxKind::USE) {
+                continue;
+            }
+            let request = include_path(&statement)
+                .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
+            let path = self.resolve_source(&request)?;
+            let source = std::fs::read_to_string(&path).map_err(|error| {
+                EvalError::Source(format!("failed to read {}: {error}", path.display()))
+            })?;
+            let parsed = parse(&source);
+            if !parsed.errors().is_empty() {
+                return Err(parse_error(&path, &parsed));
+            }
+            let child = parsed.syntax();
+            self.with_source_file(path, |evaluator| {
+                evaluator.register_declarations_deep(&child)
+            })?;
+        }
+        Ok(())
+    }
+
+    fn resolve_source(&self, request: &str) -> Result<PathBuf, EvalError> {
+        let path = Path::new(request);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.source_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    EvalError::Source(format!("include \"{request}\" requires a source file path"))
+                })?
+                .join(path)
+        };
+        Ok(std::fs::canonicalize(&resolved).unwrap_or(resolved))
+    }
+
+    fn with_source_file<T>(
+        &mut self,
+        path: PathBuf,
+        f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
+        if self.include_stack.iter().any(|entry| entry == &path) {
+            return Err(EvalError::Source(format!(
+                "include cycle: {}",
+                path.display()
+            )));
+        }
+        let previous_dir =
+            std::mem::replace(&mut self.source_dir, path.parent().map(Path::to_path_buf));
+        self.include_stack.push(path);
+        let result = f(self);
+        self.include_stack.pop();
+        self.source_dir = previous_dir;
+        result
     }
 
     fn assignment_view(&self) -> HashMap<String, SyntaxNode> {
@@ -902,9 +1061,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let children = self.with_special_overrides(&args, |evaluator| match block {
                     Some(block) => evaluator.block(block, Transform::IDENTITY),
                     None => {
-                        let child = node
-                            .children()
-                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                        let child = single_child_statement(&node)
                             .ok_or_else(|| bad_args("offset", "expected a child or block"))?;
                         evaluator.statement(child, Transform::IDENTITY)
                     }
@@ -965,12 +1122,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let children = self.with_special_overrides(&args, |evaluator| match block {
                     Some(block) => evaluator.block(block, Transform::IDENTITY),
                     None => {
-                        let child = node
-                            .children()
-                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
-                            .ok_or_else(|| {
-                                bad_args("linear_extrude", "expected a child or block")
-                            })?;
+                        let child = single_child_statement(&node).ok_or_else(|| {
+                            bad_args("linear_extrude", "expected a child or block")
+                        })?;
                         evaluator.statement(child, Transform::IDENTITY)
                     }
                 })?;
@@ -1027,12 +1181,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let children = self.with_special_overrides(&args, |evaluator| match block {
                     Some(block) => evaluator.block(block, Transform::IDENTITY),
                     None => {
-                        let child = node
-                            .children()
-                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
-                            .ok_or_else(|| {
-                                bad_args("rotate_extrude", "expected a child or block")
-                            })?;
+                        let child = single_child_statement(&node).ok_or_else(|| {
+                            bad_args("rotate_extrude", "expected a child or block")
+                        })?;
                         evaluator.statement(child, Transform::IDENTITY)
                     }
                 })?;
@@ -1097,9 +1248,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let mut children = match block {
                     Some(block) => self.block(block, Transform::IDENTITY)?,
                     None => {
-                        let child = node
-                            .children()
-                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                        let child = single_child_statement(&node)
                             .ok_or_else(|| bad_args("resize", "expected a child or block"))?;
                         self.statement(child, Transform::IDENTITY)?
                     }
@@ -1207,9 +1356,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let children = self.with_special_overrides(&args, |evaluator| match block {
                     Some(block) => evaluator.block(block, combined),
                     None => {
-                        let child = node
-                            .children()
-                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                        let child = single_child_statement(&node)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a child or block"))?;
                         evaluator.statement(child, combined)
                     }
@@ -1269,9 +1416,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let children = self.with_special_overrides(&args, |evaluator| match block {
                     Some(block) => evaluator.block(block, parent),
                     None => {
-                        let child = node
-                            .children()
-                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                        let child = single_child_statement(&node)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a block or child"))?;
                         evaluator.statement(child, parent)
                     }
@@ -1488,6 +1633,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 SyntaxKind::TRUE => Ok(Value::Boolean(true)),
                 SyntaxKind::FALSE => Ok(Value::Boolean(false)),
                 SyntaxKind::IDENT => self.lookup(token.text()),
+                SyntaxKind::STRING => Ok(Value::String(parse_string_literal(token.text()))),
                 kind => Err(EvalError::Expression(format!(
                     "unexpected token in expression: {kind:?}"
                 ))),
@@ -1670,8 +1816,32 @@ impl<K: Kernel> Evaluator<'_, K> {
             "len" => match single_value(name, args)? {
                 Value::Vector(values) => Ok(Value::Number(values.len() as f64)),
                 Value::Matrix(rows) => Ok(Value::Number(rows.len() as f64)),
-                _ => Err(bad_args(name, "expected a vector or matrix")),
+                Value::String(text) => Ok(Value::Number(text.chars().count() as f64)),
+                _ => Err(bad_args(name, "expected a vector, matrix, or string")),
             },
+            "str" => {
+                let mut text = String::new();
+                for value in &args.positional {
+                    text.push_str(&format_value(value));
+                }
+                Ok(Value::String(text))
+            }
+            "chr" => {
+                let value = single_number(name, args)?;
+                if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
+                    return Err(bad_args(name, "code point must be a non-negative integer"));
+                }
+                char::from_u32(value as u32)
+                    .map(|character| Value::String(character.to_string()))
+                    .ok_or_else(|| bad_args(name, "invalid Unicode code point"))
+            }
+            "ord" => {
+                let text = single_value(name, args)?.as_string(name)?;
+                text.chars()
+                    .next()
+                    .map(|character| Value::Number(character as u32 as f64))
+                    .ok_or_else(|| bad_args(name, "expected a non-empty string"))
+            }
             "concat" => {
                 let mut values = Vec::new();
                 for value in &args.positional {
@@ -1693,6 +1863,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             "is_list" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
                 Value::Vector(_) | Value::Matrix(_)
+            ))),
+            "is_string" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::String(_)
             ))),
             _ => Err(EvalError::UnknownFunction(name.to_owned())),
         }
@@ -2155,6 +2329,100 @@ fn function_expression(node: &SyntaxNode) -> Option<SyntaxElement> {
     None
 }
 
+fn parse_error(path: &Path, parsed: &brepscad_syntax::Parse) -> EvalError {
+    let messages = parsed
+        .errors()
+        .iter()
+        .map(|error| format!("{} at offset {}", error.message, error.offset))
+        .collect::<Vec<_>>()
+        .join("; ");
+    EvalError::Parse(format!("{}: {messages}", path.display()))
+}
+
+fn include_path(node: &SyntaxNode) -> Option<String> {
+    let mut in_angle = false;
+    let mut angle = String::new();
+    for element in node.children_with_tokens() {
+        let NodeOrToken::Token(token) = element else {
+            continue;
+        };
+        match token.kind() {
+            SyntaxKind::STRING => return Some(parse_string_literal(token.text())),
+            SyntaxKind::LT => in_angle = true,
+            SyntaxKind::GT if in_angle => return Some(angle),
+            kind if kind.is_trivia() => {}
+            _ if in_angle => angle.push_str(token.text()),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_string_literal(text: &str) -> String {
+    let inner = text
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .unwrap_or(text);
+    let mut result = String::new();
+    let mut characters = inner.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            result.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('n') => result.push('\n'),
+            Some('t') => result.push('\t'),
+            Some('r') => result.push('\r'),
+            Some('"') => result.push('"'),
+            Some('\\') => result.push('\\'),
+            Some(other) => {
+                result.push('\\');
+                result.push(other);
+            }
+            None => result.push('\\'),
+        }
+    }
+    result
+}
+
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::Number(value) => format_number(*value),
+        Value::Boolean(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Vector(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| format_number(*value))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Matrix(rows) => format!(
+            "[{}]",
+            rows.iter()
+                .map(|row| format!(
+                    "[{}]",
+                    row.iter()
+                        .map(|value| format_number(*value))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn format_number(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 1.0e15 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
+    }
+}
+
 fn comprehension_arguments(node: &SyntaxNode) -> Result<SyntaxNode, EvalError> {
     node.children()
         .find(|child| child.kind() == SyntaxKind::ARG_LIST)
@@ -2196,6 +2464,11 @@ fn push_sequence_value(
     match value {
         Value::Number(value) => numbers.push(value),
         Value::Vector(values) => rows.push(values),
+        Value::String(_) => {
+            return Err(EvalError::Expression(
+                "vectors cannot contain strings".to_owned(),
+            ));
+        }
         Value::Boolean(_) => {
             return Err(EvalError::Expression(
                 "vectors cannot contain booleans".to_owned(),
@@ -2296,17 +2569,22 @@ fn declaration_parameters(node: &SyntaxNode) -> Vec<(String, Option<SyntaxElemen
     parameters
 }
 
+fn single_child_statement(node: &SyntaxNode) -> Option<SyntaxNode> {
+    node.children().find(|child| {
+        matches!(
+            child.kind(),
+            SyntaxKind::MODULE_CALL | SyntaxKind::INCLUDE | SyntaxKind::USE
+        )
+    })
+}
+
 fn call_children(node: &SyntaxNode) -> Vec<SyntaxNode> {
     match node
         .children()
         .find(|child| child.kind() == SyntaxKind::BLOCK)
     {
         Some(block) => block.children().collect(),
-        None => node
-            .children()
-            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
-            .into_iter()
-            .collect(),
+        None => single_child_statement(node).into_iter().collect(),
     }
 }
 

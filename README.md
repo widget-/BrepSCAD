@@ -70,6 +70,9 @@ cargo run -p brepscad -- path/to/model.scad
 cargo run -p brepscad -- --legacy-centering path/to/model.scad
 ```
 
+When a file path is given, `include` and `use` paths resolve relative to that
+file. The built-in sample is evaluated from memory and cannot include files.
+
 By default, BrepSCAD centers cubes and squares, and centers cylinders and
 linear extrusions on Z. The legacy flag places cubes/squares at the origin and
 cylinder/extrusion bases at `z = 0`.
@@ -87,13 +90,13 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | Arithmetic, comparisons, logic, ranges, ternary `? :`, `let`, indexing, and list comprehensions; no strings. |
+| Expressions | ✔ | Arithmetic, comparisons, logic, ranges, ternary `? :`, `let`, indexing, list comprehensions, and strings. |
 | Comments and whitespace | ✔ | |
 | `module` declarations | ✔ | Parameters with defaults; `children()` and `$children`; recursive and nested modules. |
 | `function` declarations | ✔ | Positional/named parameters with defaults, recursion, and dynamic scope. |
-| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, and type predicates. No string, random, `search`, or `lookup` functions. |
+| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, and type predicates. No random, `search`, or `lookup` functions. |
 | `for` / `if` | ✔ | |
-| `include` / `use` | ✖ | |
+| `include` / `use` | ✔ | Quoted or angle-bracket paths; resolved relative to the including file. No separate library search paths. |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
 | `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted; `$fn` selects coarser counts, default 32×16. |
 | `polyhedron` | ✔ | Closed, consistently wound shell with planar faces. |

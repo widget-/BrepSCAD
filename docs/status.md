@@ -52,7 +52,10 @@ vendor/
 - Supported syntax: top-level assignments, module and function declarations
   with parameters and defaults, module calls, function-call expressions,
   positional and named arguments, numbers (including negative literals),
-  identifiers, vectors, booleans, ranges, comments, whitespace.
+  string literals, identifiers, vectors, booleans, ranges, comments,
+  whitespace.
+- `include` / `use` statements accept quoted or angle-bracket paths and an
+  optional semicolon.
 - Expressions support `+`, `-`, `*`, `/`, `%`, comparisons, `&&`, `||`, `!`,
   ranges, ternary `? :`, call expressions, postfix indexing, `let`, list
   comprehensions, unary signs, and parentheses; the tree keeps every token.
@@ -73,7 +76,13 @@ vendor/
   Conditional expressions (`? :`) evaluate only the selected branch.
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
   `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
-  `max`, `norm`, `cross`, `len`, `concat`, `is_num`, `is_bool`, and `is_list`.
+  `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `is_num`,
+  `is_bool`, `is_list`, and `is_string`.
+- String values support escapes, equality, `len`, and `str` formatting.
+- `include` evaluates another source file in place, sharing assignments and
+  definitions. `use` imports only module and function definitions. Paths resolve
+  relative to the including file; cycles and read/parse failures are reported
+  with the file path.
 - Postfix indexing reads vector elements and matrix rows: `v[2]`, `m[1][0]`.
 - `let (a = ..., b = ...) expr` binds sequential locals for one expression.
 - List comprehensions support multiple bindings, nesting, `if` filters with
@@ -179,6 +188,13 @@ vendor/
 - A user module returns its body shapes directly, without an implicit union.
   This matches the top-level behavior and avoids extra booleans; transforms and
   booleans above the call union them when one result is required.
+- `include` is textual: the included file's assignments, definitions, and
+  top-level geometry are evaluated in the including scope at the include
+  location. `use` imports declarations only, matching OpenSCAD. Both resolve
+  relative to the current source file and are tracked by canonical path for
+  cycle detection.
+- Included-file source ranges stay relative to their own files. The editor does
+  not yet map those ranges back to a file tab or highlight them.
 - B-rep first. The kernel-neutral `Transform` is a column-major 4×4 affine
   matrix; `compose` applies the child first.
 - OpenSCAD rotation order for `rotate([x, y, z])`: X, then Y, then Z.
@@ -275,8 +291,12 @@ For headless UI snapshots, see
 ## Known limitations
 
 - Parser/evaluator subset is small:
-  - no strings
-  - built-in functions omit the string, random, `search`, and `lookup` families
+  - built-in functions omit the random, `search`, and `lookup` families
+  - vectors remain numeric-only; heterogeneous lists and strings inside vectors
+    are not supported
+  - included-file source ranges are not yet mapped back to an editor file
+  - angle-bracket include paths use the same relative lookup; there is no
+    library search path
   - functions are not first-class values
   - indexing selects a single element or row; slices and string indexing are not
     supported
@@ -319,9 +339,9 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 1. **Finish the language layer**
-   - `include` / `use` with file resolution.
-   - Strings and string functions (`str`, `chr`, `ord`).
-   - Vector slices and remaining built-ins (`search`, `lookup`, `rands`).
+   - Library search paths for angle-bracket includes.
+   - Heterogeneous lists and vector slices.
+   - Remaining built-ins (`search`, `lookup`, `rands`).
 2. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` twist, scale, and slices.

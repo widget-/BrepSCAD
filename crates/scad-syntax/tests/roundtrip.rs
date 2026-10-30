@@ -410,6 +410,56 @@ lets = [for (i = [0:1]) let (j = i * 2) j];\n";
 }
 
 #[test]
+fn round_trips_include_and_use_statements() {
+    let source = "include \"parts.scad\"\nuse <lib/helpers.scad>;\ninclude \"nested/file.scad\";\ncube(1);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::INCLUDE)
+            .count(),
+        2
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::USE)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn round_trips_string_literals() {
+    let source = "message = \"hello \\\"world\\\"\\n\";\nlen(message);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SyntaxKind::STRING)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn reports_unterminated_strings() {
+    let parsed = parse("x = \"oops;\n");
+    assert!(!parsed.errors().is_empty());
+    assert_eq!(parsed.text(), "x = \"oops;\n");
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),

@@ -1,5 +1,7 @@
-use anyhow::{Context, Result};
-use brepscad_eval::{EvaluationOptions, evaluate_to_meshes_with_options};
+use anyhow::Result;
+use brepscad_eval::{
+    EvaluationOptions, evaluate_file_with_options, evaluate_to_meshes_with_options,
+};
 use brepscad_kernel_truck::TruckKernel;
 
 const DEFAULT_SOURCE: &str = include_str!("../../../assets/sample.scad");
@@ -26,22 +28,19 @@ fn main() -> Result<()> {
         ParseOutcome::Run(args) => args,
     };
 
-    let source = match &args.path {
-        Some(path) => {
-            std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?
-        }
-        None => DEFAULT_SOURCE.to_owned(),
+    let options = EvaluationOptions {
+        tolerance: 0.01,
+        legacy_centering: args.legacy_centering,
     };
-
     let mut kernel = TruckKernel::new();
-    let meshes = evaluate_to_meshes_with_options(
-        &source,
-        &mut kernel,
-        EvaluationOptions {
-            tolerance: 0.01,
-            legacy_centering: args.legacy_centering,
-        },
-    )?;
+    let meshes = match &args.path {
+        Some(path) => evaluate_file_with_options(path, &mut kernel, options)?
+            .shapes
+            .into_iter()
+            .map(|shape| shape.mesh)
+            .collect(),
+        None => evaluate_to_meshes_with_options(DEFAULT_SOURCE, &mut kernel, options)?,
+    };
 
     println!("meshes: {}", meshes.len());
     for (index, mesh) in meshes.iter().enumerate() {

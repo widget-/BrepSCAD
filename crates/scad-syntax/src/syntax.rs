@@ -61,6 +61,10 @@ pub enum SyntaxKind {
     FOR_EXPR,
     IF_EXPR,
     LET_EXPR,
+    STRING,
+    DOT,
+    INCLUDE,
+    USE,
     __LAST,
 }
 
@@ -138,6 +142,10 @@ impl Language for ScadLanguage {
             53 => SyntaxKind::FOR_EXPR,
             54 => SyntaxKind::IF_EXPR,
             55 => SyntaxKind::LET_EXPR,
+            56 => SyntaxKind::STRING,
+            57 => SyntaxKind::DOT,
+            58 => SyntaxKind::INCLUDE,
+            59 => SyntaxKind::USE,
             _ => SyntaxKind::ERROR,
         }
     }

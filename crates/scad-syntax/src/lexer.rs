@@ -103,6 +103,29 @@ impl<'a> Lexer<'a> {
                 self.errors
                     .push(SyntaxError::new("unterminated block comment", start));
             }
+        } else if c == '"' {
+            self.advance();
+            let mut closed = false;
+            while let Some(c) = self.peek() {
+                if c == '\\' {
+                    self.advance();
+                    if self.peek().is_some() {
+                        self.advance();
+                    }
+                    continue;
+                }
+                if c == '"' {
+                    self.advance();
+                    closed = true;
+                    break;
+                }
+                self.advance();
+            }
+            self.push(SyntaxKind::STRING, start);
+            if !closed {
+                self.errors
+                    .push(SyntaxError::new("unterminated string", start));
+            }
         } else if is_ident_start(c) {
             self.advance();
             while let Some(c) = self.peek() {
@@ -180,6 +203,7 @@ impl<'a> Lexer<'a> {
                 '>' => Some(SyntaxKind::GT),
                 '!' => Some(SyntaxKind::BANG),
                 '?' => Some(SyntaxKind::QUESTION),
+                '.' => Some(SyntaxKind::DOT),
                 '+' => Some(SyntaxKind::PLUS),
                 '-' => Some(SyntaxKind::MINUS),
                 '*' => Some(SyntaxKind::STAR),

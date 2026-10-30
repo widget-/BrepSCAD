@@ -9,6 +9,7 @@ use crate::{EvalError, bad_args};
 pub(crate) enum Value {
     Number(f64),
     Boolean(bool),
+    String(String),
     Vector(Vec<f64>),
     Matrix(Vec<Vec<f64>>),
 }
@@ -17,7 +18,7 @@ impl Value {
     pub(crate) fn as_number(&self, module: &str) -> Result<f64, EvalError> {
         match self {
             Self::Number(value) => Ok(*value),
-            Self::Boolean(_) | Self::Vector(_) | Self::Matrix(_) => {
+            Self::Boolean(_) | Self::String(_) | Self::Vector(_) | Self::Matrix(_) => {
                 Err(bad_args(module, "expected a number"))
             }
         }
@@ -27,9 +28,16 @@ impl Value {
         match self {
             Self::Boolean(value) => Ok(*value),
             Self::Number(value) => Ok(*value != 0.0),
-            Self::Vector(_) | Self::Matrix(_) => {
+            Self::String(_) | Self::Vector(_) | Self::Matrix(_) => {
                 Err(bad_args(module, "expected a boolean or number"))
             }
+        }
+    }
+
+    pub(crate) fn as_string(&self, module: &str) -> Result<&str, EvalError> {
+        match self {
+            Self::String(value) => Ok(value),
+            _ => Err(bad_args(module, "expected a string")),
         }
     }
 
@@ -37,7 +45,7 @@ impl Value {
         match self {
             Self::Number(value) => Ok([*value; 3]),
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
-            Self::Boolean(_) | Self::Vector(_) | Self::Matrix(_) => {
+            Self::Boolean(_) | Self::String(_) | Self::Vector(_) | Self::Matrix(_) => {
                 Err(bad_args(module, "expected a 3-element vector or a scalar"))
             }
         }
