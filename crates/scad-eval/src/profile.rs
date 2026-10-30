@@ -103,21 +103,34 @@ pub(crate) fn boolean(
     Ok(tree_to_profile(&tree))
 }
 
+/// Join style for 2D profile offsets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OffsetJoin {
+    Round,
+    Miter,
+    Bevel,
+}
+
 /// Offset a profile outward for positive `distance`, inward for negative.
-/// `round` selects round joins for `offset(r=...)`; otherwise miter joins
-/// approximate `offset(delta=...)`.
-pub(crate) fn offset(profile: &Profile, distance: f64, round: bool) -> Result<Profile, EvalError> {
+/// `r` offsets use round joins, or bevel joins when `chamfer` is set; `delta`
+/// offsets use miter joins.
+pub(crate) fn offset(
+    profile: &Profile,
+    distance: f64,
+    join: OffsetJoin,
+) -> Result<Profile, EvalError> {
     if distance == 0.0 {
         return Ok(profile.clone());
     }
+    let join = match join {
+        OffsetJoin::Round => JoinType::Round,
+        OffsetJoin::Miter => JoinType::Miter,
+        OffsetJoin::Bevel => JoinType::Bevel,
+    };
     let paths = inflate_paths_d(
         &to_paths(profile),
         distance,
-        if round {
-            JoinType::Round
-        } else {
-            JoinType::Miter
-        },
+        join,
         EndType::Polygon,
         10.0,
         6,
@@ -305,7 +318,7 @@ mod tests {
 
     #[test]
     fn rounds_an_outward_offset() {
-        let result = offset(&square([2.0, 2.0]), 0.5, true).expect("offset");
+        let result = offset(&square([2.0, 2.0]), 0.5, OffsetJoin::Round).expect("offset");
 
         assert_eq!(result.len(), 1);
         assert!(result[0].holes.is_empty());
@@ -317,7 +330,7 @@ mod tests {
 
     #[test]
     fn miter_inset_shrinks_a_square() {
-        let result = offset(&square([4.0, 4.0]), -0.5, false).expect("offset");
+        let result = offset(&square([4.0, 4.0]), -0.5, OffsetJoin::Miter).expect("offset");
 
         assert_eq!(result.len(), 1);
         let (min, max) = bounds(&result);
@@ -332,7 +345,7 @@ mod tests {
 
     #[test]
     fn inward_offset_can_empty_a_profile() {
-        let result = offset(&square([1.0, 1.0]), -1.0, true).expect("offset");
+        let result = offset(&square([1.0, 1.0]), -1.0, OffsetJoin::Round).expect("offset");
         assert!(result.is_empty() || area(&result) < 1.0e-6);
     }
 

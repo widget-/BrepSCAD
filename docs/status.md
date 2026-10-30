@@ -91,7 +91,8 @@ vendor/
 - `$fn` switches between faceted and analytic geometry at 33 segments;
   `$fa`/`$fs` only affect 2D profile sampling.
 - `cube`, `cylinder`, `sphere`, `polyhedron`.
-- `square`, `circle`, `polygon` sketches and `linear_extrude`.
+- `square`, `circle`, `polygon` sketches and `linear_extrude` with optional
+  `center`.
 - `rotate_extrude` with optional sweep and start angles.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
@@ -101,7 +102,8 @@ vendor/
   values passed at the call site remain visible in the properties panel.
 - 2D booleans run on polygonal profiles (clipper2-rust); results may contain
   holes or multiple disjoint regions.
-- `offset(r=...)` and `offset(delta=...)` for 2D profiles. `r` uses round joins,
+- `offset(r=...)`, `offset(delta=...)`, and `offset(r=..., chamfer=true)` for 2D
+  profiles. `r` uses round joins, `chamfer` switches `r` to bevel joins, and
   `delta` uses miter joins.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
@@ -220,8 +222,12 @@ vendor/
   resulting shells into one solid. Empty 2D boolean results are rejected because
   the model has no representation for empty geometry.
 - `offset` inflates the profile with Clipper2, then runs an even-odd union to
-  rebuild hole ownership. `r` selects round joins and `delta` miter joins; the
-  offset distance is applied in local profile space before the parent transform.
+  rebuild hole ownership. `r` selects round joins, `delta` miter joins, and
+  `chamfer=true` with `r` selects bevel joins; the offset distance is applied in
+  local profile space before the parent transform.
+- `linear_extrude` centers the extruded solid on Z by default. `center=false`
+  starts it at `z = 0`; `center=true` forces centering even with the legacy
+  option enabled.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -281,10 +287,10 @@ For headless UI snapshots, see
   - `for` / `if` results used where exactly one child is required (extrusions,
     offset) still error if they emit zero or multiple shapes
   - 2D booleans and offsets are polygonal; circles flatten to sampled profiles
-    and there is no curve intersection or chamfer support
+    and there is no curve intersection support
   - `$fa`/`$fs` do not affect geometry; they only sample 2D profiles
   - empty 2D boolean or offset results are reported as errors
-  - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
+  - `linear_extrude` supports `height` and `center`; no twist, scale, or slices
   - `center` is not supported per primitive; OpenSCAD placement is a global
     evaluation option
   - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
@@ -317,8 +323,8 @@ For headless UI snapshots, see
    - Strings and string functions (`str`, `chr`, `ord`).
    - Vector slices and remaining built-ins (`search`, `lookup`, `rands`).
 2. **Finish the 2D/extrusion layer**
-   - Polygonal profile smoothing and `offset` chamfer options.
-   - `linear_extrude` options: center, twist, scale, slices.
+   - Polygonal profile smoothing and `$fn` sampling controls for offsets.
+   - `linear_extrude` twist, scale, and slices.
    - `rotate_extrude` negative-side profiles.
 3. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.

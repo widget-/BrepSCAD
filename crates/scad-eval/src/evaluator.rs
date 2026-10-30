@@ -844,10 +844,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "offset" => {
-                args.ensure_known("offset", &["r", "delta"])?;
+                args.ensure_known("offset", &["r", "delta", "chamfer"])?;
                 if args.positional.len() > 1 {
                     return Err(bad_args("offset", "expected one distance"));
                 }
+                let chamfer = args
+                    .named
+                    .get("chamfer")
+                    .map(|value| value.as_boolean("offset"))
+                    .transpose()?
+                    .unwrap_or(false);
                 let r = args
                     .named
                     .get("r")
@@ -878,6 +884,14 @@ impl<K: Kernel> Evaluator<'_, K> {
                         ));
                     }
                 };
+                if chamfer && !round {
+                    return Err(bad_args("offset", "chamfer requires r"));
+                }
+                let join = match (round, chamfer) {
+                    (true, true) => profile::OffsetJoin::Bevel,
+                    (true, false) => profile::OffsetJoin::Round,
+                    (false, _) => profile::OffsetJoin::Miter,
+                };
 
                 let transform_parameters = node
                     .children()
@@ -906,7 +920,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .profile
                     .as_ref()
                     .ok_or_else(|| bad_args("offset", "missing 2D profile"))?;
-                let offset_profile = profile::offset(profile, distance, round)?;
+                let offset_profile = profile::offset(profile, distance, join)?;
                 if offset_profile.is_empty() {
                     return Err(bad_args("offset", "offset produced empty geometry"));
                 }
@@ -929,14 +943,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "linear_extrude" => {
-                args.ensure_known("linear_extrude", &["height"])?;
-                if args.positional.len() > 1 {
-                    return Err(bad_args("linear_extrude", "expected one height"));
+                args.ensure_known("linear_extrude", &["height", "center"])?;
+                if args.positional.len() > 2 {
+                    return Err(bad_args("linear_extrude", "expected height and center"));
                 }
                 let height = args
                     .argument("height", 0)
                     .ok_or_else(|| bad_args("linear_extrude", "expected height"))?
                     .as_number("linear_extrude")?;
+                let center = args
+                    .argument("center", 1)
+                    .map(|value| value.as_boolean("linear_extrude"))
+                    .transpose()?;
 
                 let transform_parameters = node
                     .children()
@@ -964,7 +982,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                 }
 
                 let shape = self.kernel.extrude(children[0].shape, height)?;
-                let local = self.centering_offset([0.0, 0.0, height / 2.0]);
+                let local = match center {
+                    Some(true) => Transform::IDENTITY,
+                    Some(false) => Transform::from_translation([0.0, 0.0, height / 2.0]),
+                    None => self.centering_offset([0.0, 0.0, height / 2.0]),
+                };
                 let world = parent.compose(local);
                 let shape = self.apply_transform(shape, world)?;
                 Ok(Node {

@@ -84,6 +84,19 @@ fn legacy_linear_extrusions_start_at_z_zero() {
 }
 
 #[test]
+fn legacy_linear_extrusion_center_override() {
+    let centered = evaluate("linear_extrude(2, center = true) square([2, 3]);", true);
+    let (min, max) = bounds(&centered.shapes[0].mesh);
+    assert!((min[2] + 1.0).abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 1.0).abs() < 1.0e-6, "max = {max:?}");
+
+    let based = evaluate("linear_extrude(2, center = false) square([2, 3]);", true);
+    let (min, max) = bounds(&based.shapes[0].mesh);
+    assert!(min[2].abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 2.0).abs() < 1.0e-6, "max = {max:?}");
+}
+
+#[test]
 fn legacy_centering_evaluates_the_default_sample() {
     let source = "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    translate([0.2, 0, 0]) cylinder(0.5, 4);\n}\n";
     let evaluation = evaluate(source, true);

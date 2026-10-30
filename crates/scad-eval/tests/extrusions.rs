@@ -47,6 +47,63 @@ fn extrudes_a_square() {
 }
 
 #[test]
+fn linear_extrude_center_controls_z_placement() {
+    let mut kernel = TruckKernel::new();
+
+    let centered = evaluate(
+        "linear_extrude(2, center = true) square(2);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("centered extrusion");
+    let (min, max) = bounds(&centered.shapes[0].mesh);
+    assert!((min[2] + 1.0).abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 1.0).abs() < 1.0e-6, "max = {max:?}");
+
+    let based = evaluate(
+        "linear_extrude(2, center = false) square(2);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("base extrusion");
+    let (min, max) = bounds(&based.shapes[0].mesh);
+    assert!(min[2].abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 2.0).abs() < 1.0e-6, "max = {max:?}");
+
+    let positional = evaluate("linear_extrude(2, true) square(2);", &mut kernel, 0.01)
+        .expect("positional center");
+    let (min, max) = bounds(&positional.shapes[0].mesh);
+    assert!((min[2] + 1.0).abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 1.0).abs() < 1.0e-6, "max = {max:?}");
+}
+
+#[test]
+fn extrudes_a_chamfered_offset() {
+    let source = "linear_extrude(2) offset(r = 1, chamfer = true) square([2, 2]);";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((min[0] + 2.0).abs() < 1.0e-3, "min = {min:?}");
+    assert!((max[0] - 2.0).abs() < 1.0e-3, "max = {max:?}");
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((27.0..29.0).contains(&volume), "volume = {volume}");
+}
+
+#[test]
+fn chamfer_requires_r() {
+    let mut kernel = TruckKernel::new();
+    let error = evaluate_to_meshes(
+        "offset(delta = 1, chamfer = true) square(2);",
+        &mut kernel,
+        0.01,
+    )
+    .expect_err("chamfer with delta");
+
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "offset"));
+}
+
+#[test]
 fn transforms_apply_inside_and_outside_extrusion() {
     let source = "translate([0, 0, 5]) linear_extrude(2) translate([1, 0, 0]) square([2, 2]);\n";
     let mut kernel = TruckKernel::new();

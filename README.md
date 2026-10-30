@@ -99,10 +99,10 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `polyhedron` | ✔ | Closed, consistently wound shell with planar faces. |
 | `square`, `circle`, `polygon` | ✔ | `square`/`circle` centered in XY; `polygon` points used as given. |
 | `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `rotate` vector form only; `resize` `newsize` only, no `auto`. |
-| `linear_extrude` | ◐ | `height` only; centered on Z; no `center`, `twist`, `scale`, or `slices`. |
+| `linear_extrude` | ◐ | `height` and `center`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
 | `rotate_extrude` | ◐ | Profile must lie at `x >= 0`. |
 | `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. |
-| `offset` | ✔ | No `chamfer`; `$fn` only affects profile sampling. |
+| `offset` | ✔ | `r`, `delta`, and `chamfer` joins; `$fn` only affects profile sampling. |
 | `color` | ✖ | |
 | `hull`, `minkowski` | ✖ | |
 | `import`, `export`, `surface` | ✖ | No file I/O yet. |
