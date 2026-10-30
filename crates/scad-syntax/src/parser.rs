@@ -77,9 +77,18 @@ impl<'a> Parser<'a> {
     }
 
     fn statement(&mut self) {
-        if self.current() == SyntaxKind::IDENT && self.current_text() == "if" {
-            self.if_statement();
-            return;
+        if self.current() == SyntaxKind::IDENT {
+            match self.current_text() {
+                "if" => {
+                    self.if_statement();
+                    return;
+                }
+                "module" if self.peek(1) == SyntaxKind::IDENT => {
+                    self.module_declaration();
+                    return;
+                }
+                _ => {}
+            }
         }
         match self.peek(1) {
             SyntaxKind::EQ => self.assignment(),
@@ -89,6 +98,78 @@ impl<'a> Parser<'a> {
                 self.recover_statement();
             }
         }
+    }
+
+    fn module_declaration(&mut self) {
+        self.start(SyntaxKind::MODULE_DECLARATION);
+        self.bump();
+        if !self.expect(SyntaxKind::IDENT) {
+            self.recover_statement();
+            self.finish();
+            return;
+        }
+        if !self.param_list() {
+            self.recover_statement();
+            self.finish();
+            return;
+        }
+        if self.at(SyntaxKind::L_BRACE) {
+            self.block();
+        } else if self.at(SyntaxKind::IDENT) {
+            self.statement();
+        } else {
+            self.error("expected a module body");
+            self.recover_statement();
+        }
+        self.finish();
+    }
+
+    fn param_list(&mut self) -> bool {
+        self.start(SyntaxKind::PARAM_LIST);
+        if !self.expect(SyntaxKind::L_PAREN) {
+            self.finish();
+            return false;
+        }
+        if self.at(SyntaxKind::R_PAREN) {
+            self.bump();
+            self.finish();
+            return true;
+        }
+        loop {
+            if !self.param() {
+                self.finish();
+                return false;
+            }
+            if self.at(SyntaxKind::COMMA) {
+                self.bump();
+                continue;
+            }
+            if self.at(SyntaxKind::R_PAREN) {
+                self.bump();
+                self.finish();
+                return true;
+            }
+            self.error("expected ',' or ')'");
+            self.finish();
+            return false;
+        }
+    }
+
+    fn param(&mut self) -> bool {
+        self.start(SyntaxKind::PARAM);
+        if !self.expect(SyntaxKind::IDENT) {
+            self.finish();
+            return false;
+        }
+        if self.at(SyntaxKind::EQ) {
+            self.bump();
+            if !self.expression() {
+                self.finish();
+                return false;
+            }
+        }
+        self.finish();
+        true
     }
 
     fn if_statement(&mut self) {

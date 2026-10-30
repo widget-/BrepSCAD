@@ -234,6 +234,46 @@ fn parses_comparison_and_logical_precedence() {
 }
 
 #[test]
+fn round_trips_module_declarations() {
+    let source =
+        "module plate(size = 10) {\n    cube([size, size, 2]);\n    children();\n}\nplate(12);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+
+    let declaration = parsed
+        .syntax()
+        .descendants()
+        .find(|node| node.kind() == SyntaxKind::MODULE_DECLARATION)
+        .expect("module declaration");
+    assert!(declaration.text().to_string().starts_with("module plate"));
+
+    let params = parsed
+        .syntax()
+        .descendants()
+        .find(|node| node.kind() == SyntaxKind::PARAM_LIST)
+        .expect("parameter list");
+    assert_eq!(params.text().to_string(), "(size = 10)");
+    assert_eq!(
+        params
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::PARAM)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn parses_module_declaration_with_a_single_statement_body() {
+    let source = "module unit() cube(1);\nunit();\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),

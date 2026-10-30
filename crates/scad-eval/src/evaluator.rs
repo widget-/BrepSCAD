@@ -6,7 +6,7 @@ use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, T
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
-use crate::model::{EvaluatedShape, Evaluation};
+use crate::model::{EvaluatedShape, Evaluation, Parameter};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
 use crate::parts::{Dimension, Node, collect_parts};
 use crate::profile;
@@ -159,12 +159,13 @@ pub fn evaluate_with_cache_options<K: Kernel>(
     {
         let mut evaluator = Evaluator {
             kernel,
-            variables: HashMap::new(),
-            assignments: HashMap::new(),
+            scopes: vec![Scope::default()],
+            children_stack: Vec::new(),
             tolerance,
             legacy_centering: options.legacy_centering,
         };
 
+        evaluator.register_modules(&parsed.syntax());
         for statement in parsed.syntax().children() {
             roots.extend(evaluator.statement(statement, Transform::IDENTITY)?);
         }
@@ -217,10 +218,24 @@ pub fn evaluate_to_meshes_with_options<K: Kernel>(
 
 struct Evaluator<'a, K: Kernel> {
     kernel: &'a mut K,
-    variables: HashMap<String, Value>,
-    assignments: HashMap<String, SyntaxNode>,
+    scopes: Vec<Scope>,
+    children_stack: Vec<ChildrenFrame>,
     tolerance: f64,
     legacy_centering: bool,
+}
+
+#[derive(Debug, Default)]
+struct Scope {
+    variables: HashMap<String, Value>,
+    assignments: HashMap<String, SyntaxNode>,
+    modules: HashMap<String, SyntaxNode>,
+}
+
+#[derive(Debug)]
+struct ChildrenFrame {
+    statements: Vec<SyntaxNode>,
+    caller_depth: usize,
+    special: HashMap<String, Value>,
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
@@ -230,6 +245,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 self.assignment(node)?;
                 Ok(Vec::new())
             }
+            SyntaxKind::MODULE_DECLARATION => Ok(Vec::new()),
             SyntaxKind::MODULE_CALL => self.module_call(node, parent),
             _ => Ok(Vec::new()),
         }
@@ -241,8 +257,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         let value = self
             .expression_after_eq(&node)?
             .ok_or_else(|| EvalError::Parse(format!("missing expression for {name}")))?;
-        self.assignments.insert(name.clone(), node);
-        self.variables.insert(name, value);
+        let scope = self.scopes.last_mut().expect("root scope");
+        scope.assignments.insert(name.clone(), node);
+        scope.variables.insert(name, value);
         Ok(())
     }
 
@@ -252,8 +269,234 @@ impl<K: Kernel> Evaluator<'_, K> {
         match name.as_str() {
             "for" => self.for_call(node, parent),
             "if" => self.if_call(node, parent),
-            _ => self.module_call_one(node, parent).map(|node| vec![node]),
+            "children" => self.children_call(node, parent),
+            _ => match self.lookup_module(&name) {
+                Some(declaration) => self.user_module_call(node, parent, &name, declaration),
+                None => self.module_call_one(node, parent).map(|node| vec![node]),
+            },
         }
+    }
+
+    fn user_module_call(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+        name: &str,
+        declaration: SyntaxNode,
+    ) -> Result<Vec<Node>, EvalError> {
+        let args = match node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+        {
+            Some(arg_list) => self.arg_list(arg_list)?,
+            None => Arguments::default(),
+        };
+        let parameters = declaration
+            .children()
+            .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
+            .map(|list| declaration_parameters(&list))
+            .unwrap_or_default();
+
+        for named in args.named.keys() {
+            if !parameters.iter().any(|(param, _)| param == named) {
+                return Err(bad_args(
+                    name,
+                    format!("unsupported named argument {named}"),
+                ));
+            }
+        }
+        if args.positional.len() > parameters.len() {
+            return Err(bad_args(name, "too many arguments"));
+        }
+
+        let mut bindings = HashMap::new();
+        for (index, value) in args.positional.iter().enumerate() {
+            bindings.insert(parameters[index].0.clone(), value.clone());
+        }
+        for (param, value) in &args.named {
+            bindings.insert(param.clone(), value.clone());
+        }
+
+        let statements = call_children(&node);
+        let caller_parameters = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+            .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
+            .unwrap_or_default();
+        let caller_depth = self.scopes.len();
+        let special = args.special.clone();
+
+        let mut nodes = self.with_scope(Scope::default(), |evaluator| {
+            {
+                let scope = evaluator.scopes.last_mut().expect("module scope");
+                for (name, value) in &special {
+                    scope.variables.insert(name.clone(), value.clone());
+                }
+                scope.variables.insert(
+                    "$children".to_owned(),
+                    Value::Number(statements.len() as f64),
+                );
+            }
+
+            for (param, default) in &parameters {
+                let value = match bindings.get(param) {
+                    Some(value) => value.clone(),
+                    None => match default {
+                        Some(expression) => evaluator.element_value(expression.clone())?,
+                        None => {
+                            return Err(bad_args(name, format!("missing argument {param}")));
+                        }
+                    },
+                };
+                evaluator
+                    .scopes
+                    .last_mut()
+                    .expect("module scope")
+                    .variables
+                    .insert(param.clone(), value);
+            }
+
+            evaluator.children_stack.push(ChildrenFrame {
+                statements,
+                caller_depth,
+                special,
+            });
+            let body = declaration
+                .children()
+                .find(|child| {
+                    matches!(
+                        child.kind(),
+                        SyntaxKind::BLOCK | SyntaxKind::MODULE_CALL | SyntaxKind::ASSIGNMENT
+                    )
+                })
+                .ok_or_else(|| bad_args(name, "missing module body"));
+            let result = body.and_then(|body| evaluator.module_body(body, parent));
+            evaluator.children_stack.pop();
+            result
+        })?;
+
+        for node in &mut nodes {
+            merge_parameters(node, &caller_parameters);
+        }
+        Ok(nodes)
+    }
+
+    fn children_call(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        let args = match node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+        {
+            Some(arg_list) => self.arg_list(arg_list)?,
+            None => Arguments::default(),
+        };
+        args.ensure_known("children", &[])?;
+        if args.positional.len() > 1 {
+            return Err(bad_args("children", "expected at most one index"));
+        }
+        let index = args
+            .positional
+            .first()
+            .map(|value| value.as_number("children"))
+            .transpose()?;
+
+        let (statements, caller_depth, special) = match self.children_stack.last() {
+            Some(frame) => (
+                frame.statements.clone(),
+                frame.caller_depth,
+                frame.special.clone(),
+            ),
+            None => return Err(bad_args("children", "not inside a module")),
+        };
+
+        let selected = match index {
+            None => statements,
+            Some(index) => {
+                if index < 0.0 || index.fract() != 0.0 {
+                    return Err(bad_args("children", "index must be a non-negative integer"));
+                }
+                statements
+                    .into_iter()
+                    .nth(index as usize)
+                    .map(|statement| vec![statement])
+                    .ok_or_else(|| bad_args("children", format!("no child at index {index}")))?
+            }
+        };
+
+        let saved = self.scopes.split_off(caller_depth);
+        let pushed_scope = !special.is_empty();
+        if pushed_scope {
+            self.scopes.push(Scope {
+                variables: special,
+                ..Scope::default()
+            });
+        }
+        let result = (|| {
+            let mut nodes = Vec::new();
+            for statement in selected {
+                nodes.extend(self.statement(statement, parent)?);
+            }
+            Ok(nodes)
+        })();
+        if pushed_scope {
+            self.scopes.pop();
+        }
+        self.scopes.extend(saved);
+        result
+    }
+
+    fn module_body(&mut self, body: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        if body.kind() == SyntaxKind::BLOCK {
+            self.block(body, parent)
+        } else {
+            self.statement(body, parent)
+        }
+    }
+
+    fn with_scope<T>(
+        &mut self,
+        scope: Scope,
+        f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
+        self.scopes.push(scope);
+        let result = f(self);
+        self.scopes.pop();
+        result
+    }
+
+    fn register_modules(&mut self, node: &SyntaxNode) {
+        let definitions = node
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::MODULE_DECLARATION)
+            .filter_map(|child| module_name(&child).map(|name| (name, child)))
+            .collect::<Vec<_>>();
+        let scope = self.scopes.last_mut().expect("root scope");
+        for (name, declaration) in definitions {
+            scope.modules.insert(name, declaration);
+        }
+    }
+
+    fn lookup_module(&self, name: &str) -> Option<SyntaxNode> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.modules.get(name).cloned())
+    }
+
+    fn assignment_view(&self) -> HashMap<String, SyntaxNode> {
+        let mut assignments = HashMap::new();
+        for scope in &self.scopes {
+            assignments.extend(
+                scope
+                    .assignments
+                    .iter()
+                    .map(|(name, node)| (name.clone(), node.clone())),
+            );
+        }
+        assignments
     }
 
     fn if_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
@@ -335,21 +578,15 @@ impl<K: Kernel> Evaluator<'_, K> {
         }
 
         let (name, values) = &bindings[index];
-        let previous = self.variables.get(name).cloned();
         let mut outcome = Ok(());
         for value in values {
-            self.variables.insert(name.clone(), value.clone());
+            let mut scope = Scope::default();
+            scope.variables.insert(name.clone(), value.clone());
+            self.scopes.push(scope);
             outcome = self.for_bindings(bindings, index + 1, body, parent, nodes);
+            self.scopes.pop();
             if outcome.is_err() {
                 break;
-            }
-        }
-        match previous {
-            Some(value) => {
-                self.variables.insert(name.clone(), value);
-            }
-            None => {
-                self.variables.remove(name);
             }
         }
         outcome
@@ -372,7 +609,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             first_ident(&node).ok_or_else(|| EvalError::Parse("missing module name".to_owned()))?;
         let module = name.clone();
         let source_range = text_range_to_range(node.text_range());
-        let parameters = collect_parameters(&node, &self.assignments);
+        let parameters = collect_parameters(&node, &self.assignment_view());
 
         let args = match node
             .children()
@@ -628,7 +865,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let transform_parameters = node
                     .children()
                     .find(|child| child.kind() == SyntaxKind::ARG_LIST)
-                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
                     .unwrap_or_default();
 
                 let children = self.with_special_overrides(&args, |evaluator| match block {
@@ -687,7 +924,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let transform_parameters = node
                     .children()
                     .find(|child| child.kind() == SyntaxKind::ARG_LIST)
-                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
                     .unwrap_or_default();
 
                 let children = self.with_special_overrides(&args, |evaluator| match block {
@@ -745,7 +982,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let transform_parameters = node
                     .children()
                     .find(|child| child.kind() == SyntaxKind::ARG_LIST)
-                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
                     .unwrap_or_default();
 
                 let children = self.with_special_overrides(&args, |evaluator| match block {
@@ -815,7 +1052,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let transform_parameters = node
                     .children()
                     .find(|child| child.kind() == SyntaxKind::ARG_LIST)
-                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
                     .unwrap_or_default();
 
                 let mut children = match block {
@@ -925,7 +1162,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let transform_parameters = node
                     .children()
                     .find(|child| child.kind() == SyntaxKind::ARG_LIST)
-                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
                     .unwrap_or_default();
 
                 let children = self.with_special_overrides(&args, |evaluator| match block {
@@ -1069,6 +1306,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn block(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        self.register_modules(&node);
         let mut nodes = Vec::new();
         for statement in node.children() {
             nodes.extend(self.statement(statement, parent)?);
@@ -1144,8 +1382,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         if let Some(value) = args.special.get(name) {
             return Ok(Some(value.as_number(name)?));
         }
-        self.variables
-            .get(name)
+        self.lookup_optional(name)
             .map(|value| value.as_number(name))
             .transpose()
     }
@@ -1193,23 +1430,16 @@ impl<K: Kernel> Evaluator<'_, K> {
         args: &Arguments,
         f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
     ) -> Result<T, EvalError> {
-        let mut saved = Vec::with_capacity(args.special.len());
-        for (name, value) in &args.special {
-            saved.push((name.clone(), self.variables.get(name).cloned()));
-            self.variables.insert(name.clone(), value.clone());
+        if args.special.is_empty() {
+            return f(self);
         }
-        let result = f(self);
-        for (name, previous) in saved {
-            match previous {
-                Some(value) => {
-                    self.variables.insert(name, value);
-                }
-                None => {
-                    self.variables.remove(&name);
-                }
-            }
-        }
-        result
+        self.with_scope(
+            Scope {
+                variables: args.special.clone(),
+                ..Scope::default()
+            },
+            f,
+        )
     }
 
     fn element_value(&mut self, element: SyntaxElement) -> Result<Value, EvalError> {
@@ -1417,10 +1647,15 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn lookup(&self, name: &str) -> Result<Value, EvalError> {
-        self.variables
-            .get(name)
-            .cloned()
+        self.lookup_optional(name)
             .ok_or_else(|| EvalError::UnknownIdentifier(name.to_owned()))
+    }
+
+    fn lookup_optional(&self, name: &str) -> Option<Value> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.variables.get(name).cloned())
     }
 }
 
@@ -1444,5 +1679,71 @@ fn loop_values(name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
             "for",
             format!("loop variable {name} must be a vector or range"),
         )),
+    }
+}
+
+fn module_name(node: &SyntaxNode) -> Option<String> {
+    node.children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| token.kind() == SyntaxKind::IDENT)
+        .nth(1)
+        .map(|token| token.text().to_owned())
+}
+
+fn declaration_parameters(node: &SyntaxNode) -> Vec<(String, Option<SyntaxElement>)> {
+    let mut parameters = Vec::new();
+    for param in node
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::PARAM)
+    {
+        let mut name = None;
+        let mut default = None;
+        let mut after_eq = false;
+        for element in param.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::IDENT if name.is_none() => {
+                    name = element.into_token().map(|token| token.text().to_owned());
+                }
+                SyntaxKind::EQ => after_eq = true,
+                kind if kind.is_trivia() => {}
+                _ if after_eq && default.is_none() => default = Some(element),
+                _ => {}
+            }
+        }
+        if let Some(name) = name {
+            parameters.push((name, default));
+        }
+    }
+    parameters
+}
+
+fn call_children(node: &SyntaxNode) -> Vec<SyntaxNode> {
+    match node
+        .children()
+        .find(|child| child.kind() == SyntaxKind::BLOCK)
+    {
+        Some(block) => block.children().collect(),
+        None => node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn merge_parameters(node: &mut Node, parameters: &[Parameter]) {
+    for parameter in parameters {
+        if node
+            .parameters
+            .iter()
+            .all(|existing| existing.range != parameter.range)
+        {
+            node.parameters.push(parameter.clone());
+        }
+    }
+    node.parameters
+        .sort_by_key(|parameter| parameter.range.start);
+    for child in &mut node.children {
+        merge_parameters(child, parameters);
     }
 }

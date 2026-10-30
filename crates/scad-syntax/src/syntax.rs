@@ -50,6 +50,9 @@ pub enum SyntaxKind {
     FALSE,
     RANGE,
     ELSE,
+    MODULE_DECLARATION,
+    PARAM_LIST,
+    PARAM,
     __LAST,
 }
 
@@ -116,6 +119,9 @@ impl Language for ScadLanguage {
             42 => SyntaxKind::FALSE,
             43 => SyntaxKind::RANGE,
             44 => SyntaxKind::ELSE,
+            45 => SyntaxKind::MODULE_DECLARATION,
+            46 => SyntaxKind::PARAM_LIST,
+            47 => SyntaxKind::PARAM,
             _ => SyntaxKind::ERROR,
         }
     }

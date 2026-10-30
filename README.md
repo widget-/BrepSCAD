@@ -89,7 +89,8 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Module calls | ✔ | |
 | Expressions | ✔ | No strings. |
 | Comments and whitespace | ✔ | |
-| `module` / `function` declarations | ✖ | |
+| `module` declarations | ✔ | Parameters with defaults; `children()` and `$children`; recursive and nested modules. |
+| `function` declarations | ✖ | Expressions do not parse call syntax yet. |
 | `for` / `if` | ✔ | |
 | `include` / `use` | ✖ | |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |

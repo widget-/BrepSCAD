@@ -49,18 +49,28 @@ vendor/
 - Trivia-preserving lexer.
 - Tolerant recursive-descent parser with error recovery.
 - `TextEdit` / `apply_edit` with bounds and UTF-8 boundary checks.
-- Supported syntax: top-level assignments, module calls, positional and named
-  arguments, numbers (including negative literals), identifiers, vectors,
-  booleans, ranges, comments, whitespace.
+- Supported syntax: top-level assignments, module declarations with parameters
+  and defaults, module calls, positional and named arguments, numbers (including
+  negative literals), identifiers, vectors, booleans, ranges, comments,
+  whitespace.
 - Expressions support `+`, `-`, `*`, `/`, `%`, comparisons, `&&`, `||`, `!`,
   ranges, unary signs, and parentheses; the tree keeps every token.
 - `for` / `if` / `else` statements, including blocks and single-statement bodies.
 - Transform and boolean calls support either a block or a single child module
   call.
+- `module` declarations support block or single-statement bodies.
 
 ### Evaluator
 
 - Top-level assignments and variable lookup.
+- User modules: declarations are collected per block, so a module can be called
+  before its declaration in the same block. Parameters bind positionally or by
+  name, defaults can reference earlier parameters, and calls can recurse.
+- Module and loop scopes shadow caller variables and restore them on exit.
+  Module bodies read caller variables (dynamic scoping, as in OpenSCAD).
+- `children()` renders all call-site children; `children(n)` selects one by
+  index. Children are evaluated in the caller's scope at the transform where
+  `children()` appears. `$children` holds the child count.
 - `for` loops over ranges and vectors, with multiple bindings and block or
   single-statement bodies.
 - `if` / `else` with boolean or numeric truthiness.
@@ -73,6 +83,8 @@ vendor/
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` turns exactly one 2D child into a solid.
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
+- User module call arguments are merged into the returned part parameters, so
+  values passed at the call site remain visible in the properties panel.
 - 2D booleans run on polygonal profiles (clipper2-rust); results may contain
   holes or multiple disjoint regions.
 - `offset(r=...)` and `offset(delta=...)` for 2D profiles. `r` uses round joins,
@@ -139,6 +151,18 @@ vendor/
 
 - Source-faithful editing: `.scad` text is canonical; inspection state is not
   written back.
+- Module definitions are collected at the start of each source file or block,
+  then executed in source order. This permits forward references within a
+  block while keeping nested module definitions scoped to their enclosing
+  module.
+- Module and loop variables use a scope stack. Assignments write to the
+  innermost scope, and lookups fall back outward (dynamic scoping). Call-site
+  children of a module are evaluated after temporarily removing the module's
+  scope, so they see the caller's variables; `$` arguments passed to the module
+  are re-applied while children are rendered.
+- A user module returns its body shapes directly, without an implicit union.
+  This matches the top-level behavior and avoids extra booleans; transforms and
+  booleans above the call union them when one result is required.
 - B-rep first. The kernel-neutral `Transform` is a column-major 4×4 affine
   matrix; `compose` applies the child first.
 - OpenSCAD rotation order for `rotate([x, y, z])`: X, then Y, then Z.
@@ -232,7 +256,11 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - no strings
-  - no `module` / `function` declarations
+  - no `function` declarations; only `module` declarations are supported
+  - `children(n)` accepts one integer index; vector or range child selection is
+    not supported
+  - module bodies return their shapes directly, so a module call does not add a
+    group node of its own to the source-shaped tree
   - `for` / `if` results used where exactly one child is required (extrusions,
     offset) still error if they emit zero or multiple shapes
   - 2D booleans and offsets are polygonal; circles flatten to sampled profiles
@@ -267,19 +295,21 @@ For headless UI snapshots, see
 
 ## Recommended next steps
 
-1. **Finish the 2D/extrusion layer**
+1. **Finish the language layer**
+   - `function` declarations and call expressions.
+   - `include` / `use` with file resolution.
+2. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `offset` chamfer options.
    - `linear_extrude` options: center, twist, scale, slices.
    - `rotate_extrude` negative-side profiles.
-   - Module/function declarations.
-2. **Native intrinsics**
+3. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-3. **Kernel adapters**
+4. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-4. **Selection polish**
+5. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 
