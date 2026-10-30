@@ -93,6 +93,17 @@ cargo run -p visual-openscad-viewer
 
 Drag to orbit and scroll to zoom. Click the model to select an operand, or use the Shapes panel, which shows the source-shaped tree of booleans, transforms, and leaf primitives. Clicking a leaf selects it and fills the Properties panel, including cutters enclosed by the base shape. The Properties panel lists numeric literals in that operand and in the assignments it references. Drag a value, or click it and type a new number, then press Enter or click away. The edit is written back to the source and the model re-evaluates, reusing tessellated leaf meshes whose module, parameters, and transform did not change. The selected operand is not highlighted yet. The source panel remains the general edit loop. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
 
+### Headless UI snapshot
+
+To inspect the UI without opening a window on the desktop, render it on a virtual X display:
+
+```sh
+cargo build -p visual-openscad-viewer
+scripts/screenshot-viewer.sh /tmp/viewer.png
+```
+
+The script starts `Xvfb`, runs the viewer at 1280×800, captures one frame with ffmpeg's `x11grab`, and shuts everything down. It requires `Xvfb` and an ffmpeg build with `x11grab`; it does not need a window manager or a visible desktop.
+
 ## Documentation
 
 - [`docs/research.md`](docs/research.md) — prior art, source-first architecture, kernel trade-offs, native library fast paths.

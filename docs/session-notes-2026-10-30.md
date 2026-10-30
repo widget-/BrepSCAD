@@ -102,9 +102,12 @@ docs/
 size = [2, 2, 2];
 difference() {
     cube(size);
-    translate([0.5, 0, 0]) cylinder(0.5, 4);
+    translate([0.2, 0, 0]) cylinder(0.5, 4);
 }
 ```
+
+- `scripts/screenshot-viewer.sh` captures the UI headlessly through Xvfb and
+  ffmpeg, so verification does not open a window on the desktop.
 
 ## Important decisions
 
@@ -159,6 +162,17 @@ nix-shell --run 'timeout 8s target/debug/visual-openscad-viewer'
 ```
 
 Exit code `124` means it stayed alive until the timeout and did not panic.
+
+For a screenshot without opening a window on the desktop, use the headless
+capture script:
+
+```sh
+scripts/screenshot-viewer.sh /tmp/viewer.png
+```
+
+It starts `Xvfb` on a free display, runs the viewer, captures one frame with
+ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
+`x11grab`; no window manager is needed.
 
 ## Known limitations
 
