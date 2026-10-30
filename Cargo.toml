@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "crates/app",
-    "crates/core",
     "crates/kernel-api",
     "crates/kernel-truck",
     "crates/scad-eval",
@@ -24,7 +23,6 @@ truck-meshalgo = { version = "0.4", default-features = false, features = ["analy
 truck-modeling = "0.6"
 truck-shapeops = { version = "0.4", default-features = false }
 
-visual-openscad-core = { path = "crates/core" }
 visual-openscad-kernel-api = { path = "crates/kernel-api" }
 visual-openscad-kernel-truck = { path = "crates/kernel-truck" }
 visual-openscad-scad-eval = { path = "crates/scad-eval" }

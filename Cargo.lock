@@ -2944,10 +2944,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "visual-openscad-core"
-version = "0.1.0"
-
-[[package]]
 name = "visual-openscad-kernel-api"
 version = "0.1.0"
 dependencies = [
