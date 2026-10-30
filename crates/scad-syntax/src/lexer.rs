@@ -111,7 +111,12 @@ impl<'a> Lexer<'a> {
                 }
                 self.advance();
             }
-            self.push(SyntaxKind::IDENT, start);
+            let kind = match &self.input[start..self.pos] {
+                "true" => SyntaxKind::TRUE,
+                "false" => SyntaxKind::FALSE,
+                _ => SyntaxKind::IDENT,
+            };
+            self.push(kind, start);
         } else if c.is_ascii_digit() {
             self.advance();
             while let Some(c) = self.peek() {
@@ -135,6 +140,30 @@ impl<'a> Lexer<'a> {
                 }
             }
             self.push(SyntaxKind::NUMBER, start);
+        } else if self.rest().starts_with("==") {
+            self.advance();
+            self.advance();
+            self.push(SyntaxKind::EQEQ, start);
+        } else if self.rest().starts_with("!=") {
+            self.advance();
+            self.advance();
+            self.push(SyntaxKind::NE, start);
+        } else if self.rest().starts_with("<=") {
+            self.advance();
+            self.advance();
+            self.push(SyntaxKind::LE, start);
+        } else if self.rest().starts_with(">=") {
+            self.advance();
+            self.advance();
+            self.push(SyntaxKind::GE, start);
+        } else if self.rest().starts_with("&&") {
+            self.advance();
+            self.advance();
+            self.push(SyntaxKind::AND_AND, start);
+        } else if self.rest().starts_with("||") {
+            self.advance();
+            self.advance();
+            self.push(SyntaxKind::OR_OR, start);
         } else {
             let kind = match c {
                 '[' => Some(SyntaxKind::L_BRACK),
@@ -145,7 +174,11 @@ impl<'a> Lexer<'a> {
                 '}' => Some(SyntaxKind::R_BRACE),
                 ',' => Some(SyntaxKind::COMMA),
                 ';' => Some(SyntaxKind::SEMICOLON),
+                ':' => Some(SyntaxKind::COLON),
                 '=' => Some(SyntaxKind::EQ),
+                '<' => Some(SyntaxKind::LT),
+                '>' => Some(SyntaxKind::GT),
+                '!' => Some(SyntaxKind::BANG),
                 '+' => Some(SyntaxKind::PLUS),
                 '-' => Some(SyntaxKind::MINUS),
                 '*' => Some(SyntaxKind::STAR),

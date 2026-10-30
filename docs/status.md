@@ -49,15 +49,19 @@ scripts/
 - `TextEdit` / `apply_edit` with bounds and UTF-8 boundary checks.
 - Supported syntax: top-level assignments, module calls, positional and named
   arguments, numbers (including negative literals), identifiers, vectors,
-  comments, whitespace.
-- Expressions support `+`, `-`, `*`, `/`, and `%` with standard precedence,
-  unary signs, and parentheses; the tree keeps every token.
+  booleans, ranges, comments, whitespace.
+- Expressions support `+`, `-`, `*`, `/`, `%`, comparisons, `&&`, `||`, `!`,
+  ranges, unary signs, and parentheses; the tree keeps every token.
+- `for` / `if` / `else` statements, including blocks and single-statement bodies.
 - Transform and boolean calls support either a block or a single child module
   call.
 
 ### Evaluator
 
 - Top-level assignments and variable lookup.
+- `for` loops over ranges and vectors, with multiple bindings and block or
+  single-statement bodies.
+- `if` / `else` with boolean or numeric truthiness.
 - `cube`, `cylinder`, `sphere`, `polyhedron`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude`.
 - `rotate_extrude` with optional sweep and start angles.
@@ -208,9 +212,10 @@ For headless UI snapshots, see
 ## Known limitations
 
 - Parser/evaluator subset is small:
-  - no strings or booleans
+  - no strings
   - no `module` / `function` declarations
-  - no `for` / `if`
+  - `for` / `if` results used where exactly one child is required (extrusions,
+    offset) still error if they emit zero or multiple shapes
   - 2D booleans and offsets are polygonal; circles flatten to 64 segments and
     there is no curve intersection, chamfer, or `$fn` support
   - empty 2D boolean or offset results are reported as errors
@@ -242,7 +247,7 @@ For headless UI snapshots, see
    - Polygonal profile smoothing and `offset` chamfer/$fn options.
    - `linear_extrude` options: center, twist, scale, slices.
    - `rotate_extrude` negative-side profiles.
-   - `for` / `if` and module/function definitions later.
+   - Module/function declarations.
 2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.

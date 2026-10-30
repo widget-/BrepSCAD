@@ -50,6 +50,29 @@ fn applies_unary_minus_and_multiplication_precedence() {
 }
 
 #[test]
+fn evaluates_ranges_as_vectors() {
+    let mut kernel = TruckKernel::new();
+
+    let moved = evaluate("translate([0:2]) cube(1);", &mut kernel, 0.01).expect("range translate");
+    let (min, _) = bounds(&moved.shapes[0].mesh);
+    assert!((min[1] - 0.5).abs() < 1.0e-6, "min_y = {}", min[1]);
+    assert!((min[2] - 1.5).abs() < 1.0e-6, "min_z = {}", min[2]);
+
+    let sized = evaluate("cube([1:1:3]);", &mut kernel, 0.01).expect("range size");
+    let (min, max) = bounds(&sized.shapes[0].mesh);
+    assert!((max[0] - min[0] - 1.0).abs() < 1.0e-6);
+    assert!((max[1] - min[1] - 2.0).abs() < 1.0e-6);
+    assert!((max[2] - min[2] - 3.0).abs() < 1.0e-6);
+}
+
+#[test]
+fn logical_operators_short_circuit() {
+    let mut kernel = TruckKernel::new();
+    let source = "a = false && (1 / 0);\nb = true || (1 / 0);\ncube(1);\n";
+    evaluate(source, &mut kernel, 0.01).expect("short-circuit");
+}
+
+#[test]
 fn rejects_division_by_zero() {
     let mut kernel = TruckKernel::new();
     let error =

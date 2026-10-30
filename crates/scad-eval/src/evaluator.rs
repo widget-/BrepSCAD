@@ -19,6 +19,7 @@ const SINGULAR_DETERMINANT: f64 = 1.0e-12;
 struct Arguments {
     positional: Vec<Value>,
     named: HashMap<String, Value>,
+    named_order: Vec<String>,
 }
 
 impl Arguments {
@@ -108,9 +109,7 @@ pub fn evaluate_with_cache<K: Kernel>(
         };
 
         for statement in parsed.syntax().children() {
-            if let Some(node) = evaluator.statement(statement, Transform::IDENTITY)? {
-                roots.push(node);
-            }
+            roots.extend(evaluator.statement(statement, Transform::IDENTITY)?);
         }
     }
 
@@ -151,18 +150,14 @@ struct Evaluator<'a, K: Kernel> {
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
-    fn statement(
-        &mut self,
-        node: SyntaxNode,
-        parent: Transform,
-    ) -> Result<Option<Node>, EvalError> {
+    fn statement(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
         match node.kind() {
             SyntaxKind::ASSIGNMENT => {
                 self.assignment(node)?;
-                Ok(None)
+                Ok(Vec::new())
             }
-            SyntaxKind::MODULE_CALL => self.module_call(node, parent).map(Some),
-            _ => Ok(None),
+            SyntaxKind::MODULE_CALL => self.module_call(node, parent),
+            _ => Ok(Vec::new()),
         }
     }
 
@@ -177,7 +172,128 @@ impl<K: Kernel> Evaluator<'_, K> {
         Ok(())
     }
 
-    fn module_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Node, EvalError> {
+    fn module_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        let name =
+            first_ident(&node).ok_or_else(|| EvalError::Parse("missing module name".to_owned()))?;
+        match name.as_str() {
+            "for" => self.for_call(node, parent),
+            "if" => self.if_call(node, parent),
+            _ => self.module_call_one(node, parent).map(|node| vec![node]),
+        }
+    }
+
+    fn if_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        let arg_list = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+            .ok_or_else(|| bad_args("if", "expected a condition"))?;
+        let args = self.arg_list(arg_list)?;
+        if !args.named.is_empty() || args.positional.len() != 1 {
+            return Err(bad_args("if", "expected one condition"));
+        }
+        let condition = args.positional[0].as_boolean("if")?;
+
+        let then_body = node
+            .children()
+            .find(|child| matches!(child.kind(), SyntaxKind::BLOCK | SyntaxKind::MODULE_CALL));
+        let else_body = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ELSE)
+            .and_then(|else_node| {
+                else_node.children().find(|child| {
+                    matches!(child.kind(), SyntaxKind::BLOCK | SyntaxKind::MODULE_CALL)
+                })
+            });
+
+        if condition {
+            let body = then_body.ok_or_else(|| bad_args("if", "expected a body"))?;
+            self.eval_control_body(body, parent)
+        } else if let Some(body) = else_body {
+            self.eval_control_body(body, parent)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn for_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        let arg_list = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+            .ok_or_else(|| bad_args("for", "expected loop bindings"))?;
+        let args = self.arg_list(arg_list)?;
+        if !args.positional.is_empty() {
+            return Err(bad_args("for", "expected named loop bindings"));
+        }
+        if args.named_order.is_empty() {
+            return Err(bad_args("for", "expected at least one loop binding"));
+        }
+
+        let mut bindings = Vec::with_capacity(args.named_order.len());
+        for name in &args.named_order {
+            let value = args
+                .named
+                .get(name)
+                .cloned()
+                .ok_or_else(|| bad_args("for", format!("missing value for {name}")))?;
+            bindings.push((name.clone(), loop_values(name, value)?));
+        }
+
+        let body = node
+            .children()
+            .find(|child| matches!(child.kind(), SyntaxKind::BLOCK | SyntaxKind::MODULE_CALL))
+            .ok_or_else(|| bad_args("for", "expected a body"))?;
+        let mut nodes = Vec::new();
+        self.for_bindings(&bindings, 0, &body, parent, &mut nodes)?;
+        Ok(nodes)
+    }
+
+    fn for_bindings(
+        &mut self,
+        bindings: &[(String, Vec<Value>)],
+        index: usize,
+        body: &SyntaxNode,
+        parent: Transform,
+        nodes: &mut Vec<Node>,
+    ) -> Result<(), EvalError> {
+        if index == bindings.len() {
+            nodes.extend(self.eval_control_body(body.clone(), parent)?);
+            return Ok(());
+        }
+
+        let (name, values) = &bindings[index];
+        let previous = self.variables.get(name).cloned();
+        let mut outcome = Ok(());
+        for value in values {
+            self.variables.insert(name.clone(), value.clone());
+            outcome = self.for_bindings(bindings, index + 1, body, parent, nodes);
+            if outcome.is_err() {
+                break;
+            }
+        }
+        match previous {
+            Some(value) => {
+                self.variables.insert(name.clone(), value);
+            }
+            None => {
+                self.variables.remove(name);
+            }
+        }
+        outcome
+    }
+
+    fn eval_control_body(
+        &mut self,
+        body: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        if body.kind() == SyntaxKind::BLOCK {
+            self.block(body, parent)
+        } else {
+            self.statement(body, parent)
+        }
+    }
+
+    fn module_call_one(&mut self, node: SyntaxNode, parent: Transform) -> Result<Node, EvalError> {
         let name =
             first_ident(&node).ok_or_else(|| EvalError::Parse("missing module name".to_owned()))?;
         let module = name.clone();
@@ -421,7 +537,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args("offset", "expected a child or block"))?;
-                        vec![self.module_call(child, Transform::IDENTITY)?]
+                        self.statement(child, Transform::IDENTITY)?
                     }
                 };
                 if children.len() != 1 {
@@ -482,7 +598,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .ok_or_else(|| {
                                 bad_args("linear_extrude", "expected a child or block")
                             })?;
-                        vec![self.module_call(child, Transform::IDENTITY)?]
+                        self.statement(child, Transform::IDENTITY)?
                     }
                 };
                 if children.len() != 1 {
@@ -538,7 +654,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .ok_or_else(|| {
                                 bad_args("rotate_extrude", "expected a child or block")
                             })?;
-                        vec![self.module_call(child, Transform::IDENTITY)?]
+                        self.statement(child, Transform::IDENTITY)?
                     }
                 };
                 if children.len() != 1 {
@@ -606,7 +722,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args("resize", "expected a child or block"))?;
-                        vec![self.module_call(child, Transform::IDENTITY)?]
+                        self.statement(child, Transform::IDENTITY)?
                     }
                 };
                 if children.is_empty() {
@@ -716,7 +832,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a child or block"))?;
-                        vec![self.module_call(child, combined)?]
+                        self.statement(child, combined)?
                     }
                 };
                 if children.is_empty() {
@@ -778,7 +894,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a block or child"))?;
-                        vec![self.module_call(child, parent)?]
+                        self.statement(child, parent)?
                     }
                 };
                 if children.is_empty() {
@@ -852,9 +968,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     fn block(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
         let mut nodes = Vec::new();
         for statement in node.children() {
-            if let Some(node) = self.statement(statement, parent)? {
-                nodes.push(node);
-            }
+            nodes.extend(self.statement(statement, parent)?);
         }
         Ok(nodes)
     }
@@ -902,6 +1016,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     let value = self.expression_after_eq(&child)?.ok_or_else(|| {
                         EvalError::Parse(format!("missing value for argument {name}"))
                     })?;
+                    arguments.named_order.push(name.clone());
                     arguments.named.insert(name, value);
                 }
                 _ => arguments.positional.push(self.element_value(element)?),
@@ -914,6 +1029,8 @@ impl<K: Kernel> Evaluator<'_, K> {
         match element {
             NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::NUMBER => Ok(Value::Number(parse_number(token.text())?)),
+                SyntaxKind::TRUE => Ok(Value::Boolean(true)),
+                SyntaxKind::FALSE => Ok(Value::Boolean(false)),
                 SyntaxKind::IDENT => self.lookup(token.text()),
                 kind => Err(EvalError::Expression(format!(
                     "unexpected token in expression: {kind:?}"
@@ -926,6 +1043,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     fn node_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
         match node.kind() {
             SyntaxKind::VECTOR => self.vector(node.clone()),
+            SyntaxKind::RANGE => self.range_value(node),
             SyntaxKind::BINARY_EXPR => self.binary_expr_value(node),
             SyntaxKind::UNARY_EXPR => self.unary_expr_value(node),
             SyntaxKind::GROUP => self.group_value(node),
@@ -936,33 +1054,48 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn binary_expr_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
-        let mut operands = Vec::new();
         let mut op = None;
+        let mut left = None;
+        let mut right = None;
         for element in node.children_with_tokens() {
             match element.kind() {
                 SyntaxKind::PLUS
                 | SyntaxKind::MINUS
                 | SyntaxKind::STAR
                 | SyntaxKind::SLASH
-                | SyntaxKind::PERCENT => op = Some(element.kind()),
+                | SyntaxKind::PERCENT
+                | SyntaxKind::EQEQ
+                | SyntaxKind::NE
+                | SyntaxKind::LT
+                | SyntaxKind::LE
+                | SyntaxKind::GT
+                | SyntaxKind::GE
+                | SyntaxKind::AND_AND
+                | SyntaxKind::OR_OR => op = Some(element.kind()),
                 kind if kind.is_trivia() => {}
-                _ => operands.push(self.element_value(element)?),
+                _ if left.is_none() => left = Some(element),
+                _ if right.is_none() => right = Some(element),
+                _ => {
+                    return Err(EvalError::Expression(
+                        "too many operands in binary expression".to_owned(),
+                    ));
+                }
             }
         }
 
-        let mut operands = operands.into_iter();
-        let left = operands
-            .next()
-            .ok_or_else(|| EvalError::Expression("missing left operand".to_owned()))?;
-        let right = operands
-            .next()
-            .ok_or_else(|| EvalError::Expression("missing right operand".to_owned()))?;
-        if operands.next().is_some() {
-            return Err(EvalError::Expression(
-                "too many operands in binary expression".to_owned(),
-            ));
-        }
         let op = op.ok_or_else(|| EvalError::Expression("missing operator".to_owned()))?;
+        let left = self.element_value(
+            left.ok_or_else(|| EvalError::Expression("missing left operand".to_owned()))?,
+        )?;
+        if op == SyntaxKind::AND_AND && !left.as_boolean("&&")? {
+            return Ok(Value::Boolean(false));
+        }
+        if op == SyntaxKind::OR_OR && left.as_boolean("||")? {
+            return Ok(Value::Boolean(true));
+        }
+        let right = self.element_value(
+            right.ok_or_else(|| EvalError::Expression("missing right operand".to_owned()))?,
+        )?;
         binary_value(op, left, right)
     }
 
@@ -971,7 +1104,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         let mut op = None;
         for element in node.children_with_tokens() {
             match element.kind() {
-                SyntaxKind::PLUS | SyntaxKind::MINUS => op = Some(element.kind()),
+                SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::BANG => {
+                    op = Some(element.kind())
+                }
                 kind if kind.is_trivia() => {}
                 _ => operand = Some(self.element_value(element)?),
             }
@@ -1007,6 +1142,13 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn vector(&mut self, node: SyntaxNode) -> Result<Value, EvalError> {
+        if let Some(range) = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::RANGE)
+        {
+            return self.range_value(&range);
+        }
+
         let mut numbers = Vec::new();
         let mut rows = Vec::new();
         for element in node.children_with_tokens() {
@@ -1015,6 +1157,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                 kind if kind.is_trivia() => {}
                 _ => match self.element_value(element)? {
                     Value::Number(value) => numbers.push(value),
+                    Value::Boolean(_) => {
+                        return Err(EvalError::Expression(
+                            "vectors cannot contain booleans".to_owned(),
+                        ));
+                    }
                     Value::Vector(values) => rows.push(values),
                     Value::Matrix(_) => {
                         return Err(EvalError::Expression(
@@ -1036,6 +1183,52 @@ impl<K: Kernel> Evaluator<'_, K> {
         }
     }
 
+    fn range_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut numbers = Vec::new();
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::COLON => {}
+                kind if kind.is_trivia() => {}
+                _ => numbers.push(self.element_value(element)?.as_number("range")?),
+            }
+        }
+
+        let (start, step, end) = match numbers.as_slice() {
+            [start, end] => (*start, 1.0, *end),
+            [start, step, end] => (*start, *step, *end),
+            _ => {
+                return Err(EvalError::Expression(
+                    "range needs two or three numbers".to_owned(),
+                ));
+            }
+        };
+        if !start.is_finite() || !step.is_finite() || !end.is_finite() {
+            return Err(EvalError::Expression(
+                "range values must be finite".to_owned(),
+            ));
+        }
+        if step == 0.0 {
+            return Err(EvalError::Expression(
+                "range step must not be zero".to_owned(),
+            ));
+        }
+
+        let mut values = Vec::new();
+        let mut value = start;
+        if step > 0.0 {
+            while value <= end + 1.0e-9 {
+                values.push(value);
+                value += step;
+            }
+        } else {
+            while value >= end - 1.0e-9 {
+                values.push(value);
+                value += step;
+            }
+        }
+        Ok(Value::Vector(values))
+    }
+
     fn lookup(&self, name: &str) -> Result<Value, EvalError> {
         self.variables
             .get(name)
@@ -1054,4 +1247,15 @@ fn check_transform(transform: Transform) -> Result<(), EvalError> {
         return Err(EvalError::InvalidTransform("matrix is singular".to_owned()));
     }
     Ok(())
+}
+
+fn loop_values(name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
+    match value {
+        Value::Vector(values) => Ok(values.into_iter().map(Value::Number).collect()),
+        Value::Matrix(rows) => Ok(rows.into_iter().map(Value::Vector).collect()),
+        _ => Err(bad_args(
+            "for",
+            format!("loop variable {name} must be a vector or range"),
+        )),
+    }
 }

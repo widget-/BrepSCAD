@@ -8,6 +8,7 @@ use crate::{EvalError, bad_args};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
     Number(f64),
+    Boolean(bool),
     Vector(Vec<f64>),
     Matrix(Vec<Vec<f64>>),
 }
@@ -16,7 +17,19 @@ impl Value {
     pub(crate) fn as_number(&self, module: &str) -> Result<f64, EvalError> {
         match self {
             Self::Number(value) => Ok(*value),
-            Self::Vector(_) | Self::Matrix(_) => Err(bad_args(module, "expected a number")),
+            Self::Boolean(_) | Self::Vector(_) | Self::Matrix(_) => {
+                Err(bad_args(module, "expected a number"))
+            }
+        }
+    }
+
+    pub(crate) fn as_boolean(&self, module: &str) -> Result<bool, EvalError> {
+        match self {
+            Self::Boolean(value) => Ok(*value),
+            Self::Number(value) => Ok(*value != 0.0),
+            Self::Vector(_) | Self::Matrix(_) => {
+                Err(bad_args(module, "expected a boolean or number"))
+            }
         }
     }
 
@@ -24,7 +37,7 @@ impl Value {
         match self {
             Self::Number(value) => Ok([*value; 3]),
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
-            Self::Vector(_) | Self::Matrix(_) => {
+            Self::Boolean(_) | Self::Vector(_) | Self::Matrix(_) => {
                 Err(bad_args(module, "expected a 3-element vector or a scalar"))
             }
         }
@@ -152,43 +165,121 @@ fn number_op(op: SyntaxKind, left: f64, right: f64) -> Result<f64, EvalError> {
 }
 
 pub(crate) fn binary_value(op: SyntaxKind, left: Value, right: Value) -> Result<Value, EvalError> {
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => {
-            Ok(Value::Number(number_op(op, left, right)?))
+    match op {
+        SyntaxKind::EQEQ => Ok(Value::Boolean(left == right)),
+        SyntaxKind::NE => Ok(Value::Boolean(left != right)),
+        SyntaxKind::LT | SyntaxKind::LE | SyntaxKind::GT | SyntaxKind::GE => {
+            let (Value::Number(left), Value::Number(right)) = (left, right) else {
+                return Err(EvalError::Expression(
+                    "comparison requires numbers".to_owned(),
+                ));
+            };
+            Ok(Value::Boolean(match op {
+                SyntaxKind::LT => left < right,
+                SyntaxKind::LE => left <= right,
+                SyntaxKind::GT => left > right,
+                _ => left >= right,
+            }))
         }
-        (Value::Vector(left), Value::Vector(right)) if left.len() == right.len() => {
-            let values = left
-                .iter()
-                .zip(&right)
-                .map(|(left, right)| number_op(op, *left, *right))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Value::Vector(values))
-        }
-        (Value::Vector(values), Value::Number(scalar)) => Ok(Value::Vector(
-            values
-                .iter()
-                .map(|value| number_op(op, *value, scalar))
-                .collect::<Result<Vec<_>, _>>()?,
+        SyntaxKind::AND_AND => Ok(Value::Boolean(
+            left.as_boolean("&&")? && right.as_boolean("&&")?,
         )),
-        (Value::Number(scalar), Value::Vector(values)) => Ok(Value::Vector(
-            values
-                .iter()
-                .map(|value| number_op(op, scalar, *value))
-                .collect::<Result<Vec<_>, _>>()?,
+        SyntaxKind::OR_OR => Ok(Value::Boolean(
+            left.as_boolean("||")? || right.as_boolean("||")?,
         )),
-        _ => Err(EvalError::Expression(
-            "unsupported operand types".to_owned(),
-        )),
+        _ => match (left, right) {
+            (Value::Number(left), Value::Number(right)) => {
+                Ok(Value::Number(number_op(op, left, right)?))
+            }
+            (Value::Vector(left), Value::Vector(right)) if left.len() == right.len() => {
+                let values = left
+                    .iter()
+                    .zip(&right)
+                    .map(|(left, right)| number_op(op, *left, *right))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Value::Vector(values))
+            }
+            (Value::Vector(values), Value::Number(scalar)) => Ok(Value::Vector(
+                values
+                    .iter()
+                    .map(|value| number_op(op, *value, scalar))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            (Value::Number(scalar), Value::Vector(values)) => Ok(Value::Vector(
+                values
+                    .iter()
+                    .map(|value| number_op(op, scalar, *value))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            _ => Err(EvalError::Expression(
+                "unsupported operand types".to_owned(),
+            )),
+        },
     }
 }
 
 pub(crate) fn unary_value(op: SyntaxKind, value: Value) -> Result<Value, EvalError> {
     match (op, value) {
         (SyntaxKind::PLUS, value) => Ok(value),
+        (SyntaxKind::BANG, value) => Ok(Value::Boolean(!value.as_boolean("!")?)),
         (SyntaxKind::MINUS, Value::Number(value)) => Ok(Value::Number(-value)),
         (SyntaxKind::MINUS, Value::Vector(values)) => Ok(Value::Vector(
             values.into_iter().map(|value| -value).collect(),
         )),
         _ => Err(EvalError::Expression("unsupported operand type".to_owned())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comparisons_return_booleans() {
+        assert_eq!(
+            binary_value(SyntaxKind::LT, Value::Number(1.0), Value::Number(2.0))
+                .expect("comparison"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            binary_value(SyntaxKind::GE, Value::Number(1.0), Value::Number(2.0))
+                .expect("comparison"),
+            Value::Boolean(false)
+        );
+        assert_eq!(
+            binary_value(
+                SyntaxKind::EQEQ,
+                Value::Vector(vec![1.0, 2.0]),
+                Value::Vector(vec![1.0, 2.0])
+            )
+            .expect("comparison"),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn logical_operators_use_truthiness() {
+        assert_eq!(
+            binary_value(
+                SyntaxKind::AND_AND,
+                Value::Boolean(true),
+                Value::Number(2.0)
+            )
+            .expect("and"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            binary_value(SyntaxKind::OR_OR, Value::Number(0.0), Value::Boolean(true)).expect("or"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            unary_value(SyntaxKind::BANG, Value::Number(0.0)).expect("not"),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn booleans_are_not_numbers() {
+        assert!(Value::Boolean(true).as_number("test").is_err());
     }
 }

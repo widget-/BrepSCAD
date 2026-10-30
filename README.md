@@ -78,10 +78,10 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | No strings or booleans. |
+| Expressions | ✔ | No strings. |
 | Comments and whitespace | ✔ | |
 | `module` / `function` declarations | ✖ | |
-| `for` / `if` | ✖ | |
+| `for` / `if` | ✔ | |
 | `include` / `use` | ✖ | |
 | `$fn`, `$fa`, `$fs` | ✖ | Tessellation is fixed per primitive. |
 | `cube`, `cylinder`, `sphere` | ✔ | `sphere` is a fixed 32×16 facet approximation. |

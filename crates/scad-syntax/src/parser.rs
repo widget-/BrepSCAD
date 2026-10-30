@@ -77,6 +77,10 @@ impl<'a> Parser<'a> {
     }
 
     fn statement(&mut self) {
+        if self.current() == SyntaxKind::IDENT && self.current_text() == "if" {
+            self.if_statement();
+            return;
+        }
         match self.peek(1) {
             SyntaxKind::EQ => self.assignment(),
             SyntaxKind::L_PAREN => self.module_call(),
@@ -84,6 +88,34 @@ impl<'a> Parser<'a> {
                 self.error("expected '=' or '(' after identifier");
                 self.recover_statement();
             }
+        }
+    }
+
+    fn if_statement(&mut self) {
+        self.start(SyntaxKind::MODULE_CALL);
+        self.bump();
+        if self.arg_list() {
+            self.conditional_body("if");
+            if self.at_keyword("else") {
+                self.start(SyntaxKind::ELSE);
+                self.bump();
+                self.conditional_body("else");
+                self.finish();
+            }
+        } else {
+            self.recover_statement();
+        }
+        self.finish();
+    }
+
+    fn conditional_body(&mut self, keyword: &str) {
+        if self.at(SyntaxKind::L_BRACE) {
+            self.block();
+        } else if self.at(SyntaxKind::IDENT) {
+            self.statement();
+        } else {
+            self.error(format!("expected a statement after {keyword}"));
+            self.recover_statement();
         }
     }
 
@@ -199,8 +231,16 @@ impl<'a> Parser<'a> {
         }
         loop {
             let precedence = match self.current() {
-                SyntaxKind::PLUS | SyntaxKind::MINUS => 1,
-                SyntaxKind::STAR | SyntaxKind::SLASH | SyntaxKind::PERCENT => 2,
+                SyntaxKind::OR_OR => 1,
+                SyntaxKind::AND_AND => 2,
+                SyntaxKind::EQEQ
+                | SyntaxKind::NE
+                | SyntaxKind::LT
+                | SyntaxKind::LE
+                | SyntaxKind::GT
+                | SyntaxKind::GE => 3,
+                SyntaxKind::PLUS | SyntaxKind::MINUS => 4,
+                SyntaxKind::STAR | SyntaxKind::SLASH | SyntaxKind::PERCENT => 5,
                 _ => break,
             };
             if precedence < min_precedence {
@@ -219,7 +259,10 @@ impl<'a> Parser<'a> {
     }
 
     fn unary_expr(&mut self) -> bool {
-        if matches!(self.current(), SyntaxKind::PLUS | SyntaxKind::MINUS) {
+        if matches!(
+            self.current(),
+            SyntaxKind::PLUS | SyntaxKind::MINUS | SyntaxKind::BANG
+        ) {
             self.start(SyntaxKind::UNARY_EXPR);
             self.bump();
             if !self.unary_expr() {
@@ -235,7 +278,7 @@ impl<'a> Parser<'a> {
 
     fn primary(&mut self) -> bool {
         match self.current() {
-            SyntaxKind::NUMBER | SyntaxKind::IDENT => {
+            SyntaxKind::NUMBER | SyntaxKind::IDENT | SyntaxKind::TRUE | SyntaxKind::FALSE => {
                 self.bump();
                 true
             }
@@ -277,13 +320,45 @@ impl<'a> Parser<'a> {
             self.finish();
             return true;
         }
-        loop {
+
+        let checkpoint = self.builder.checkpoint();
+        if !self.expression() {
+            self.finish();
+            return false;
+        }
+        if self.at(SyntaxKind::COLON) {
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::RANGE.into());
+            self.bump();
             if !self.expression() {
+                self.finish();
                 self.finish();
                 return false;
             }
+            if self.at(SyntaxKind::COLON) {
+                self.bump();
+                if !self.expression() {
+                    self.finish();
+                    self.finish();
+                    return false;
+                }
+            }
+            self.finish();
+            if !self.expect(SyntaxKind::R_BRACK) {
+                self.finish();
+                return false;
+            }
+            self.finish();
+            return true;
+        }
+
+        loop {
             if self.at(SyntaxKind::COMMA) {
                 self.bump();
+                if !self.expression() {
+                    self.finish();
+                    return false;
+                }
                 continue;
             }
             if self.at(SyntaxKind::R_BRACK) {
@@ -317,6 +392,17 @@ impl<'a> Parser<'a> {
 
     fn at(&self, kind: SyntaxKind) -> bool {
         self.current() == kind
+    }
+
+    fn at_keyword(&self, keyword: &str) -> bool {
+        self.current_text() == keyword
+    }
+
+    fn current_text(&self) -> &'a str {
+        self.tokens[self.pos..]
+            .iter()
+            .find(|token| !token.kind.is_trivia())
+            .map_or("", |token| token.text)
     }
 
     fn current(&self) -> SyntaxKind {

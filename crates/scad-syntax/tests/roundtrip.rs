@@ -173,6 +173,67 @@ fn parses_arithmetic_with_precedence_and_groups() {
 }
 
 #[test]
+fn round_trips_for_ranges_and_if_else() {
+    let source = "for (i = [0:2:6]) {\n    if (i >= 2 && !false) cube(i);\n    else cube(1);\n}\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::RANGE)
+            .count(),
+        1
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::ELSE)
+            .count(),
+        1
+    );
+    assert!(
+        parsed
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| token.kind() == SyntaxKind::FALSE)
+    );
+}
+
+#[test]
+fn parses_comparison_and_logical_precedence() {
+    let source = "x = 1 + 2 < 4 && true || false;\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+
+    let assignment = parsed
+        .syntax()
+        .descendants()
+        .find(|node| node.kind() == SyntaxKind::ASSIGNMENT)
+        .expect("assignment");
+    let expression = assignment
+        .children()
+        .find(|node| node.kind() == SyntaxKind::BINARY_EXPR)
+        .expect("expression");
+    assert_eq!(
+        expression.text().to_string().trim(),
+        "1 + 2 < 4 && true || false"
+    );
+    assert!(
+        parsed
+            .syntax()
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::BINARY_EXPR)
+    );
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),
