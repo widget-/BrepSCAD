@@ -129,7 +129,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Preview-based selection | ✔ | |
 | 2D profile CSG | ✔ | Via `clipper2-rust`. |
 | Alternate kernels | ✖ | Truck only; OCCT and SolidCore are candidates. |
-| File open/save | ✖ | |
+| File open/save | ◐ | Path field in the top bar, Ctrl+S to save; includes resolve relative to the open file. No native file dialog yet. |
 | Export | ✖ | |
 | Undo/redo | ✖ | |
 | Persistence | ✖ | Source text is in memory only; no project/session persistence. |
@@ -139,6 +139,10 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 ```sh
 cargo run -p brepscad-viewer
 ```
+
+Use the File row to open or save a `.scad` file; Ctrl+S saves the current
+source. Evaluation uses the editor text, so unsaved edits are evaluated, and
+includes resolve relative to the open file.
 
 ## Documentation
 

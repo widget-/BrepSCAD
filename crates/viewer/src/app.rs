@@ -1,9 +1,11 @@
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use brepscad_eval::{
-    Evaluation, EvaluationOptions, MeshCache, TreeNode, evaluate_with_cache_options,
+    Evaluation, EvaluationOptions, MeshCache, TreeNode, evaluate_source_with_path,
+    evaluate_with_cache_options,
 };
 use brepscad_kernel_api::Mesh;
 use brepscad_kernel_truck::TruckKernel;
@@ -33,6 +35,7 @@ struct EvaluationResult {
     cache: MeshCache,
     elapsed: Duration,
     source: String,
+    source_path: Option<PathBuf>,
     legacy_centering: bool,
 }
 
@@ -42,6 +45,9 @@ struct EvaluationJob {
 
 pub(crate) struct ViewerApp {
     source: String,
+    current_path: Option<PathBuf>,
+    path_input: String,
+    dirty: bool,
     evaluation: Evaluation,
     mesh_cache: MeshCache,
     legacy_centering: bool,
@@ -66,7 +72,7 @@ impl ViewerApp {
             .expect("the viewer requires the wgpu backend");
 
         let mut mesh_cache = MeshCache::new();
-        let (evaluation, error) = evaluate_source(SAMPLE, &mut mesh_cache, false);
+        let (evaluation, error) = evaluate_source(SAMPLE, None, &mut mesh_cache, false);
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
@@ -75,6 +81,9 @@ impl ViewerApp {
 
         Self {
             source: SAMPLE.to_owned(),
+            current_path: None,
+            path_input: String::new(),
+            dirty: false,
             evaluation,
             mesh_cache,
             legacy_centering: false,
@@ -100,19 +109,26 @@ impl ViewerApp {
 
         self.pending_evaluate = false;
         let source = self.source.clone();
+        let source_path = self.current_path.clone();
         let legacy_centering = self.legacy_centering;
         let mut cache = std::mem::take(&mut self.mesh_cache);
         let (sender, receiver) = mpsc::channel();
 
         std::thread::spawn(move || {
             let started = Instant::now();
-            let (evaluation, error) = evaluate_source(&source, &mut cache, legacy_centering);
+            let (evaluation, error) = evaluate_source(
+                &source,
+                source_path.as_deref(),
+                &mut cache,
+                legacy_centering,
+            );
             let _ = sender.send(EvaluationResult {
                 evaluation,
                 error,
                 cache,
                 elapsed: started.elapsed(),
                 source,
+                source_path,
                 legacy_centering,
             });
         });
@@ -130,6 +146,7 @@ impl ViewerApp {
                 self.mesh_cache = result.cache;
                 self.last_eval_ms = result.elapsed.as_secs_f64() * 1000.0;
                 let current = result.source == self.source
+                    && result.source_path == self.current_path
                     && result.legacy_centering == self.legacy_centering;
 
                 if current {
@@ -205,11 +222,62 @@ impl ViewerApp {
         match apply_edit(&self.source, &TextEdit::new(text_range, replacement)) {
             Ok(source) => {
                 self.source = source;
+                self.dirty = true;
                 self.selected_part = None;
                 self.parameters.clear();
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    fn open_file(&mut self) {
+        let path = PathBuf::from(self.path_input.trim());
+        if path.as_os_str().is_empty() {
+            self.error = Some("enter a file path to open".to_owned());
+            return;
+        }
+        match read_source_file(&path) {
+            Ok(source) => {
+                self.source = source;
+                self.path_input = path.display().to_string();
+                self.current_path = Some(path);
+                self.dirty = false;
+                self.selected_part = None;
+                self.parameters.clear();
+                self.error = None;
+                self.pending_evaluate = true;
+            }
+            Err(error) => {
+                self.error = Some(error);
+            }
+        }
+    }
+
+    fn save_file(&mut self) {
+        let path = if !self.path_input.trim().is_empty() {
+            PathBuf::from(self.path_input.trim())
+        } else if let Some(path) = &self.current_path {
+            path.clone()
+        } else {
+            self.error = Some("enter a file path to save".to_owned());
+            return;
+        };
+
+        match write_source_file(&path, &self.source) {
+            Ok(()) => {
+                let context_changed = self.current_path.as_ref() != Some(&path);
+                self.current_path = Some(path.clone());
+                self.path_input = path.display().to_string();
+                self.dirty = false;
+                self.error = None;
+                if context_changed {
+                    self.pending_evaluate = true;
+                }
+            }
+            Err(error) => {
+                self.error = Some(error);
+            }
         }
     }
 
@@ -311,6 +379,19 @@ impl eframe::App for ViewerApp {
         if ctx.input(|input| input.key_pressed(egui::Key::Enter) && input.modifiers.command) {
             self.pending_evaluate = true;
         }
+        if ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::S)) {
+            self.save_file();
+        }
+
+        let title = match &self.current_path {
+            Some(path) => format!("BrepSCAD — {}", path.display()),
+            None => "BrepSCAD — sample".to_owned(),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(if self.dirty {
+            format!("{title} *")
+        } else {
+            title
+        }));
 
         self.poll_evaluation(ctx, frame);
         if self.pending_evaluate && self.evaluation_job.is_none() {
@@ -342,6 +423,33 @@ impl eframe::App for ViewerApp {
                     ui.label(format!("{:.0} ms", self.last_eval_ms));
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("File");
+                let path_response = ui.add(
+                    egui::TextEdit::singleline(&mut self.path_input)
+                        .desired_width(360.0)
+                        .hint_text("path/to/model.scad"),
+                );
+                let enter = path_response.lost_focus()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let mut open = enter;
+                let mut save = false;
+                if ui.button("Open").clicked() {
+                    open = true;
+                }
+                if ui.button("Save").clicked() {
+                    save = true;
+                }
+                if self.dirty {
+                    ui.label("modified");
+                }
+                if open {
+                    self.open_file();
+                }
+                if save {
+                    self.save_file();
+                }
+            });
         });
 
         egui::SidePanel::left("source")
@@ -362,6 +470,7 @@ impl eframe::App for ViewerApp {
                                 .desired_rows(20),
                         );
                         if source_response.changed() {
+                            self.dirty = true;
                             self.selected_part = None;
                             self.parameters.clear();
                         }
@@ -481,21 +590,32 @@ fn tree_ui(
     }
 }
 
+fn read_source_file(path: &Path) -> Result<String, String> {
+    std::fs::read_to_string(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))
+}
+
+fn write_source_file(path: &Path, source: &str) -> Result<(), String> {
+    std::fs::write(path, source)
+        .map_err(|error| format!("failed to save {}: {error}", path.display()))
+}
+
 fn evaluate_source(
     source: &str,
+    source_path: Option<&Path>,
     cache: &mut MeshCache,
     legacy_centering: bool,
 ) -> (Evaluation, Option<String>) {
     let mut kernel = TruckKernel::new();
-    match evaluate_with_cache_options(
-        source,
-        &mut kernel,
-        EvaluationOptions {
-            tolerance: 0.01,
-            legacy_centering,
-        },
-        cache,
-    ) {
+    let options = EvaluationOptions {
+        tolerance: 0.01,
+        legacy_centering,
+    };
+    let result = match source_path {
+        Some(path) => evaluate_source_with_path(source, path, &mut kernel, options, cache),
+        None => evaluate_with_cache_options(source, &mut kernel, options, cache),
+    };
+    match result {
         Ok(evaluation) => (evaluation, None),
         Err(error) => (Evaluation { shapes: Vec::new() }, Some(error.to_string())),
     }
@@ -524,14 +644,72 @@ fn format_number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    fn temp_dir() -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "brepscad-viewer-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    fn mesh_extent(mesh: &Mesh) -> f64 {
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for position in &mesh.positions {
+            min = min.min(position[0]);
+            max = max.max(position[0]);
+        }
+        max - min
+    }
 
     #[test]
     fn built_in_sample_evaluates() {
-        let (evaluation, error) = evaluate_source(SAMPLE, &mut MeshCache::default(), false);
+        let (evaluation, error) = evaluate_source(SAMPLE, None, &mut MeshCache::default(), false);
         assert!(error.is_none(), "{error:?}");
         assert_eq!(evaluation.shapes.len(), 1);
         assert_eq!(evaluation.shapes[0].parts.len(), 2);
+    }
+
+    #[test]
+    fn unsaved_source_uses_the_open_file_context() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("part.scad"), "cube(2);\n").expect("write part");
+        let main = dir.join("main.scad");
+        std::fs::write(&main, "cube(99);\n").expect("write main");
+
+        let (evaluation, error) = evaluate_source(
+            "include \"part.scad\";\n",
+            Some(&main),
+            &mut MeshCache::default(),
+            false,
+        );
+
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(evaluation.shapes.len(), 1);
+        assert!((mesh_extent(&evaluation.shapes[0].mesh) - 2.0).abs() < 1.0e-6);
+        std::fs::remove_dir_all(dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn source_files_round_trip() {
+        let dir = temp_dir();
+        let path = dir.join("model.scad");
+
+        write_source_file(&path, "cube(1);\n").expect("write source");
+        assert_eq!(read_source_file(&path).expect("read source"), "cube(1);\n");
+        assert!(
+            read_source_file(&dir.join("missing.scad"))
+                .expect_err("missing file")
+                .contains("missing.scad")
+        );
+        std::fs::remove_dir_all(dir).expect("remove temp dir");
     }
 
     #[test]

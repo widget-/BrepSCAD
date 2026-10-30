@@ -168,6 +168,10 @@ vendor/
 - Edits write back to the source, then re-evaluate.
 - Built-in sample: `assets/sample.scad`, shared by the CLI, viewer, and
   `hello_cube` example.
+- File open/save through a path field in the top bar; Ctrl+S saves. The current
+  path appears in the window title, and modified source is marked with `*`.
+- Evaluation uses the editor text with the open file's path, so unsaved edits
+  resolve relative includes and `use` statements.
 
 - `scripts/screenshot-viewer.sh` captures the UI headlessly through Xvfb and
   ffmpeg, so verification does not open a window on the desktop.
@@ -330,7 +334,10 @@ For headless UI snapshots, see
   - no selected-part highlight
   - enclosed cutters are reachable from the Shapes tree, but there is no
     cycling between overlapping parts
-- No file open/save, export, undo, or persistence beyond the in-memory source.
+- No file dialog yet; open/save uses a path field in the top bar.
+- No export, undo/redo, or session persistence. Source text is in memory until
+  saved.
+- Included-file source ranges are not mapped back to editor tabs.
 - Truck transitive dependencies `nom 3.2.1` and `quick-xml 0.22.0` emit
   future-incompatibility warnings.
 - Licence is BSD-3-Clause with a placeholder copyright holder; replace before
@@ -353,7 +360,10 @@ For headless UI snapshots, see
 4. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-5. **Selection polish**
+5. **Product surface**
+   - Native file dialog and recent-file handling.
+   - Export, undo/redo, and session persistence.
+6. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 

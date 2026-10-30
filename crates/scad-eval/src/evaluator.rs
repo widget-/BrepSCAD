@@ -188,6 +188,19 @@ pub fn evaluate_file_with_cache_options<K: Kernel>(
     evaluate_with_context(&source, Some(canonical), kernel, options, cache)
 }
 
+/// Evaluates in-memory `source` with a file path supplying include/use context.
+pub fn evaluate_source_with_path<K: Kernel>(
+    source: &str,
+    source_path: impl AsRef<Path>,
+    kernel: &mut K,
+    options: EvaluationOptions,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvalError> {
+    let path = source_path.as_ref();
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    evaluate_with_context(source, Some(canonical), kernel, options, cache)
+}
+
 fn evaluate_with_context<K: Kernel>(
     source: &str,
     source_path: Option<PathBuf>,
