@@ -43,10 +43,20 @@ struct EvaluationJob {
     receiver: Receiver<EvaluationResult>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileDialogKind {
+    Open,
+    Save,
+}
+
+struct FileDialogResult {
+    kind: FileDialogKind,
+    path: Option<PathBuf>,
+}
+
 pub(crate) struct ViewerApp {
     source: String,
     current_path: Option<PathBuf>,
-    path_input: String,
     dirty: bool,
     evaluation: Evaluation,
     mesh_cache: MeshCache,
@@ -61,6 +71,7 @@ pub(crate) struct ViewerApp {
     error: Option<String>,
     pending_evaluate: bool,
     evaluation_job: Option<EvaluationJob>,
+    file_dialog: Option<Receiver<FileDialogResult>>,
     last_eval_ms: f64,
 }
 
@@ -82,7 +93,6 @@ impl ViewerApp {
         Self {
             source: SAMPLE.to_owned(),
             current_path: None,
-            path_input: String::new(),
             dirty: false,
             evaluation,
             mesh_cache,
@@ -97,6 +107,7 @@ impl ViewerApp {
             error,
             pending_evaluate: false,
             evaluation_job: None,
+            file_dialog: None,
             last_eval_ms: 0.0,
         }
     }
@@ -231,16 +242,69 @@ impl ViewerApp {
         }
     }
 
-    fn open_file(&mut self) {
-        let path = PathBuf::from(self.path_input.trim());
-        if path.as_os_str().is_empty() {
-            self.error = Some("enter a file path to open".to_owned());
+    fn start_file_dialog(&mut self, kind: FileDialogKind) {
+        if self.file_dialog.is_some() {
             return;
         }
+
+        let (sender, receiver) = mpsc::channel();
+        let current_path = self.current_path.clone();
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new().add_filter("OpenSCAD", &["scad"]);
+            if let Some(parent) = current_path.as_deref().and_then(Path::parent) {
+                dialog = dialog.set_directory(parent);
+            }
+            let path = match kind {
+                FileDialogKind::Open => dialog.pick_file(),
+                FileDialogKind::Save => {
+                    let file_name = current_path
+                        .as_deref()
+                        .and_then(Path::file_name)
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "model.scad".to_owned());
+                    dialog.set_file_name(file_name).save_file()
+                }
+            };
+            let _ = sender.send(FileDialogResult { kind, path });
+        });
+        self.file_dialog = Some(receiver);
+    }
+
+    fn open_dialog(&mut self) {
+        self.start_file_dialog(FileDialogKind::Open);
+    }
+
+    fn save_as_dialog(&mut self) {
+        self.start_file_dialog(FileDialogKind::Save);
+    }
+
+    fn poll_file_dialog(&mut self) {
+        let Some(receiver) = self.file_dialog.take() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(result) => {
+                let Some(path) = result.path else {
+                    return;
+                };
+                match result.kind {
+                    FileDialogKind::Open => self.load_path(path),
+                    FileDialogKind::Save => self.save_to(path),
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.file_dialog = Some(receiver);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.error = Some("file dialog stopped unexpectedly".to_owned());
+            }
+        }
+    }
+
+    fn load_path(&mut self, path: PathBuf) {
         match read_source_file(&path) {
             Ok(source) => {
                 self.source = source;
-                self.path_input = path.display().to_string();
                 self.current_path = Some(path);
                 self.dirty = false;
                 self.selected_part = None;
@@ -248,36 +312,29 @@ impl ViewerApp {
                 self.error = None;
                 self.pending_evaluate = true;
             }
-            Err(error) => {
-                self.error = Some(error);
-            }
+            Err(error) => self.error = Some(error),
         }
     }
 
-    fn save_file(&mut self) {
-        let path = if !self.path_input.trim().is_empty() {
-            PathBuf::from(self.path_input.trim())
-        } else if let Some(path) = &self.current_path {
-            path.clone()
-        } else {
-            self.error = Some("enter a file path to save".to_owned());
-            return;
-        };
-
+    fn save_to(&mut self, path: PathBuf) {
         match write_source_file(&path, &self.source) {
             Ok(()) => {
                 let context_changed = self.current_path.as_ref() != Some(&path);
-                self.current_path = Some(path.clone());
-                self.path_input = path.display().to_string();
+                self.current_path = Some(path);
                 self.dirty = false;
                 self.error = None;
                 if context_changed {
                     self.pending_evaluate = true;
                 }
             }
-            Err(error) => {
-                self.error = Some(error);
-            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn save_file(&mut self) {
+        match self.current_path.clone() {
+            Some(path) => self.save_to(path),
+            None => self.save_as_dialog(),
         }
     }
 
@@ -380,7 +437,11 @@ impl eframe::App for ViewerApp {
             self.pending_evaluate = true;
         }
         if ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::S)) {
-            self.save_file();
+            if ctx.input(|input| input.modifiers.shift) {
+                self.save_as_dialog();
+            } else {
+                self.save_file();
+            }
         }
 
         let title = match &self.current_path {
@@ -393,6 +454,7 @@ impl eframe::App for ViewerApp {
             title
         }));
 
+        self.poll_file_dialog();
         self.poll_evaluation(ctx, frame);
         if self.pending_evaluate && self.evaluation_job.is_none() {
             self.start_evaluation();
@@ -425,29 +487,29 @@ impl eframe::App for ViewerApp {
             });
             ui.horizontal(|ui| {
                 ui.label("File");
-                let path_response = ui.add(
-                    egui::TextEdit::singleline(&mut self.path_input)
-                        .desired_width(360.0)
-                        .hint_text("path/to/model.scad"),
-                );
-                let enter = path_response.lost_focus()
-                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                let mut open = enter;
-                let mut save = false;
-                if ui.button("Open").clicked() {
-                    open = true;
+                if ui.button("Open…").clicked() {
+                    self.open_dialog();
                 }
                 if ui.button("Save").clicked() {
-                    save = true;
+                    self.save_file();
+                }
+                if ui.button("Save As…").clicked() {
+                    self.save_as_dialog();
+                }
+                match &self.current_path {
+                    Some(path) => {
+                        ui.label(path.display().to_string());
+                    }
+                    None => {
+                        ui.label("untitled");
+                    }
                 }
                 if self.dirty {
                     ui.label("modified");
                 }
-                if open {
-                    self.open_file();
-                }
-                if save {
-                    self.save_file();
+                if self.file_dialog.is_some() {
+                    ui.spinner();
+                    ui.label("File dialog…");
                 }
             });
         });
@@ -548,7 +610,7 @@ impl eframe::App for ViewerApp {
             );
         });
 
-        if self.pending_evaluate {
+        if self.pending_evaluate || self.file_dialog.is_some() {
             ctx.request_repaint();
         }
     }

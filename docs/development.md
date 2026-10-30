@@ -32,6 +32,10 @@ Requirements:
 - a built viewer binary; set `VIEWER_BIN` to override the default
   `target/debug/brepscad-viewer` path
 
+Native file dialogs use `rfd`. On Linux they need an XDG desktop portal, with a
+Zenity fallback for file dialogs. Headless Xvfb runs cannot open native dialogs,
+so the screenshot helper exercises the viewer UI but not the file picker.
+
 The script does not need a window manager or a visible desktop. It picks a
 random free display number between `:100` and `:199`, so it can run alongside an
 existing X session.

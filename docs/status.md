@@ -168,8 +168,9 @@ vendor/
 - Edits write back to the source, then re-evaluate.
 - Built-in sample: `assets/sample.scad`, shared by the CLI, viewer, and
   `hello_cube` example.
-- File open/save through a path field in the top bar; Ctrl+S saves. The current
-  path appears in the window title, and modified source is marked with `*`.
+- Native Open, Save, and Save As dialogs through `rfd`; Ctrl+S saves and
+  Ctrl+Shift+S saves as. The current path appears in the window title, and
+  modified source is marked with `*`.
 - Evaluation uses the editor text with the open file's path, so unsaved edits
   resolve relative includes and `use` statements.
 
@@ -334,7 +335,8 @@ For headless UI snapshots, see
   - no selected-part highlight
   - enclosed cutters are reachable from the Shapes tree, but there is no
     cycling between overlapping parts
-- No file dialog yet; open/save uses a path field in the top bar.
+- Native file dialogs need a working desktop portal (or Zenity fallback) on
+  Linux; headless Xvfb runs cannot open them.
 - No export, undo/redo, or session persistence. Source text is in memory until
   saved.
 - Included-file source ranges are not mapped back to editor tabs.
@@ -361,7 +363,7 @@ For headless UI snapshots, see
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
 5. **Product surface**
-   - Native file dialog and recent-file handling.
+   - Recent-file handling.
    - Export, undo/redo, and session persistence.
 6. **Selection polish**
    - Highlight selected operand.

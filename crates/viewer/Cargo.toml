@@ -15,6 +15,7 @@ eframe = { version = "0.32", default-features = false, features = [
     "x11",
 ] }
 glam = "0.34"
+rfd = "0.17"
 wgpu = { version = "25", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 brepscad-kernel-api.workspace = true
 brepscad-kernel-truck.workspace = true
