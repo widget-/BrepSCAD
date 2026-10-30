@@ -24,12 +24,12 @@ crates/
   cli/          CLI entry point (package `brepscad`)
   kernel-api/   Kernel trait, ShapeId, capabilities, neutral mesh
   kernel-truck/ Truck adapter: cuboid, cylinder, sphere, polyhedron, sketch, extrude, revolve
-  scad-eval/    minimal evaluator: assignments, 3D primitives, 2D sketches
+  scad-eval/    evaluator, parameter discovery, 2D profile CSG
   scad-syntax/  lossless CST, lexer, parser, and text edits
   viewer/       egui + wgpu viewer with source editor and orbit camera
 ```
 
-The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers (including negative literals), identifiers, nested vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, faceted spheres, polyhedra, planar sketches, linear and rotational extrusion, transforms, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, `sphere`, `polyhedron`, `square`, `circle`, `polygon`, `linear_extrude`, `rotate_extrude`, `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`, and the boolean modules. The `viewer` binary renders the evaluated mesh with an egui source editor and a wgpu viewport.
+The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers (including negative literals), identifiers, nested vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, faceted spheres, polyhedra, planar sketches, linear and rotational extrusion, transforms, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, `sphere`, `polyhedron`, `square`, `circle`, `polygon`, `linear_extrude`, `rotate_extrude`, `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`, and the boolean modules. 2D booleans run on polygonal profiles via `clipper2-rust`; the B-rep kernel only sees the extrusion boundary. The `viewer` binary renders the evaluated mesh with an egui source editor and a wgpu viewport.
 
 The planned backend crates (`kernel-occt`, `kernel-solidcore`) and the UI/render crates are not created yet.
 
@@ -82,7 +82,7 @@ The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statis
 cargo run -p brepscad -- path/to/model.scad
 ```
 
-The current subset supports top-level assignments, positional and named arguments, arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary signs, and parentheses), `cube`, `cylinder`, `sphere`, `polyhedron`, `square`, `circle`, `polygon`, `linear_extrude`, `rotate_extrude`, `translate` / `rotate` / `scale` / `multmatrix` / `mirror` / `resize` with a single child or block, and the `difference` / `union` / `intersection` modules with a block or a single child. `multmatrix` accepts a 4×3 or 4×4 matrix; `resize` accepts a `newsize` vector; `sphere` accepts `r` or `d` and is faceted at a fixed 32×16 resolution. Extrusions accept exactly one 2D child; `rotate_extrude` also takes an `angle` and requires the profile to lie at `x >= 0`. `polyhedron` requires a closed, consistently wound shell with planar faces. 2D booleans are not implemented.
+The current subset supports top-level assignments, positional and named arguments, arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary signs, and parentheses), `cube`, `cylinder`, `sphere`, `polyhedron`, `square`, `circle`, `polygon`, `linear_extrude`, `rotate_extrude`, `translate` / `rotate` / `scale` / `multmatrix` / `mirror` / `resize` with a single child or block, and the `difference` / `union` / `intersection` modules with a block or a single child. `multmatrix` accepts a 4×3 or 4×4 matrix; `resize` accepts a `newsize` vector; `sphere` accepts `r` or `d` and is faceted at a fixed 32×16 resolution. Extrusions accept exactly one 2D child; `rotate_extrude` also takes an `angle` and requires the profile to lie at `x >= 0`. `polyhedron` requires a closed, consistently wound shell with planar faces. 2D booleans use polygonal profiles: circles are flattened to 64 segments for CSG, and disjoint results are extruded as one multi-shell solid.
 
 ## Viewer
 

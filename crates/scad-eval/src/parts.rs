@@ -8,6 +8,7 @@ use brepscad_kernel_api::{Kernel, Mesh, ShapeId, Transform};
 use crate::EvalError;
 use crate::cache::{MeshCache, MeshKey};
 use crate::model::{Parameter, Part, TreeNode};
+use crate::profile::Profile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Dimension {
@@ -24,6 +25,7 @@ pub(crate) struct Node {
     pub(crate) transform_parameters: Option<Vec<Parameter>>,
     pub(crate) world: Transform,
     pub(crate) dimension: Dimension,
+    pub(crate) profile: Option<Profile>,
     pub(crate) children: Vec<Node>,
 }
 

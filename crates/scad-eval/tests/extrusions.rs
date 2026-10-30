@@ -121,22 +121,80 @@ fn rotate_extrude_rejects_bad_profiles() {
 }
 
 #[test]
-fn rejects_mixed_dimensions_and_2d_csg() {
+fn rejects_3d_children_in_extrusions() {
     let mut kernel = TruckKernel::new();
 
     let error = evaluate_to_meshes("linear_extrude(2) cube(1);", &mut kernel, 0.01)
         .expect_err("3D extrusion child");
     assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "linear_extrude"));
 
-    let error = evaluate_to_meshes("difference() { square(2); square(1); }", &mut kernel, 0.01)
-        .expect_err("2D boolean");
-    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "difference"));
+    let error = evaluate_to_meshes("rotate_extrude() cube(1);", &mut kernel, 0.01)
+        .expect_err("3D revolve child");
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "rotate_extrude"));
+}
 
-    let error = evaluate_to_meshes(
-        "translate([0, 0, 0]) { square(1); square(2); }",
-        &mut kernel,
-        0.01,
-    )
-    .expect_err("2D union");
-    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "translate"));
+#[test]
+fn extrudes_a_2d_boolean_with_a_hole() {
+    let source = "linear_extrude(2) difference() { square([4, 4]); circle(r = 1); }";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    let expected = 2.0 * (16.0 - std::f64::consts::PI);
+    assert!(
+        (volume - expected).abs() < expected * 0.01,
+        "volume = {volume}"
+    );
+}
+
+#[test]
+fn extrudes_disjoint_2d_union_regions() {
+    let source =
+        "linear_extrude(2) union() { square([1, 1]); translate([3, 0, 0]) square([1, 1]); }";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 4.0).abs() < 1.0e-3, "volume = {volume}");
+}
+
+#[test]
+fn extrudes_a_split_2d_difference() {
+    let source = "linear_extrude(2) difference() { square([4, 2]); square([0.5, 6]); }";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 14.0).abs() < 1.0e-3, "volume = {volume}");
+}
+
+#[test]
+fn transforms_can_union_2d_children() {
+    let source =
+        "linear_extrude(2) translate([0, 0, 0]) { square(1); translate([2, 0, 0]) square(1); }";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 4.0).abs() < 1.0e-3, "volume = {volume}");
+}
+
+#[test]
+fn evaluates_a_top_level_2d_boolean() {
+    let source = "difference() { square([4, 4]); circle(r = 1); }";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    assert_eq!(shape.parts.len(), 1);
+    assert!(shape.mesh.triangle_count() > 0);
+}
+
+#[test]
+fn rejects_empty_2d_boolean_results() {
+    let mut kernel = TruckKernel::new();
+    let error = evaluate_to_meshes("difference() { square(1); square(2); }", &mut kernel, 0.01)
+        .expect_err("empty 2D boolean");
+
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "difference"));
 }

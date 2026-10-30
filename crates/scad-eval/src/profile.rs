@@ -99,6 +99,7 @@ pub(crate) fn boolean(
     Ok(profile)
 }
 
+#[cfg(test)]
 pub(crate) fn area(profile: &Profile) -> f64 {
     profile
         .iter()
@@ -111,6 +112,16 @@ pub(crate) fn area(profile: &Profile) -> f64 {
                     .sum::<f64>()
         })
         .sum()
+}
+
+pub(crate) fn to_regions(profile: &Profile) -> Vec<brepscad_kernel_api::ProfileRegion> {
+    profile
+        .iter()
+        .map(|region| brepscad_kernel_api::ProfileRegion {
+            outer: region.outer.clone(),
+            holes: region.holes.clone(),
+        })
+        .collect()
 }
 
 fn collect_region(tree: &PolyTreeD, index: usize, profile: &mut Profile) {

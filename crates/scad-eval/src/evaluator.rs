@@ -9,6 +9,7 @@ use crate::cache::MeshCache;
 use crate::model::{EvaluatedShape, Evaluation};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
 use crate::parts::{Dimension, Node, collect_parts};
+use crate::profile;
 use crate::value::{Value, binary_value, unary_value};
 use crate::{EvalError, bad_args};
 
@@ -214,6 +215,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children: Vec::new(),
                 })
             }
@@ -242,6 +244,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children: Vec::new(),
                 })
             }
@@ -258,6 +261,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children: Vec::new(),
                 })
             }
@@ -286,6 +290,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children: Vec::new(),
                 })
             }
@@ -298,6 +303,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("size", 0)
                     .ok_or_else(|| bad_args("square", "expected size"))?
                     .as_size2("square")?;
+                if size.iter().any(|value| *value <= 0.0) {
+                    return Err(bad_args("square", "dimensions must be positive"));
+                }
+                let profile = profile::square(size);
+                let profile = profile::transform(&profile, parent);
                 let shape = self.kernel.sketch(Sketch::Square { size })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
@@ -308,12 +318,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::TwoD,
+                    profile: Some(profile),
                     children: Vec::new(),
                 })
             }
             "circle" => {
                 args.ensure_known("circle", &["r", "d"])?;
                 let radius = args.radius("circle")?;
+                if radius <= 0.0 {
+                    return Err(bad_args("circle", "radius must be positive"));
+                }
+                let profile = profile::circle(radius);
+                let profile = profile::transform(&profile, parent);
                 let shape = self.kernel.sketch(Sketch::Circle { radius })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
@@ -324,6 +340,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::TwoD,
+                    profile: Some(profile),
                     children: Vec::new(),
                 })
             }
@@ -336,6 +353,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("points", 0)
                     .ok_or_else(|| bad_args("polygon", "expected points"))?
                     .as_polygon_points("polygon")?;
+                if points.len() < 3 {
+                    return Err(bad_args("polygon", "expected at least three points"));
+                }
+                let profile = profile::polygon(&points);
+                let profile = profile::transform(&profile, parent);
                 let shape = self.kernel.sketch(Sketch::Polygon { points })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
@@ -346,6 +368,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::TwoD,
+                    profile: Some(profile),
                     children: Vec::new(),
                 })
             }
@@ -394,6 +417,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: Some(transform_parameters),
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children,
                 })
             }
@@ -455,6 +479,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: Some(transform_parameters),
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children,
                 })
             }
@@ -528,6 +553,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                 for child in &children[1..] {
                     result = self.kernel.boolean(BooleanOp::Union, result, child.shape)?;
                 }
+                let profile = if dimension == Dimension::TwoD {
+                    Some(
+                        children[0]
+                            .profile
+                            .clone()
+                            .ok_or_else(|| bad_args("resize", "missing profile for 2D child"))?,
+                    )
+                } else {
+                    None
+                };
 
                 Ok(Node {
                     shape: result,
@@ -537,6 +572,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: Some(transform_parameters),
                     world: combined,
                     dimension,
+                    profile,
                     children,
                 })
             }
@@ -592,15 +628,36 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if children.iter().any(|child| child.dimension != dimension) {
                     return Err(bad_args(name.as_str(), "cannot mix 2D and 3D children"));
                 }
-                if dimension == Dimension::TwoD && children.len() > 1 {
-                    return Err(bad_args(name.as_str(), "2D unions are not supported"));
-                }
 
-                let mut shapes = children.iter().map(|child| child.shape);
-                let mut result = shapes.next().expect("checked non-empty");
-                for shape in shapes {
-                    result = self.kernel.boolean(BooleanOp::Union, result, shape)?;
-                }
+                let (result, profile) = if dimension == Dimension::TwoD {
+                    let mut profile = children[0]
+                        .profile
+                        .clone()
+                        .ok_or_else(|| bad_args(name.as_str(), "missing 2D profile"))?;
+                    for child in &children[1..] {
+                        let clip = child
+                            .profile
+                            .as_ref()
+                            .ok_or_else(|| bad_args(name.as_str(), "missing 2D profile"))?;
+                        profile = profile::boolean(BooleanOp::Union, &profile, clip)?;
+                    }
+                    if profile.is_empty() {
+                        return Err(bad_args(name.as_str(), "2D union produced empty geometry"));
+                    }
+                    let result = if children.len() == 1 {
+                        children[0].shape
+                    } else {
+                        self.kernel.sketch_profile(&profile::to_regions(&profile))?
+                    };
+                    (result, Some(profile))
+                } else {
+                    let mut shapes = children.iter().map(|child| child.shape);
+                    let mut result = shapes.next().expect("checked non-empty");
+                    for shape in shapes {
+                        result = self.kernel.boolean(BooleanOp::Union, result, shape)?;
+                    }
+                    (result, None)
+                };
 
                 Ok(Node {
                     shape: result,
@@ -610,6 +667,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: Some(transform_parameters),
                     world: combined,
                     dimension,
+                    profile,
                     children,
                 })
             }
@@ -628,11 +686,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
-                if children
-                    .iter()
-                    .any(|child| child.dimension != Dimension::ThreeD)
-                {
-                    return Err(bad_args(name.as_str(), "2D booleans are not supported"));
+                let dimension = children[0].dimension;
+                if children.iter().any(|child| child.dimension != dimension) {
+                    return Err(bad_args(name.as_str(), "cannot mix 2D and 3D children"));
                 }
 
                 let op = match name.as_str() {
@@ -640,6 +696,39 @@ impl<K: Kernel> Evaluator<'_, K> {
                     "union" => BooleanOp::Union,
                     _ => BooleanOp::Intersection,
                 };
+
+                if dimension == Dimension::TwoD {
+                    let mut profile = children[0]
+                        .profile
+                        .clone()
+                        .ok_or_else(|| bad_args(name.as_str(), "missing 2D profile"))?;
+                    for child in &children[1..] {
+                        let clip = child
+                            .profile
+                            .as_ref()
+                            .ok_or_else(|| bad_args(name.as_str(), "missing 2D profile"))?;
+                        profile = profile::boolean(op, &profile, clip)?;
+                    }
+                    if profile.is_empty() {
+                        return Err(bad_args(
+                            name.as_str(),
+                            "2D boolean produced empty geometry",
+                        ));
+                    }
+                    let shape = self.kernel.sketch_profile(&profile::to_regions(&profile))?;
+                    return Ok(Node {
+                        shape,
+                        module,
+                        source_range,
+                        parameters,
+                        transform_parameters: None,
+                        world: parent,
+                        dimension: Dimension::TwoD,
+                        profile: Some(profile),
+                        children,
+                    });
+                }
+
                 let mut shapes = children.iter().map(|child| child.shape);
                 let mut result = shapes.next().expect("checked non-empty");
                 for shape in shapes {
@@ -654,6 +743,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     transform_parameters: None,
                     world: parent,
                     dimension: Dimension::ThreeD,
+                    profile: None,
                     children,
                 })
             }
@@ -690,6 +780,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         }
         node.shape = self.kernel.transform(node.shape, transform)?;
         node.world = transform.compose(node.world);
+        if let Some(profile) = &node.profile {
+            node.profile = Some(profile::transform(profile, transform));
+        }
         for child in &mut node.children {
             self.transform_tree(child, transform)?;
         }

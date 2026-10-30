@@ -63,7 +63,9 @@ scripts/
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` turns exactly one 2D child into a solid.
-- `difference`, `union`, `intersection` with a brace block or one child call.
+- `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
+- 2D booleans run on polygonal profiles (clipper2-rust); results may contain
+  holes or multiple disjoint regions.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
 - Arithmetic on numbers and vectors: `+`, `-`, `*`, `/`, `%`, unary signs, and
@@ -145,6 +147,13 @@ scripts/
 - `polyhedron` builds shared edges from the input points and faces, then relies
   on `Solid::try_new` to validate the shell. Faces must be planar and the input
   must be closed and consistently wound; no repair is attempted.
+- 2D CSG is a profile operation above the kernel: outer contours and holes are
+  clipped with `clipper2-rust`, then rebuilt into one or more kernel faces.
+  Analytic sketch faces remain the fast path for non-boolean extrusions;
+  circles are flattened to 64 segments only when profiles enter 2D CSG.
+- Multi-region profile results extrude or revolve per region and combine the
+  resulting shells into one solid. Empty 2D boolean results are rejected because
+  the model has no representation for empty geometry.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -201,7 +210,9 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
-  - no 2D booleans; extrusions take exactly one 2D child
+  - 2D booleans are polygonal; circles flatten to 64 segments and there is no
+    curve intersection or offset support
+  - empty 2D boolean results are reported as errors
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
   - `rotate_extrude` supports `angle` only, requires `x >= 0`, and has no `start`
   - `polyhedron` requires closed, consistently wound planar faces
@@ -227,7 +238,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Recommended next steps
 
 1. **Finish the 2D/extrusion layer**
-   - 2D booleans.
+   - `offset()` and polygonal profile smoothing.
    - `linear_extrude` options: center, twist, scale, slices.
    - `rotate_extrude` `start` and negative-side profiles.
    - `for` / `if` and module/function definitions later.
