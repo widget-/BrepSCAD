@@ -1,9 +1,9 @@
 mod common;
 
-use brepscad_eval::{evaluate, evaluate_to_meshes};
+use brepscad_eval::{EvalError, evaluate, evaluate_to_meshes};
 use brepscad_kernel_truck::TruckKernel;
 use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
-use common::bounds;
+use common::{bounds, signed_volume};
 
 #[test]
 fn evaluates_a_cube() {
@@ -110,6 +110,28 @@ fn named_argument_values_still_resolve_assignment_parameters() {
             .iter()
             .any(|parameter| parameter.value == 3.0)
     );
+}
+
+#[test]
+fn evaluates_a_polyhedron() {
+    let source = "polyhedron(\n    points = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],\n    faces = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]]\n);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    let volume = signed_volume(&shape.mesh);
+    assert!((volume - 1.0 / 6.0).abs() < 1e-9, "volume = {volume}");
+    assert_eq!(shape.parts.len(), 1);
+    assert_eq!(shape.parts[0].module, "polyhedron");
+}
+
+#[test]
+fn rejects_bad_polyhedron_indices() {
+    let source = "polyhedron(points = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], faces = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 9]]);\n";
+    let mut kernel = TruckKernel::new();
+    let error = evaluate_to_meshes(source, &mut kernel, 0.01).expect_err("bad index");
+
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "polyhedron"));
 }
 
 #[test]

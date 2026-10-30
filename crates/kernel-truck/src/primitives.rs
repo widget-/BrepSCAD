@@ -1,9 +1,94 @@
 //! Truck primitive builders.
 
+use std::collections::HashMap;
+
 use brepscad_kernel_api::KernelError;
 use truck_modeling::*;
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
+
+pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelResult<Solid> {
+    if points.len() < 4 || faces.len() < 4 {
+        return Err(KernelError::Backend(
+            "polyhedron needs at least four points and four faces".to_owned(),
+        ));
+    }
+    if points.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(KernelError::Backend(
+            "polyhedron points must be finite".to_owned(),
+        ));
+    }
+
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|[x, y, z]| builder::vertex(Point3::new(*x, *y, *z)))
+        .collect();
+    let mut edges: HashMap<(usize, usize), Edge> = HashMap::new();
+    let mut uses: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
+    let mut built_faces = Vec::with_capacity(faces.len());
+
+    for face in faces {
+        if face.len() < 3 {
+            return Err(KernelError::Backend(
+                "polyhedron faces need at least three vertices".to_owned(),
+            ));
+        }
+        if face.iter().any(|index| *index >= points.len()) {
+            return Err(KernelError::Backend(
+                "polyhedron face index out of range".to_owned(),
+            ));
+        }
+
+        let mut wire_edges = Vec::with_capacity(face.len());
+        for index in 0..face.len() {
+            let from = face[index];
+            let to = face[(index + 1) % face.len()];
+            if from == to {
+                return Err(KernelError::Backend(
+                    "polyhedron face repeats a vertex".to_owned(),
+                ));
+            }
+
+            let key = if from < to { (from, to) } else { (to, from) };
+            let edge = match edges.get(&key) {
+                Some(edge) => edge.clone(),
+                None => {
+                    let edge = builder::line(&vertices[key.0], &vertices[key.1]);
+                    edges.insert(key, edge.clone());
+                    edge
+                }
+            };
+
+            let oriented = if from < to {
+                uses.entry(key).or_insert((0, 0)).0 += 1;
+                edge
+            } else {
+                uses.entry(key).or_insert((0, 0)).1 += 1;
+                edge.inverse()
+            };
+            wire_edges.push(oriented);
+        }
+
+        let wire: Wire = wire_edges.into_iter().collect();
+        built_faces.push(
+            builder::try_attach_plane(&[wire])
+                .map_err(|error| KernelError::Backend(format!("polyhedron face: {error:?}")))?,
+        );
+    }
+
+    if uses
+        .values()
+        .any(|(forward, backward)| *forward != 1 || *backward != 1)
+    {
+        return Err(KernelError::Backend(
+            "polyhedron faces must form a closed, consistently wound shell".to_owned(),
+        ));
+    }
+
+    let shell: Shell = built_faces.into_iter().collect();
+    Solid::try_new(vec![shell])
+        .map_err(|error| KernelError::Backend(format!("polyhedron shell: {error:?}")))
+}
 
 pub(crate) fn cuboid(size: [f64; 3]) -> KernelResult<Solid> {
     if size.iter().any(|value| *value <= 0.0) {

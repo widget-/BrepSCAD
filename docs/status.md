@@ -57,7 +57,7 @@ scripts/
 ### Evaluator
 
 - Top-level assignments and variable lookup.
-- `cube`, `cylinder`, `sphere`.
+- `cube`, `cylinder`, `sphere`, `polyhedron`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude`.
 - `rotate_extrude` with an optional sweep angle.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
@@ -87,7 +87,7 @@ scripts/
 
 - `kernel-api` is a capability-based `Kernel` trait with opaque `ShapeId`s.
 - `kernel-truck` supports:
-  - cuboid, cylinder, and sphere primitives
+  - cuboid, cylinder, sphere, and polyhedron primitives
   - square, circle, and polygon sketches
   - linear extrusion of a sketch along Z
   - rotational extrusion of a sketch around Z
@@ -142,6 +142,9 @@ scripts/
 - `rotate_extrude` maps the profile's local X to radius and local Y to Z, then
   revolves around Z. Positive sweeps are flipped to keep outward orientation;
   profiles are required to lie at `x >= 0`.
+- `polyhedron` builds shared edges from the input points and faces, then relies
+  on `Solid::try_new` to validate the shell. Faces must be planar and the input
+  must be closed and consistently wound; no repair is attempted.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -198,10 +201,10 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
-  - no `polyhedron`
   - no 2D booleans; extrusions take exactly one 2D child
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
   - `rotate_extrude` supports `angle` only, requires `x >= 0`, and has no `start`
+  - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
 - No color or `$fn` handling.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
@@ -224,7 +227,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Recommended next steps
 
 1. **Finish the 2D/extrusion layer**
-   - 2D booleans, `polyhedron`.
+   - 2D booleans.
    - `linear_extrude` options: center, twist, scale, slices.
    - `rotate_extrude` `start` and negative-side profiles.
    - `for` / `if` and module/function definitions later.

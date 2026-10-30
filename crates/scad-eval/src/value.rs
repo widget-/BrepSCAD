@@ -50,6 +50,50 @@ impl Value {
             .collect()
     }
 
+    pub(crate) fn as_points3(&self, module: &str) -> Result<Vec<[f64; 3]>, EvalError> {
+        let Self::Matrix(rows) = self else {
+            return Err(bad_args(module, "expected a list of 3D points"));
+        };
+        rows.iter()
+            .map(|row| match row.as_slice() {
+                [x, y, z] => Ok([*x, *y, *z]),
+                _ => Err(bad_args(module, "each point must have three coordinates")),
+            })
+            .collect()
+    }
+
+    pub(crate) fn as_faces(
+        &self,
+        module: &str,
+        point_count: usize,
+    ) -> Result<Vec<Vec<usize>>, EvalError> {
+        let Self::Matrix(rows) = self else {
+            return Err(bad_args(module, "expected a list of faces"));
+        };
+        rows.iter()
+            .map(|row| {
+                if row.len() < 3 {
+                    return Err(bad_args(module, "each face needs at least three vertices"));
+                }
+                row.iter()
+                    .map(|value| {
+                        if !value.is_finite() || *value < 0.0 || value.fract() != 0.0 {
+                            return Err(bad_args(
+                                module,
+                                "face indices must be non-negative integers",
+                            ));
+                        }
+                        let index = *value as usize;
+                        if index >= point_count {
+                            return Err(bad_args(module, "face index out of range"));
+                        }
+                        Ok(index)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     pub(crate) fn as_vector3(&self, module: &str) -> Result<[f64; 3], EvalError> {
         match self {
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),

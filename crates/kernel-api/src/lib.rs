@@ -11,11 +11,22 @@ pub use transform::Transform;
 pub struct ShapeId(pub u64);
 
 /// A primitive requested from a kernel.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Primitive {
-    Cuboid { size: [f64; 3] },
-    Cylinder { radius: f64, height: f64 },
-    Sphere { radius: f64 },
+    Cuboid {
+        size: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+    },
+    Sphere {
+        radius: f64,
+    },
+    Polyhedron {
+        points: Vec<[f64; 3]>,
+        faces: Vec<Vec<usize>>,
+    },
 }
 
 /// A planar sketch requested from a kernel.

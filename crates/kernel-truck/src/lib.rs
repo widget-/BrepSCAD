@@ -8,7 +8,7 @@ mod primitives;
 use brepscad_kernel_api::{
     BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
 };
-use primitives::{cuboid, cylinder, sphere};
+use primitives::{cuboid, cylinder, polyhedron, sphere};
 use truck_meshalgo::prelude::*;
 use truck_modeling::*;
 
@@ -86,6 +86,7 @@ impl Kernel for TruckKernel {
             Primitive::Cuboid { size } => cuboid(size)?,
             Primitive::Cylinder { radius, height } => cylinder(radius, height)?,
             Primitive::Sphere { radius } => sphere(radius)?,
+            Primitive::Polyhedron { points, faces } => polyhedron(&points, &faces)?,
         };
         Ok(self.insert(OwnedShape::Solid(shape)))
     }
@@ -641,6 +642,101 @@ mod tests {
             .revolve(cube, std::f64::consts::TAU)
             .expect_err("solid revolve");
         assert!(matches!(error, KernelError::Backend(message) if message.contains("sketch")));
+    }
+
+    #[test]
+    fn polyhedron_builds_a_tetrahedron() {
+        let mut kernel = TruckKernel::new();
+        let points = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let faces = vec![vec![0, 2, 1], vec![0, 1, 3], vec![0, 3, 2], vec![1, 2, 3]];
+        let solid = kernel
+            .primitive(Primitive::Polyhedron { points, faces })
+            .expect("polyhedron");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        assert!((volume - 1.0 / 6.0).abs() < 1e-9, "volume = {volume}");
+    }
+
+    #[test]
+    fn polyhedron_builds_a_cube() {
+        let mut kernel = TruckKernel::new();
+        let points = vec![
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ];
+        let faces = vec![
+            vec![0, 3, 2, 1],
+            vec![4, 5, 6, 7],
+            vec![0, 1, 5, 4],
+            vec![3, 7, 6, 2],
+            vec![0, 4, 7, 3],
+            vec![1, 2, 6, 5],
+        ];
+        let solid = kernel
+            .primitive(Primitive::Polyhedron { points, faces })
+            .expect("polyhedron");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        assert!((volume - 8.0).abs() < 1e-9, "volume = {volume}");
+    }
+
+    #[test]
+    fn polyhedron_rejects_invalid_shells() {
+        let mut kernel = TruckKernel::new();
+        let points = vec![
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ];
+        let mut faces = vec![
+            vec![0, 3, 2, 1],
+            vec![4, 5, 6, 7],
+            vec![0, 1, 5, 4],
+            vec![3, 7, 6, 2],
+            vec![0, 4, 7, 3],
+            vec![1, 2, 6, 5],
+        ];
+
+        faces.pop();
+        let error = kernel
+            .primitive(Primitive::Polyhedron {
+                points: points.clone(),
+                faces,
+            })
+            .expect_err("open shell");
+        assert!(
+            matches!(error, KernelError::Backend(ref message) if message.contains("closed")),
+            "{error:?}"
+        );
+
+        let error = kernel
+            .primitive(Primitive::Polyhedron {
+                points,
+                faces: vec![vec![0, 1, 99], vec![0, 1, 2], vec![0, 2, 3], vec![0, 3, 1]],
+            })
+            .expect_err("bad index");
+        assert!(
+            matches!(error, KernelError::Backend(ref message) if message.contains("range")),
+            "{error:?}"
+        );
     }
 
     fn bounds(mesh: &Mesh) -> ([f64; 3], [f64; 3]) {

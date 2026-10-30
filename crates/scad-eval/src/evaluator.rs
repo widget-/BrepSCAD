@@ -261,6 +261,34 @@ impl<K: Kernel> Evaluator<'_, K> {
                     children: Vec::new(),
                 })
             }
+            "polyhedron" => {
+                args.ensure_known("polyhedron", &["points", "faces", "convexity"])?;
+                if args.positional.len() > 2 {
+                    return Err(bad_args("polyhedron", "expected points and faces"));
+                }
+                let points = args
+                    .argument("points", 0)
+                    .ok_or_else(|| bad_args("polyhedron", "expected points"))?
+                    .as_points3("polyhedron")?;
+                let faces = args
+                    .argument("faces", 1)
+                    .ok_or_else(|| bad_args("polyhedron", "expected faces"))?
+                    .as_faces("polyhedron", points.len())?;
+                let shape = self
+                    .kernel
+                    .primitive(Primitive::Polyhedron { points, faces })?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: None,
+                    world: parent,
+                    dimension: Dimension::ThreeD,
+                    children: Vec::new(),
+                })
+            }
             "square" => {
                 args.ensure_known("square", &["size"])?;
                 if args.positional.len() > 1 {
