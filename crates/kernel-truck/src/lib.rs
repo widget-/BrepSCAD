@@ -115,16 +115,16 @@ fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
         ));
     }
 
-    let vertex = builder::vertex(Point3::new(0.0, -height / 2.0, radius));
+    let vertex = builder::vertex(Point3::new(radius, 0.0, -height / 2.0));
     let circle = builder::rsweep(
         &vertex,
         Point3::origin(),
-        Vector3::unit_y(),
+        Vector3::unit_z(),
         Rad(std::f64::consts::TAU),
     );
     let disk = builder::try_attach_plane(&[circle])
         .map_err(|error| KernelError::Backend(format!("{error:?}")))?;
-    Ok(builder::tsweep(&disk, Vector3::new(0.0, height, 0.0)))
+    Ok(builder::tsweep(&disk, Vector3::new(0.0, 0.0, height)))
 }
 
 fn matrix4(transform: Transform) -> Matrix4 {
@@ -199,6 +199,31 @@ mod tests {
             .map(|position| position[0])
             .fold(f64::INFINITY, f64::min);
         assert!((min_x - 0.0).abs() < 1e-6, "min_x = {min_x}");
+    }
+
+    #[test]
+    fn cylinder_is_centered_on_the_z_axis() {
+        let mut kernel = TruckKernel::new();
+        let cylinder = kernel
+            .primitive(Primitive::Cylinder {
+                radius: 0.5,
+                height: 4.0,
+            })
+            .expect("cylinder");
+        let mesh = kernel.tessellate(cylinder, 0.01).expect("tessellation");
+
+        let mut min_z = f64::INFINITY;
+        let mut max_z = f64::NEG_INFINITY;
+        let mut max_radial: f64 = 0.0;
+        for position in &mesh.positions {
+            min_z = min_z.min(position[2]);
+            max_z = max_z.max(position[2]);
+            max_radial = max_radial.max(position[0].hypot(position[1]));
+        }
+
+        assert!((min_z + 2.0).abs() < 1e-6, "min_z = {min_z}");
+        assert!((max_z - 2.0).abs() < 1e-6, "max_z = {max_z}");
+        assert!((max_radial - 0.5).abs() < 1e-6, "max_radial = {max_radial}");
     }
 
     #[test]

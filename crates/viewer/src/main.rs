@@ -18,7 +18,7 @@ use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 const SAMPLE: &str = r#"size = [2, 2, 2];
 difference() {
     cube(size);
-    translate([0.5, 0, 0]) cylinder(0.5, 4);
+    translate([0.2, 0, 0]) cylinder(0.5, 4);
 }
 "#;
 
@@ -491,6 +491,14 @@ mod tests {
             positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             indices: vec![0, 1, 2],
         }
+    }
+
+    #[test]
+    fn built_in_sample_evaluates() {
+        let (evaluation, error) = evaluate_source(SAMPLE);
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(evaluation.shapes.len(), 1);
+        assert_eq!(evaluation.shapes[0].parts.len(), 2);
     }
 
     #[test]

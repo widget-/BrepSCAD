@@ -38,21 +38,21 @@ impl Camera {
         self.target
             + Vec3::new(
                 self.yaw.sin() * horizontal,
-                self.pitch.sin(),
                 self.yaw.cos() * horizontal,
+                self.pitch.sin(),
             ) * self.distance
     }
 
     pub fn view_projection(&self, aspect: f32) -> Mat4 {
         let projection = directx::perspective(self.fov_y, aspect.max(0.01), 0.001, 100_000.0);
-        let view = view::look_at_mat4(self.eye(), self.target, Vec3::Y);
+        let view = view::look_at_mat4(self.eye(), self.target, Vec3::Z);
         projection * view
     }
 
     /// Returns a world-space ray through normalized device coordinates.
     pub fn ray(&self, ndc: Vec2, aspect: f32) -> (Vec3, Vec3) {
         let forward = (self.target - self.eye()).normalize();
-        let right = forward.cross(Vec3::Y).normalize();
+        let right = forward.cross(Vec3::Z).normalize();
         let up = right.cross(forward);
         let tan_half_fov = (self.fov_y * 0.5).tan();
         let direction = (forward
@@ -121,6 +121,14 @@ mod tests {
         assert!(camera.pitch <= 1.45);
         camera.orbit(Vec2::new(0.0, -10_000.0));
         assert!(camera.pitch >= -1.45);
+    }
+
+    #[test]
+    fn world_up_is_z() {
+        let camera = Camera::default();
+        let clip = camera.view_projection(16.0 / 9.0) * Vec3::new(0.0, 0.0, 1.0).extend(1.0);
+        let ndc_y = clip.y / clip.w;
+        assert!(ndc_y > 0.0, "ndc_y = {ndc_y}");
     }
 
     #[test]
