@@ -119,6 +119,7 @@ scripts/
 - Shapes panel showing the source-shaped tree of groups and leaf primitives.
   Clicking a leaf selects it, including cutters enclosed by other geometry.
 - Properties panel with drag-editable numeric parameters.
+- "Legacy OpenSCAD centering" checkbox in the top bar.
 - Parameter edits apply on drag release, Enter, or focus loss.
 - Edits write back to the source, then re-evaluate.
 - Built-in sample: `assets/sample.scad`, shared by the CLI, viewer, and
@@ -154,6 +155,9 @@ scripts/
 - `square` and `circle` profiles are centered in XY, `polygon` points are used
   as given, and extrusions are centered on Z, matching the centered 3D
   primitives rather than OpenSCAD's origin-at-a-corner convention.
+  `EvaluationOptions::legacy_centering` switches cubes and squares to the
+  origin and cylinders/extrusions to base `z = 0`; the CLI flag and viewer
+  checkbox expose it.
   Profile children are filtered out of the selectable-part tree; the extrusion
   itself is the selectable part.
 - `rotate_extrude` maps the profile's local X to radius and local Y to Z, then
@@ -201,6 +205,7 @@ CLI:
 
 ```sh
 nix-shell --run 'cargo run -p brepscad -- path/to/model.scad'
+nix-shell --run 'cargo run -p brepscad -- --legacy-centering path/to/model.scad'
 ```
 
 The viewer needs a working wgpu adapter (Vulkan or GLES). On this machine it
@@ -227,6 +232,8 @@ For headless UI snapshots, see
   - `$fa`/`$fs` do not affect geometry; they only sample 2D profiles
   - empty 2D boolean or offset results are reported as errors
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
+  - `center` is not supported per primitive; OpenSCAD placement is a global
+    evaluation option
   - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is faceted; `$fn` selects coarse counts, default 32×16

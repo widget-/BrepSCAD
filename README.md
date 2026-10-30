@@ -63,7 +63,14 @@ of top-level meshes and the triangle/vertex counts for each mesh:
 ```sh
 # Evaluate a source file.
 cargo run -p brepscad -- path/to/model.scad
+
+# Use OpenSCAD's origin-at-corner/base-at-zero placement.
+cargo run -p brepscad -- --legacy-centering path/to/model.scad
 ```
+
+By default, BrepSCAD centers cubes and squares, and centers cylinders and
+linear extrusions on Z. The legacy flag places cubes/squares at the origin and
+cylinder/extrusion bases at `z = 0`.
 
 ```text
 meshes: 1
@@ -97,6 +104,10 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `import`, `export`, `surface` | ✖ | No file I/O yet. |
 | `projection` | ✖ | |
 
+By default, `cube`, `square`, `cylinder`, and `linear_extrude` use BrepSCAD's
+centered placement. The legacy option switches to OpenSCAD's origin-at-corner
+and base-at-zero placement.
+
 ## Feature matrix
 
 Status: ✔ supported, ◐ partial, ✖ not implemented.
@@ -106,6 +117,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Source editor | ✔ | In-memory basic textbox. |
 | Source tree | ✔ | Groups and selectable leaf primitives. |
 | UI parameter editing | ◐ | Numeric parameters only. |
+| Legacy OpenSCAD centering | ✔ | CLI `--legacy-centering` or the viewer checkbox. |
 | Preview-based selection | ✔ | |
 | 2D profile CSG | ✔ | Via `clipper2-rust`. |
 | Alternate kernels | ✖ | Truck only; OCCT and SolidCore are candidates. |

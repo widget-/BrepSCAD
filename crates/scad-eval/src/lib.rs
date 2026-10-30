@@ -15,7 +15,10 @@ use brepscad_kernel_api::KernelError;
 use thiserror::Error;
 
 pub use cache::MeshCache;
-pub use evaluator::{evaluate, evaluate_to_meshes, evaluate_with_cache};
+pub use evaluator::{
+    EvaluationOptions, evaluate, evaluate_to_meshes, evaluate_to_meshes_with_options,
+    evaluate_with_cache, evaluate_with_cache_options, evaluate_with_options,
+};
 pub use model::{EvaluatedShape, Evaluation, Parameter, Part, TreeNode};
 
 #[derive(Debug, Error)]

@@ -74,6 +74,24 @@ impl Arguments {
     }
 }
 
+/// Evaluation settings shared by the CLI, viewer, and tests.
+#[derive(Debug, Clone, Copy)]
+pub struct EvaluationOptions {
+    pub tolerance: f64,
+    /// Place cubes/squares at the origin, cylinder bases at `z = 0`, and
+    /// linear extrusions from `z = 0`, matching OpenSCAD defaults.
+    pub legacy_centering: bool,
+}
+
+impl Default for EvaluationOptions {
+    fn default() -> Self {
+        Self {
+            tolerance: 0.01,
+            legacy_centering: false,
+        }
+    }
+}
+
 /// Parses and evaluates `source`, returning each top-level shape with its
 /// source range, numeric parameter bindings, and selectable operands.
 pub fn evaluate<K: Kernel>(
@@ -81,7 +99,23 @@ pub fn evaluate<K: Kernel>(
     kernel: &mut K,
     tolerance: f64,
 ) -> Result<Evaluation, EvalError> {
-    evaluate_with_cache(source, kernel, tolerance, &mut MeshCache::default())
+    evaluate_with_options(
+        source,
+        kernel,
+        EvaluationOptions {
+            tolerance,
+            legacy_centering: false,
+        },
+    )
+}
+
+/// Like [`evaluate`], with explicit evaluation options.
+pub fn evaluate_with_options<K: Kernel>(
+    source: &str,
+    kernel: &mut K,
+    options: EvaluationOptions,
+) -> Result<Evaluation, EvalError> {
+    evaluate_with_cache_options(source, kernel, options, &mut MeshCache::default())
 }
 
 /// Like [`evaluate`], but reuses leaf meshes from `cache`.
@@ -89,6 +123,24 @@ pub fn evaluate_with_cache<K: Kernel>(
     source: &str,
     kernel: &mut K,
     tolerance: f64,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvalError> {
+    evaluate_with_cache_options(
+        source,
+        kernel,
+        EvaluationOptions {
+            tolerance,
+            legacy_centering: false,
+        },
+        cache,
+    )
+}
+
+/// Like [`evaluate_with_options`], but reuses leaf meshes from `cache`.
+pub fn evaluate_with_cache_options<K: Kernel>(
+    source: &str,
+    kernel: &mut K,
+    options: EvaluationOptions,
     cache: &mut MeshCache,
 ) -> Result<Evaluation, EvalError> {
     let parsed = parse(source);
@@ -102,6 +154,7 @@ pub fn evaluate_with_cache<K: Kernel>(
         return Err(EvalError::Parse(messages));
     }
 
+    let tolerance = options.tolerance;
     let mut roots = Vec::new();
     {
         let mut evaluator = Evaluator {
@@ -109,6 +162,7 @@ pub fn evaluate_with_cache<K: Kernel>(
             variables: HashMap::new(),
             assignments: HashMap::new(),
             tolerance,
+            legacy_centering: options.legacy_centering,
         };
 
         for statement in parsed.syntax().children() {
@@ -138,7 +192,23 @@ pub fn evaluate_to_meshes<K: Kernel>(
     kernel: &mut K,
     tolerance: f64,
 ) -> Result<Vec<Mesh>, EvalError> {
-    Ok(evaluate(source, kernel, tolerance)?
+    evaluate_to_meshes_with_options(
+        source,
+        kernel,
+        EvaluationOptions {
+            tolerance,
+            legacy_centering: false,
+        },
+    )
+}
+
+/// Like [`evaluate_to_meshes`], with explicit evaluation options.
+pub fn evaluate_to_meshes_with_options<K: Kernel>(
+    source: &str,
+    kernel: &mut K,
+    options: EvaluationOptions,
+) -> Result<Vec<Mesh>, EvalError> {
+    Ok(evaluate_with_options(source, kernel, options)?
         .shapes
         .into_iter()
         .map(|shape| shape.mesh)
@@ -150,6 +220,7 @@ struct Evaluator<'a, K: Kernel> {
     variables: HashMap<String, Value>,
     assignments: HashMap<String, SyntaxNode>,
     tolerance: f64,
+    legacy_centering: bool,
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
@@ -324,15 +395,17 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("size", 0)
                     .ok_or_else(|| bad_args("cube", "expected size"))?
                     .as_size("cube")?;
+                let local = self.centering_offset([size[0] / 2.0, size[1] / 2.0, size[2] / 2.0]);
+                let world = parent.compose(local);
                 let shape = self.kernel.primitive(Primitive::Cuboid { size })?;
-                let shape = self.apply_transform(shape, parent)?;
+                let shape = self.apply_transform(shape, world)?;
                 Ok(Node {
                     shape,
                     module,
                     source_range,
                     parameters,
                     transform_parameters: None,
-                    world: parent,
+                    world,
                     dimension: Dimension::ThreeD,
                     profile: None,
                     children: Vec::new(),
@@ -351,6 +424,8 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("h", 1)
                     .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
                     .as_number("cylinder")?;
+                let local = self.centering_offset([0.0, 0.0, height / 2.0]);
+                let world = parent.compose(local);
                 let shape = match self.fn_segments(&args)? {
                     Some(segments) => {
                         let profile = profile::circle_with_segments(radius, segments);
@@ -361,14 +436,14 @@ impl<K: Kernel> Evaluator<'_, K> {
                         .kernel
                         .primitive(Primitive::Cylinder { radius, height })?,
                 };
-                let shape = self.apply_transform(shape, parent)?;
+                let shape = self.apply_transform(shape, world)?;
                 Ok(Node {
                     shape,
                     module,
                     source_range,
                     parameters,
                     transform_parameters: None,
-                    world: parent,
+                    world,
                     dimension: Dimension::ThreeD,
                     profile: None,
                     children: Vec::new(),
@@ -435,17 +510,19 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if size.iter().any(|value| *value <= 0.0) {
                     return Err(bad_args("square", "dimensions must be positive"));
                 }
+                let local = self.centering_offset([size[0] / 2.0, size[1] / 2.0, 0.0]);
+                let world = parent.compose(local);
                 let profile = profile::square(size);
-                let profile = profile::transform(&profile, parent);
+                let profile = profile::transform(&profile, world);
                 let shape = self.kernel.sketch(Sketch::Square { size })?;
-                let shape = self.apply_transform(shape, parent)?;
+                let shape = self.apply_transform(shape, world)?;
                 Ok(Node {
                     shape,
                     module,
                     source_range,
                     parameters,
                     transform_parameters: None,
-                    world: parent,
+                    world,
                     dimension: Dimension::TwoD,
                     profile: Some(profile),
                     children: Vec::new(),
@@ -633,14 +710,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                 }
 
                 let shape = self.kernel.extrude(children[0].shape, height)?;
-                let shape = self.apply_transform(shape, parent)?;
+                let local = self.centering_offset([0.0, 0.0, height / 2.0]);
+                let world = parent.compose(local);
+                let shape = self.apply_transform(shape, world)?;
                 Ok(Node {
                     shape,
                     module,
                     source_range,
                     parameters,
                     transform_parameters: Some(transform_parameters),
-                    world: parent,
+                    world,
                     dimension: Dimension::ThreeD,
                     profile: None,
                     children,
@@ -1007,6 +1086,14 @@ impl<K: Kernel> Evaluator<'_, K> {
             Ok(shape)
         } else {
             Ok(self.kernel.transform(shape, transform)?)
+        }
+    }
+
+    fn centering_offset(&self, translation: [f64; 3]) -> Transform {
+        if self.legacy_centering {
+            Transform::from_translation(translation)
+        } else {
+            Transform::IDENTITY
         }
     }
 

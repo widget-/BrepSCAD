@@ -1,7 +1,9 @@
 use std::ops::Range;
 use std::time::Instant;
 
-use brepscad_eval::{Evaluation, MeshCache, TreeNode, evaluate_with_cache};
+use brepscad_eval::{
+    Evaluation, EvaluationOptions, MeshCache, TreeNode, evaluate_with_cache_options,
+};
 use brepscad_kernel_api::Mesh;
 use brepscad_kernel_truck::TruckKernel;
 use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
@@ -29,6 +31,7 @@ pub(crate) struct ViewerApp {
     source: String,
     evaluation: Evaluation,
     mesh_cache: MeshCache,
+    legacy_centering: bool,
     mesh: Mesh,
     pick_mesh: Mesh,
     pick_parts: Vec<PickPart>,
@@ -49,7 +52,7 @@ impl ViewerApp {
             .expect("the viewer requires the wgpu backend");
 
         let mut mesh_cache = MeshCache::new();
-        let (evaluation, error) = evaluate_source(SAMPLE, &mut mesh_cache);
+        let (evaluation, error) = evaluate_source(SAMPLE, &mut mesh_cache, false);
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
@@ -60,6 +63,7 @@ impl ViewerApp {
             source: SAMPLE.to_owned(),
             evaluation,
             mesh_cache,
+            legacy_centering: false,
             mesh,
             pick_mesh,
             pick_parts,
@@ -75,7 +79,8 @@ impl ViewerApp {
 
     fn reload(&mut self, device: &wgpu::Device) {
         let started = Instant::now();
-        let (evaluation, error) = evaluate_source(&self.source, &mut self.mesh_cache);
+        let (evaluation, error) =
+            evaluate_source(&self.source, &mut self.mesh_cache, self.legacy_centering);
 
         if error.is_none() {
             let mesh = combine_evaluation(&evaluation);
@@ -257,6 +262,13 @@ impl eframe::App for ViewerApp {
                 if ui.button("Evaluate").clicked() {
                     self.pending_evaluate = true;
                 }
+                let legacy = ui.checkbox(&mut self.legacy_centering, "Legacy OpenSCAD centering");
+                if legacy.changed() {
+                    self.pending_evaluate = true;
+                }
+                legacy.on_hover_text(
+                    "Place cubes and squares at the origin, and cylinder/extrusion bases at z = 0",
+                );
                 ui.label("Ctrl+Enter");
                 if self.last_eval_ms > 0.0 {
                     ui.separator();
@@ -402,9 +414,21 @@ fn tree_ui(
     }
 }
 
-fn evaluate_source(source: &str, cache: &mut MeshCache) -> (Evaluation, Option<String>) {
+fn evaluate_source(
+    source: &str,
+    cache: &mut MeshCache,
+    legacy_centering: bool,
+) -> (Evaluation, Option<String>) {
     let mut kernel = TruckKernel::new();
-    match evaluate_with_cache(source, &mut kernel, 0.01, cache) {
+    match evaluate_with_cache_options(
+        source,
+        &mut kernel,
+        EvaluationOptions {
+            tolerance: 0.01,
+            legacy_centering,
+        },
+        cache,
+    ) {
         Ok(evaluation) => (evaluation, None),
         Err(error) => (Evaluation { shapes: Vec::new() }, Some(error.to_string())),
     }
@@ -437,7 +461,7 @@ mod tests {
 
     #[test]
     fn built_in_sample_evaluates() {
-        let (evaluation, error) = evaluate_source(SAMPLE, &mut MeshCache::default());
+        let (evaluation, error) = evaluate_source(SAMPLE, &mut MeshCache::default(), false);
         assert!(error.is_none(), "{error:?}");
         assert_eq!(evaluation.shapes.len(), 1);
         assert_eq!(evaluation.shapes[0].parts.len(), 2);
