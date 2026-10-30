@@ -99,15 +99,8 @@ docs/
 - Properties panel with drag-editable numeric parameters.
 - Parameter edits apply on drag release, Enter, or focus loss.
 - Edits write back to the source, then re-evaluate.
-- Built-in sample:
-
-```scad
-size = [2, 2, 2];
-difference() {
-    cube(size);
-    translate([0.2, 0, 0]) cylinder(0.5, 4);
-}
-```
+- Built-in sample: `assets/sample.scad`, shared by the CLI, viewer, and
+  `hello_cube` example.
 
 - `scripts/screenshot-viewer.sh` captures the UI headlessly through Xvfb and
   ffmpeg, so verification does not open a window on the desktop.

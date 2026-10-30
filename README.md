@@ -74,7 +74,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Run
 
-The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses a built-in cube-with-hole sample.
+The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses the built-in `assets/sample.scad` cube-with-hole sample, which the viewer and the `hello_cube` example also load.
 
 ```sh
 cargo run -p visual-openscad -- path/to/model.scad

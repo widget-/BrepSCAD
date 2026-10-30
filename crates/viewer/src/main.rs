@@ -15,12 +15,7 @@ use visual_openscad_kernel_truck::TruckKernel;
 use visual_openscad_scad_eval::{Evaluation, MeshCache, TreeNode, evaluate_with_cache};
 use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
-const SAMPLE: &str = r#"size = [2, 2, 2];
-difference() {
-    cube(size);
-    translate([0.2, 0, 0]) cylinder(0.5, 4);
-}
-"#;
+const SAMPLE: &str = include_str!("../../../assets/sample.scad");
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {

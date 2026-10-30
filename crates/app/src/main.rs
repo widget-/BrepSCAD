@@ -2,13 +2,7 @@ use anyhow::{Context, Result};
 use visual_openscad_kernel_truck::TruckKernel;
 use visual_openscad_scad_eval::evaluate_to_meshes;
 
-const DEFAULT_SOURCE: &str = r#"
-size = [2, 2, 2];
-difference() {
-    cube(size);
-    cylinder(0.5, 4);
-}
-"#;
+const DEFAULT_SOURCE: &str = include_str!("../../../assets/sample.scad");
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
