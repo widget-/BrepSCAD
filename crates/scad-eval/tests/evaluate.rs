@@ -1,5 +1,6 @@
 use visual_openscad_kernel_truck::TruckKernel;
 use visual_openscad_scad_eval::{EvalError, evaluate, evaluate_to_meshes};
+use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
 #[test]
 fn evaluates_a_cube() {
@@ -51,6 +52,27 @@ fn exposes_selectable_operand_parts() {
             .iter()
             .all(|part| !part.mesh.positions.is_empty())
     );
+}
+
+#[test]
+fn parameter_ranges_edit_the_expected_literal() {
+    let source = "size = [2, 2, 2];\ndifference() { cube(size); cylinder(0.5, 4); }\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let part = &evaluation.shapes[0].parts[0];
+    let parameter = part
+        .parameters
+        .iter()
+        .find(|parameter| parameter.value == 2.0)
+        .expect("size literal");
+
+    let range = TextRange::new(
+        TextSize::from(parameter.range.start as u32),
+        TextSize::from(parameter.range.end as u32),
+    );
+    let edited = apply_edit(source, &TextEdit::new(range, "3")).expect("edit");
+
+    assert!(edited.contains("size = [3, 2, 2];"), "{edited}");
 }
 
 #[test]

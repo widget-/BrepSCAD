@@ -7,6 +7,7 @@ use std::time::Instant;
 use camera::Camera;
 use eframe::egui;
 use eframe::wgpu;
+use egui::containers::scroll_area::ScrollSource;
 use glam::{Vec2, Vec3};
 use renderer::MeshRenderer;
 use visual_openscad_kernel_api::Mesh;
@@ -45,6 +46,14 @@ struct PickPart {
     triangle_count: usize,
 }
 
+#[derive(Debug, Clone)]
+struct ParameterDraft {
+    range: Range<usize>,
+    source: String,
+    value: f64,
+    line: usize,
+}
+
 struct ViewerApp {
     source: String,
     evaluation: Evaluation,
@@ -54,6 +63,7 @@ struct ViewerApp {
     renderer: MeshRenderer,
     camera: Camera,
     selected_part: Option<(usize, usize)>,
+    parameters: Vec<ParameterDraft>,
     error: Option<String>,
     pending_evaluate: bool,
     last_eval_ms: f64,
@@ -82,6 +92,7 @@ impl ViewerApp {
             renderer,
             camera,
             selected_part: None,
+            parameters: Vec::new(),
             error,
             pending_evaluate: false,
             last_eval_ms: 0.0,
@@ -102,10 +113,45 @@ impl ViewerApp {
             self.pick_parts = pick_parts;
             self.evaluation = evaluation;
             self.selected_part = None;
+            self.parameters.clear();
         }
 
         self.error = error;
         self.last_eval_ms = started.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    fn select_part(&mut self, selection: Option<(usize, usize)>) {
+        if self.selected_part == selection {
+            return;
+        }
+
+        self.selected_part = selection;
+        self.parameters.clear();
+
+        let Some((shape_index, part_index)) = selection else {
+            return;
+        };
+        let Some(part) = self
+            .evaluation
+            .shapes
+            .get(shape_index)
+            .and_then(|shape| shape.parts.get(part_index))
+        else {
+            self.selected_part = None;
+            return;
+        };
+
+        let source = &self.source;
+        self.parameters = part
+            .parameters
+            .iter()
+            .map(|parameter| ParameterDraft {
+                range: parameter.range.clone(),
+                source: parameter.source.clone(),
+                value: parameter.value,
+                line: line_number(source, parameter.range.start),
+            })
+            .collect();
     }
 
     fn apply_parameter_edit(&mut self, range: Range<usize>, replacement: String) {
@@ -117,6 +163,7 @@ impl ViewerApp {
             Ok(source) => {
                 self.source = source;
                 self.selected_part = None;
+                self.parameters.clear();
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error.to_string()),
@@ -144,19 +191,16 @@ impl ViewerApp {
             return;
         };
 
-        let (module, source_range, mut parameters) = match self
+        let (module, source_range) = match self
             .evaluation
             .shapes
             .get(shape_index)
             .and_then(|shape| shape.parts.get(part_index))
         {
-            Some(part) => (
-                part.module.clone(),
-                part.source_range.clone(),
-                part.parameters.clone(),
-            ),
+            Some(part) => (part.module.clone(), part.source_range.clone()),
             None => {
                 self.selected_part = None;
+                self.parameters.clear();
                 return;
             }
         };
@@ -166,20 +210,23 @@ impl ViewerApp {
             source_range.start, source_range.end
         ));
 
-        if parameters.is_empty() {
+        if self.parameters.is_empty() {
             ui.label("No editable numbers in this part.");
             return;
         }
 
         let mut apply = None;
-        for parameter in &mut parameters {
+        for parameter in &mut self.parameters {
             ui.horizontal(|ui| {
-                let line = line_number(&self.source, parameter.range.start);
-                ui.label(format!("line {line}"));
+                ui.label(format!("line {}", parameter.line));
                 let response = ui.add(egui::DragValue::new(&mut parameter.value).speed(0.01));
                 ui.monospace(&parameter.source);
-                if response.drag_stopped() || response.lost_focus() {
-                    apply = Some((parameter.range.clone(), format!("{}", parameter.value)));
+                let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if response.drag_stopped()
+                    || response.lost_focus()
+                    || (enter && response.has_focus())
+                {
+                    apply = Some((parameter.range.clone(), format_number(parameter.value)));
                 }
             });
         }
@@ -222,26 +269,35 @@ impl eframe::App for ViewerApp {
             .resizable(true)
             .default_width(420.0)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Source");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.source)
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(20),
-                    );
+                egui::ScrollArea::vertical()
+                    .scroll_source(ScrollSource {
+                        drag: false,
+                        ..ScrollSource::default()
+                    })
+                    .show(ui, |ui| {
+                        ui.heading("Source");
+                        let source_response = ui.add(
+                            egui::TextEdit::multiline(&mut self.source)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(20),
+                        );
+                        if source_response.changed() {
+                            self.selected_part = None;
+                            self.parameters.clear();
+                        }
 
-                    if let Some(error) = &self.error {
-                        ui.colored_label(egui::Color32::RED, error);
-                    }
+                        if let Some(error) = &self.error {
+                            ui.colored_label(egui::Color32::RED, error);
+                        }
 
-                    ui.separator();
-                    ui.label(format!("{} shape(s)", self.evaluation.shapes.len()));
-                    ui.label(format!("{} triangles", self.mesh.triangle_count()));
-                    ui.label(format!("{} vertices", self.mesh.positions.len()));
+                        ui.separator();
+                        ui.label(format!("{} shape(s)", self.evaluation.shapes.len()));
+                        ui.label(format!("{} triangles", self.mesh.triangle_count()));
+                        ui.label(format!("{} vertices", self.mesh.positions.len()));
 
-                    self.properties_ui(ui);
-                });
+                        self.properties_ui(ui);
+                    });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -267,7 +323,7 @@ impl eframe::App for ViewerApp {
                         ((pointer.x - rect.left()) / rect.width()) * 2.0 - 1.0,
                         1.0 - ((pointer.y - rect.top()) / rect.height()) * 2.0,
                     );
-                    self.selected_part = self.pick_part(ndc, aspect);
+                    self.select_part(self.pick_part(ndc, aspect));
                 }
             }
 
@@ -302,6 +358,10 @@ impl eframe::App for ViewerApp {
                 egui::Color32::from_gray(180),
             );
         });
+
+        if self.pending_evaluate {
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -408,6 +468,19 @@ fn line_number(source: &str, offset: usize) -> usize {
         + 1
 }
 
+fn format_number(value: f64) -> String {
+    let mut text = format!("{value:.6}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +550,12 @@ mod tests {
     fn line_numbers_are_one_based() {
         assert_eq!(line_number("a\nb\nc", 2), 2);
         assert_eq!(line_number("a\nb\nc", 0), 1);
+    }
+
+    #[test]
+    fn formats_parameter_values_compactly() {
+        assert_eq!(format_number(2.0), "2");
+        assert_eq!(format_number(2.5), "2.5");
+        assert_eq!(format_number(2.1 + 1.0e-9), "2.1");
     }
 }
