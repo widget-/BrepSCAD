@@ -347,6 +347,69 @@ fn round_trips_conditional_expressions() {
 }
 
 #[test]
+fn round_trips_indexing_and_let_expressions() {
+    let source = "v = [1, 2, 3];\nx = v[0] + v[1];\ny = let (a = 1, b = a + 1) a + b;\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::INDEX_EXPR)
+            .count(),
+        2
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::LET_EXPR)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn round_trips_list_comprehensions() {
+    let source = "\
+pts = [for (i = [0:3]) [i, i * 2]];\n\
+filtered = [for (i = [0:3]) if (i > 1) i];\n\
+with_else = [if (true) 1 else 2, 3];\n\
+nested = [for (i = [0:1]) for (j = [0:1]) i + j];\n\
+lets = [for (i = [0:1]) let (j = i * 2) j];\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::FOR_EXPR)
+            .count(),
+        5
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::IF_EXPR)
+            .count(),
+        2
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::LET_EXPR)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),

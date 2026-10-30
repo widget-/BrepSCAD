@@ -393,20 +393,44 @@ impl<'a> Parser<'a> {
             self.finish();
             true
         } else {
-            self.primary()
+            self.postfix()
         }
+    }
+
+    fn postfix(&mut self) -> bool {
+        let checkpoint = self.builder.checkpoint();
+        if !self.primary() {
+            return false;
+        }
+        while self.at(SyntaxKind::L_BRACK) {
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::INDEX_EXPR.into());
+            self.bump();
+            if !self.expression() {
+                self.finish();
+                return false;
+            }
+            if !self.expect(SyntaxKind::R_BRACK) {
+                self.finish();
+                return false;
+            }
+            self.finish();
+        }
+        true
     }
 
     fn primary(&mut self) -> bool {
         match self.current() {
-            SyntaxKind::IDENT => {
-                if self.peek(1) == SyntaxKind::L_PAREN {
-                    self.call_expr()
-                } else {
+            SyntaxKind::IDENT => match self.current_text() {
+                "let" if self.peek(1) == SyntaxKind::L_PAREN => self.let_expr(),
+                "for" if self.peek(1) == SyntaxKind::L_PAREN => self.for_expr(),
+                "if" if self.peek(1) == SyntaxKind::L_PAREN => self.if_expr(),
+                _ if self.peek(1) == SyntaxKind::L_PAREN => self.call_expr(),
+                _ => {
                     self.bump();
                     true
                 }
-            }
+            },
             SyntaxKind::NUMBER | SyntaxKind::TRUE | SyntaxKind::FALSE => {
                 self.bump();
                 true
@@ -418,6 +442,53 @@ impl<'a> Parser<'a> {
                 false
             }
         }
+    }
+
+    fn let_expr(&mut self) -> bool {
+        self.start(SyntaxKind::LET_EXPR);
+        self.bump();
+        if !self.arg_list() || !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
+    }
+
+    fn for_expr(&mut self) -> bool {
+        self.start(SyntaxKind::FOR_EXPR);
+        self.bump();
+        if !self.arg_list() || !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
+    }
+
+    fn if_expr(&mut self) -> bool {
+        self.start(SyntaxKind::IF_EXPR);
+        self.bump();
+        if !self.arg_list() {
+            self.finish();
+            return false;
+        }
+        if !self.expression() {
+            self.finish();
+            return false;
+        }
+        if self.at_keyword("else") {
+            self.start(SyntaxKind::ELSE);
+            self.bump();
+            if !self.expression() {
+                self.finish();
+                self.finish();
+                return false;
+            }
+            self.finish();
+        }
+        self.finish();
+        true
     }
 
     fn call_expr(&mut self) -> bool {

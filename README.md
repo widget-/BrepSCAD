@@ -87,7 +87,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | Arithmetic, comparisons, logic, ranges, and ternary `? :`; no strings. |
+| Expressions | ✔ | Arithmetic, comparisons, logic, ranges, ternary `? :`, `let`, indexing, and list comprehensions; no strings. |
 | Comments and whitespace | ✔ | |
 | `module` declarations | ✔ | Parameters with defaults; `children()` and `$children`; recursive and nested modules. |
 | `function` declarations | ✔ | Positional/named parameters with defaults, recursion, and dynamic scope. |

@@ -57,6 +57,10 @@ pub enum SyntaxKind {
     CALL_EXPR,
     QUESTION,
     CONDITIONAL_EXPR,
+    INDEX_EXPR,
+    FOR_EXPR,
+    IF_EXPR,
+    LET_EXPR,
     __LAST,
 }
 
@@ -130,6 +134,10 @@ impl Language for ScadLanguage {
             49 => SyntaxKind::CALL_EXPR,
             50 => SyntaxKind::QUESTION,
             51 => SyntaxKind::CONDITIONAL_EXPR,
+            52 => SyntaxKind::INDEX_EXPR,
+            53 => SyntaxKind::FOR_EXPR,
+            54 => SyntaxKind::IF_EXPR,
+            55 => SyntaxKind::LET_EXPR,
             _ => SyntaxKind::ERROR,
         }
     }

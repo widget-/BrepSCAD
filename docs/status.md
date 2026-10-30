@@ -54,8 +54,8 @@ vendor/
   positional and named arguments, numbers (including negative literals),
   identifiers, vectors, booleans, ranges, comments, whitespace.
 - Expressions support `+`, `-`, `*`, `/`, `%`, comparisons, `&&`, `||`, `!`,
-  ranges, ternary `? :`, call expressions, unary signs, and parentheses; the
-  tree keeps every token.
+  ranges, ternary `? :`, call expressions, postfix indexing, `let`, list
+  comprehensions, unary signs, and parentheses; the tree keeps every token.
 - `for` / `if` / `else` statements, including blocks and single-statement bodies.
 - Transform and boolean calls support either a block or a single child module
   call.
@@ -74,6 +74,11 @@ vendor/
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
   `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
   `max`, `norm`, `cross`, `len`, `concat`, `is_num`, `is_bool`, and `is_list`.
+- Postfix indexing reads vector elements and matrix rows: `v[2]`, `m[1][0]`.
+- `let (a = ..., b = ...) expr` binds sequential locals for one expression.
+- List comprehensions support multiple bindings, nesting, `if` filters with
+  optional `else`, and `let`; nested `for` comprehensions flatten, while a
+  vector-valued body becomes a matrix row.
 - Module and loop scopes shadow caller variables and restore them on exit.
   Module and function bodies read caller variables (dynamic scoping, as in
   OpenSCAD).
@@ -267,7 +272,8 @@ For headless UI snapshots, see
   - no strings
   - built-in functions omit the string, random, `search`, and `lookup` families
   - functions are not first-class values
-  - no list comprehensions or postfix indexing (`v[0]`)
+  - indexing selects a single element or row; slices and string indexing are not
+    supported
   - `children(n)` accepts one integer index; vector or range child selection is
     not supported
   - module bodies return their shapes directly, so a module call does not add a
@@ -308,8 +314,8 @@ For headless UI snapshots, see
 
 1. **Finish the language layer**
    - `include` / `use` with file resolution.
-   - Strings, list comprehensions, and postfix indexing.
-   - More built-ins: `search`, `lookup`, `rands`, `str`, `chr`, `ord`, `version`.
+   - Strings and string functions (`str`, `chr`, `ord`).
+   - Vector slices and remaining built-ins (`search`, `lookup`, `rands`).
 2. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `offset` chamfer options.
    - `linear_extrude` options: center, twist, scale, slices.

@@ -1483,6 +1483,9 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::GROUP => self.group_value(node),
             SyntaxKind::CALL_EXPR => self.call_value(node),
             SyntaxKind::CONDITIONAL_EXPR => self.conditional_value(node),
+            SyntaxKind::INDEX_EXPR => self.index_value(node),
+            SyntaxKind::FOR_EXPR | SyntaxKind::IF_EXPR => self.sequence_value(node),
+            SyntaxKind::LET_EXPR => self.let_value(node),
             kind => Err(EvalError::Expression(format!(
                 "unexpected node in expression: {kind:?}"
             ))),
@@ -1715,6 +1718,198 @@ impl<K: Kernel> Evaluator<'_, K> {
         }
     }
 
+    fn index_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut base = None;
+        let mut index = None;
+        let mut in_index = false;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::L_BRACK => in_index = true,
+                SyntaxKind::R_BRACK => {}
+                kind if kind.is_trivia() => {}
+                _ if !in_index => base = Some(element),
+                _ => index = Some(element),
+            }
+        }
+
+        let base = self.element_value(
+            base.ok_or_else(|| EvalError::Expression("missing indexed value".to_owned()))?,
+        )?;
+        let index = self.element_value(
+            index.ok_or_else(|| EvalError::Expression("missing index".to_owned()))?,
+        )?;
+        let index = index.as_number("index")?;
+        if index < 0.0 || index.fract() != 0.0 {
+            return Err(EvalError::Expression(
+                "index must be a non-negative integer".to_owned(),
+            ));
+        }
+        let index = index as usize;
+
+        match base {
+            Value::Vector(values) => values
+                .get(index)
+                .copied()
+                .map(Value::Number)
+                .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
+            Value::Matrix(rows) => rows
+                .get(index)
+                .cloned()
+                .map(Value::Vector)
+                .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
+            _ => Err(EvalError::Expression(
+                "only vectors and matrices can be indexed".to_owned(),
+            )),
+        }
+    }
+
+    fn sequence_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        values_to_value(self.comprehension_values(&NodeOrToken::Node(node.clone()))?)
+    }
+
+    fn let_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let arg_list = comprehension_arguments(node)?;
+        let body = comprehension_body(node)?;
+        self.with_let_bindings(&arg_list, |evaluator| evaluator.element_value(body))
+    }
+
+    fn comprehension_values(&mut self, element: &SyntaxElement) -> Result<Vec<Value>, EvalError> {
+        let NodeOrToken::Node(node) = element else {
+            return Ok(vec![self.element_value(element.clone())?]);
+        };
+        match node.kind() {
+            SyntaxKind::FOR_EXPR => {
+                let arg_list = comprehension_arguments(node)?;
+                let bindings = self.comprehension_bindings(&arg_list)?;
+                if bindings.is_empty() {
+                    return Err(EvalError::Expression(
+                        "list comprehension needs at least one binding".to_owned(),
+                    ));
+                }
+                let body = comprehension_body(node)?;
+                let mut values = Vec::new();
+                self.for_comprehension_values(&bindings, 0, &body, &mut values)?;
+                Ok(values)
+            }
+            SyntaxKind::IF_EXPR => {
+                let arg_list = comprehension_arguments(node)?;
+                let args = self.arg_list(arg_list)?;
+                if !args.named.is_empty() || args.positional.len() != 1 {
+                    return Err(EvalError::Expression(
+                        "list comprehension condition needs one argument".to_owned(),
+                    ));
+                }
+                let condition = args.positional[0].as_boolean("if")?;
+                let branch = if condition {
+                    comprehension_body(node)?
+                } else {
+                    match else_body(node) {
+                        Some(body) => body,
+                        None => return Ok(Vec::new()),
+                    }
+                };
+                self.comprehension_values(&branch)
+            }
+            SyntaxKind::LET_EXPR => {
+                let arg_list = comprehension_arguments(node)?;
+                let body = comprehension_body(node)?;
+                self.with_let_bindings(&arg_list, |evaluator| evaluator.comprehension_values(&body))
+            }
+            _ => Ok(vec![self.node_value(node)?]),
+        }
+    }
+
+    fn for_comprehension_values(
+        &mut self,
+        bindings: &[(String, Vec<Value>)],
+        index: usize,
+        body: &SyntaxElement,
+        values: &mut Vec<Value>,
+    ) -> Result<(), EvalError> {
+        if index == bindings.len() {
+            values.extend(self.comprehension_values(body)?);
+            return Ok(());
+        }
+
+        let (name, items) = &bindings[index];
+        for value in items {
+            let mut scope = Scope::default();
+            scope.variables.insert(name.clone(), value.clone());
+            self.scopes.push(scope);
+            let result = self.for_comprehension_values(bindings, index + 1, body, values);
+            self.scopes.pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    fn comprehension_bindings(
+        &mut self,
+        arg_list: &SyntaxNode,
+    ) -> Result<Vec<(String, Vec<Value>)>, EvalError> {
+        let mut bindings = Vec::new();
+        for element in arg_list.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::L_PAREN | SyntaxKind::R_PAREN | SyntaxKind::COMMA => {}
+                kind if kind.is_trivia() => {}
+                SyntaxKind::NAMED_ARG => {
+                    let Some(child) = element.into_node() else {
+                        continue;
+                    };
+                    let name = first_ident(&child)
+                        .ok_or_else(|| EvalError::Parse("missing binding name".to_owned()))?;
+                    let value = self.expression_after_eq(&child)?.ok_or_else(|| {
+                        EvalError::Parse(format!("missing value for binding {name}"))
+                    })?;
+                    bindings.push((name.clone(), loop_values(&name, value)?));
+                }
+                _ => {
+                    return Err(EvalError::Expression(
+                        "list comprehension bindings must be named".to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(bindings)
+    }
+
+    fn with_let_bindings<T>(
+        &mut self,
+        arg_list: &SyntaxNode,
+        f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
+        self.with_scope(Scope::default(), |evaluator| {
+            for element in arg_list.children_with_tokens() {
+                match element.kind() {
+                    SyntaxKind::L_PAREN | SyntaxKind::R_PAREN | SyntaxKind::COMMA => {}
+                    kind if kind.is_trivia() => {}
+                    SyntaxKind::NAMED_ARG => {
+                        let Some(child) = element.into_node() else {
+                            continue;
+                        };
+                        let name = first_ident(&child)
+                            .ok_or_else(|| EvalError::Parse("missing binding name".to_owned()))?;
+                        let value = evaluator.expression_after_eq(&child)?.ok_or_else(|| {
+                            EvalError::Parse(format!("missing value for binding {name}"))
+                        })?;
+                        evaluator
+                            .scopes
+                            .last_mut()
+                            .expect("let scope")
+                            .variables
+                            .insert(name, value);
+                    }
+                    _ => {
+                        return Err(EvalError::Expression(
+                            "let bindings must be named".to_owned(),
+                        ));
+                    }
+                }
+            }
+            f(evaluator)
+        })
+    }
+
     fn binary_expr_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
         let mut op = None;
         let mut left = None;
@@ -1817,20 +2012,17 @@ impl<K: Kernel> Evaluator<'_, K> {
             match element.kind() {
                 SyntaxKind::L_BRACK | SyntaxKind::R_BRACK | SyntaxKind::COMMA => {}
                 kind if kind.is_trivia() => {}
-                _ => match self.element_value(element)? {
-                    Value::Number(value) => numbers.push(value),
-                    Value::Boolean(_) => {
-                        return Err(EvalError::Expression(
-                            "vectors cannot contain booleans".to_owned(),
-                        ));
+                _ => {
+                    if let NodeOrToken::Node(child) = &element {
+                        if matches!(child.kind(), SyntaxKind::FOR_EXPR | SyntaxKind::IF_EXPR) {
+                            for value in self.comprehension_values(&element)? {
+                                push_sequence_value(value, &mut numbers, &mut rows)?;
+                            }
+                            continue;
+                        }
                     }
-                    Value::Vector(values) => rows.push(values),
-                    Value::Matrix(_) => {
-                        return Err(EvalError::Expression(
-                            "vectors support at most two levels".to_owned(),
-                        ));
-                    }
-                },
+                    push_sequence_value(self.element_value(element)?, &mut numbers, &mut rows)?;
+                }
             }
         }
 
@@ -1939,6 +2131,78 @@ fn function_expression(node: &SyntaxNode) -> Option<SyntaxElement> {
         }
     }
     None
+}
+
+fn comprehension_arguments(node: &SyntaxNode) -> Result<SyntaxNode, EvalError> {
+    node.children()
+        .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+        .ok_or_else(|| EvalError::Expression("missing comprehension arguments".to_owned()))
+}
+
+fn comprehension_body(node: &SyntaxNode) -> Result<SyntaxElement, EvalError> {
+    let mut after_args = false;
+    for element in node.children_with_tokens() {
+        if element.kind() == SyntaxKind::ARG_LIST {
+            after_args = true;
+            continue;
+        }
+        if !after_args || element.kind().is_trivia() || element.kind() == SyntaxKind::ELSE {
+            continue;
+        }
+        return Ok(element);
+    }
+    Err(EvalError::Expression(
+        "missing comprehension body".to_owned(),
+    ))
+}
+
+fn else_body(node: &SyntaxNode) -> Option<SyntaxElement> {
+    let else_node = node
+        .children()
+        .find(|child| child.kind() == SyntaxKind::ELSE)?;
+    else_node
+        .children_with_tokens()
+        .filter(|element| !element.kind().is_trivia())
+        .nth(1)
+}
+
+fn push_sequence_value(
+    value: Value,
+    numbers: &mut Vec<f64>,
+    rows: &mut Vec<Vec<f64>>,
+) -> Result<(), EvalError> {
+    match value {
+        Value::Number(value) => numbers.push(value),
+        Value::Vector(values) => rows.push(values),
+        Value::Boolean(_) => {
+            return Err(EvalError::Expression(
+                "vectors cannot contain booleans".to_owned(),
+            ));
+        }
+        Value::Matrix(_) => {
+            return Err(EvalError::Expression(
+                "vectors support at most two levels".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn values_to_value(values: Vec<Value>) -> Result<Value, EvalError> {
+    let mut numbers = Vec::new();
+    let mut rows = Vec::new();
+    for value in values {
+        push_sequence_value(value, &mut numbers, &mut rows)?;
+    }
+    if rows.is_empty() {
+        Ok(Value::Vector(numbers))
+    } else if numbers.is_empty() {
+        Ok(Value::Matrix(rows))
+    } else {
+        Err(EvalError::Expression(
+            "cannot mix scalars and vectors in one vector".to_owned(),
+        ))
+    }
 }
 
 fn single_value<'a>(name: &str, args: &'a Arguments) -> Result<&'a Value, EvalError> {
