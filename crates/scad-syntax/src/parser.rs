@@ -87,6 +87,10 @@ impl<'a> Parser<'a> {
                     self.module_declaration();
                     return;
                 }
+                "function" if self.peek(1) == SyntaxKind::IDENT => {
+                    self.function_declaration();
+                    return;
+                }
                 _ => {}
             }
         }
@@ -119,6 +123,20 @@ impl<'a> Parser<'a> {
             self.statement();
         } else {
             self.error("expected a module body");
+            self.recover_statement();
+        }
+        self.finish();
+    }
+
+    fn function_declaration(&mut self) {
+        self.start(SyntaxKind::FUNCTION_DECLARATION);
+        self.bump();
+        if !self.expect(SyntaxKind::IDENT)
+            || !self.param_list()
+            || !self.expect(SyntaxKind::EQ)
+            || !self.expression()
+            || !self.expect(SyntaxKind::SEMICOLON)
+        {
             self.recover_statement();
         }
         self.finish();
@@ -302,7 +320,29 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> bool {
-        self.binary_expr(0)
+        let checkpoint = self.builder.checkpoint();
+        if !self.binary_expr(0) {
+            return false;
+        }
+        if self.at(SyntaxKind::QUESTION) {
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::CONDITIONAL_EXPR.into());
+            self.bump();
+            if !self.expression() {
+                self.finish();
+                return false;
+            }
+            if !self.expect(SyntaxKind::COLON) {
+                self.finish();
+                return false;
+            }
+            if !self.expression() {
+                self.finish();
+                return false;
+            }
+            self.finish();
+        }
+        true
     }
 
     fn binary_expr(&mut self, min_precedence: u8) -> bool {
@@ -359,7 +399,15 @@ impl<'a> Parser<'a> {
 
     fn primary(&mut self) -> bool {
         match self.current() {
-            SyntaxKind::NUMBER | SyntaxKind::IDENT | SyntaxKind::TRUE | SyntaxKind::FALSE => {
+            SyntaxKind::IDENT => {
+                if self.peek(1) == SyntaxKind::L_PAREN {
+                    self.call_expr()
+                } else {
+                    self.bump();
+                    true
+                }
+            }
+            SyntaxKind::NUMBER | SyntaxKind::TRUE | SyntaxKind::FALSE => {
                 self.bump();
                 true
             }
@@ -370,6 +418,17 @@ impl<'a> Parser<'a> {
                 false
             }
         }
+    }
+
+    fn call_expr(&mut self) -> bool {
+        self.start(SyntaxKind::CALL_EXPR);
+        self.bump();
+        if !self.arg_list() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
     }
 
     fn group(&mut self) -> bool {

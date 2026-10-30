@@ -179,6 +179,7 @@ impl<'a> Lexer<'a> {
                 '<' => Some(SyntaxKind::LT),
                 '>' => Some(SyntaxKind::GT),
                 '!' => Some(SyntaxKind::BANG),
+                '?' => Some(SyntaxKind::QUESTION),
                 '+' => Some(SyntaxKind::PLUS),
                 '-' => Some(SyntaxKind::MINUS),
                 '*' => Some(SyntaxKind::STAR),

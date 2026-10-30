@@ -53,6 +53,10 @@ pub enum SyntaxKind {
     MODULE_DECLARATION,
     PARAM_LIST,
     PARAM,
+    FUNCTION_DECLARATION,
+    CALL_EXPR,
+    QUESTION,
+    CONDITIONAL_EXPR,
     __LAST,
 }
 
@@ -122,6 +126,10 @@ impl Language for ScadLanguage {
             45 => SyntaxKind::MODULE_DECLARATION,
             46 => SyntaxKind::PARAM_LIST,
             47 => SyntaxKind::PARAM,
+            48 => SyntaxKind::FUNCTION_DECLARATION,
+            49 => SyntaxKind::CALL_EXPR,
+            50 => SyntaxKind::QUESTION,
+            51 => SyntaxKind::CONDITIONAL_EXPR,
             _ => SyntaxKind::ERROR,
         }
     }

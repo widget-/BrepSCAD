@@ -165,7 +165,7 @@ pub fn evaluate_with_cache_options<K: Kernel>(
             legacy_centering: options.legacy_centering,
         };
 
-        evaluator.register_modules(&parsed.syntax());
+        evaluator.register_declarations(&parsed.syntax());
         for statement in parsed.syntax().children() {
             roots.extend(evaluator.statement(statement, Transform::IDENTITY)?);
         }
@@ -229,6 +229,7 @@ struct Scope {
     variables: HashMap<String, Value>,
     assignments: HashMap<String, SyntaxNode>,
     modules: HashMap<String, SyntaxNode>,
+    functions: HashMap<String, SyntaxNode>,
 }
 
 #[derive(Debug)]
@@ -246,6 +247,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 Ok(Vec::new())
             }
             SyntaxKind::MODULE_DECLARATION => Ok(Vec::new()),
+            SyntaxKind::FUNCTION_DECLARATION => Ok(Vec::new()),
             SyntaxKind::MODULE_CALL => self.module_call(node, parent),
             _ => Ok(Vec::new()),
         }
@@ -467,15 +469,23 @@ impl<K: Kernel> Evaluator<'_, K> {
         result
     }
 
-    fn register_modules(&mut self, node: &SyntaxNode) {
-        let definitions = node
+    fn register_declarations(&mut self, node: &SyntaxNode) {
+        let modules = node
             .children()
             .filter(|child| child.kind() == SyntaxKind::MODULE_DECLARATION)
             .filter_map(|child| module_name(&child).map(|name| (name, child)))
             .collect::<Vec<_>>();
+        let functions = node
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::FUNCTION_DECLARATION)
+            .filter_map(|child| module_name(&child).map(|name| (name, child)))
+            .collect::<Vec<_>>();
         let scope = self.scopes.last_mut().expect("root scope");
-        for (name, declaration) in definitions {
+        for (name, declaration) in modules {
             scope.modules.insert(name, declaration);
+        }
+        for (name, declaration) in functions {
+            scope.functions.insert(name, declaration);
         }
     }
 
@@ -484,6 +494,13 @@ impl<K: Kernel> Evaluator<'_, K> {
             .iter()
             .rev()
             .find_map(|scope| scope.modules.get(name).cloned())
+    }
+
+    fn lookup_function(&self, name: &str) -> Option<SyntaxNode> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.functions.get(name).cloned())
     }
 
     fn assignment_view(&self) -> HashMap<String, SyntaxNode> {
@@ -1306,7 +1323,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn block(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
-        self.register_modules(&node);
+        self.register_declarations(&node);
         let mut nodes = Vec::new();
         for statement in node.children() {
             nodes.extend(self.statement(statement, parent)?);
@@ -1464,9 +1481,237 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::BINARY_EXPR => self.binary_expr_value(node),
             SyntaxKind::UNARY_EXPR => self.unary_expr_value(node),
             SyntaxKind::GROUP => self.group_value(node),
+            SyntaxKind::CALL_EXPR => self.call_value(node),
+            SyntaxKind::CONDITIONAL_EXPR => self.conditional_value(node),
             kind => Err(EvalError::Expression(format!(
                 "unexpected node in expression: {kind:?}"
             ))),
+        }
+    }
+
+    fn call_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let name = first_ident(node)
+            .ok_or_else(|| EvalError::Parse("missing function name".to_owned()))?;
+        let args = match node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+        {
+            Some(arg_list) => self.arg_list(arg_list)?,
+            None => Arguments::default(),
+        };
+        match self.lookup_function(&name) {
+            Some(declaration) => self.user_function_call(&name, &declaration, args),
+            None => self.builtin_function(&name, &args),
+        }
+    }
+
+    fn user_function_call(
+        &mut self,
+        name: &str,
+        declaration: &SyntaxNode,
+        args: Arguments,
+    ) -> Result<Value, EvalError> {
+        let parameters = declaration
+            .children()
+            .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
+            .map(|list| declaration_parameters(&list))
+            .unwrap_or_default();
+
+        for named in args.named.keys() {
+            if !parameters.iter().any(|(param, _)| param == named) {
+                return Err(bad_args(
+                    name,
+                    format!("unsupported named argument {named}"),
+                ));
+            }
+        }
+        if args.positional.len() > parameters.len() {
+            return Err(bad_args(name, "too many arguments"));
+        }
+
+        let mut bindings = HashMap::new();
+        for (index, value) in args.positional.iter().enumerate() {
+            bindings.insert(parameters[index].0.clone(), value.clone());
+        }
+        for (param, value) in &args.named {
+            bindings.insert(param.clone(), value.clone());
+        }
+
+        let body = function_expression(declaration)
+            .ok_or_else(|| bad_args(name, "missing function body"))?;
+        let special = args.special.clone();
+
+        self.with_scope(Scope::default(), |evaluator| {
+            {
+                let scope = evaluator.scopes.last_mut().expect("function scope");
+                for (name, value) in &special {
+                    scope.variables.insert(name.clone(), value.clone());
+                }
+            }
+            for (param, default) in &parameters {
+                let value = match bindings.get(param) {
+                    Some(value) => value.clone(),
+                    None => match default {
+                        Some(expression) => evaluator.element_value(expression.clone())?,
+                        None => {
+                            return Err(bad_args(name, format!("missing argument {param}")));
+                        }
+                    },
+                };
+                evaluator
+                    .scopes
+                    .last_mut()
+                    .expect("function scope")
+                    .variables
+                    .insert(param.clone(), value);
+            }
+            evaluator.element_value(body.clone())
+        })
+    }
+
+    fn builtin_function(&self, name: &str, args: &Arguments) -> Result<Value, EvalError> {
+        args.ensure_known(name, &[])?;
+
+        match name {
+            "abs" | "sign" | "sqrt" | "ln" | "log" | "exp" | "floor" | "ceil" | "round" | "sin"
+            | "cos" | "tan" | "asin" | "acos" | "atan" => {
+                let value = single_number(name, args)?;
+                let result = match name {
+                    "abs" => value.abs(),
+                    "sign" => {
+                        if value == 0.0 {
+                            0.0
+                        } else {
+                            value.signum()
+                        }
+                    }
+                    "sqrt" => value.sqrt(),
+                    "ln" => value.ln(),
+                    "log" => value.log10(),
+                    "exp" => value.exp(),
+                    "floor" => value.floor(),
+                    "ceil" => value.ceil(),
+                    "round" => value.round(),
+                    "sin" => value.to_radians().sin(),
+                    "cos" => value.to_radians().cos(),
+                    "tan" => value.to_radians().tan(),
+                    "asin" => value.asin().to_degrees(),
+                    "acos" => value.acos().to_degrees(),
+                    _ => value.atan().to_degrees(),
+                };
+                Ok(Value::Number(result))
+            }
+            "atan2" => {
+                let [y, x] = two_numbers(name, args)?;
+                Ok(Value::Number(y.atan2(x).to_degrees()))
+            }
+            "pow" => {
+                let [base, exponent] = two_numbers(name, args)?;
+                Ok(Value::Number(base.powf(exponent)))
+            }
+            "min" | "max" => {
+                let values = number_list(name, args)?;
+                let result = if name == "min" {
+                    values.into_iter().reduce(f64::min)
+                } else {
+                    values.into_iter().reduce(f64::max)
+                };
+                result
+                    .map(Value::Number)
+                    .ok_or_else(|| bad_args(name, "expected at least one number"))
+            }
+            "norm" => {
+                let Value::Vector(values) = single_value(name, args)? else {
+                    return Err(bad_args(name, "expected a vector"));
+                };
+                Ok(Value::Number(
+                    values.iter().map(|value| value * value).sum::<f64>().sqrt(),
+                ))
+            }
+            "cross" => {
+                let [left, right] = two_values(name, args)?;
+                let (Value::Vector(left), Value::Vector(right)) = (left, right) else {
+                    return Err(bad_args(name, "expected two vectors"));
+                };
+                if left.len() != 3 || right.len() != 3 {
+                    return Err(bad_args(name, "expected two 3-element vectors"));
+                }
+                Ok(Value::Vector(vec![
+                    left[1] * right[2] - left[2] * right[1],
+                    left[2] * right[0] - left[0] * right[2],
+                    left[0] * right[1] - left[1] * right[0],
+                ]))
+            }
+            "len" => match single_value(name, args)? {
+                Value::Vector(values) => Ok(Value::Number(values.len() as f64)),
+                Value::Matrix(rows) => Ok(Value::Number(rows.len() as f64)),
+                _ => Err(bad_args(name, "expected a vector or matrix")),
+            },
+            "concat" => {
+                let mut values = Vec::new();
+                for value in &args.positional {
+                    let Value::Vector(items) = value else {
+                        return Err(bad_args(name, "expected vectors"));
+                    };
+                    values.extend(items);
+                }
+                Ok(Value::Vector(values))
+            }
+            "is_num" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::Number(_)
+            ))),
+            "is_bool" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::Boolean(_)
+            ))),
+            "is_list" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::Vector(_) | Value::Matrix(_)
+            ))),
+            _ => Err(EvalError::UnknownFunction(name.to_owned())),
+        }
+    }
+
+    fn conditional_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut condition = None;
+        let mut then_value = None;
+        let mut otherwise = None;
+        let mut stage = 0;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::QUESTION => stage = 1,
+                SyntaxKind::COLON => stage = 2,
+                kind if kind.is_trivia() => {}
+                _ => {
+                    let slot = match stage {
+                        0 => &mut condition,
+                        1 => &mut then_value,
+                        _ => &mut otherwise,
+                    };
+                    if slot.is_some() {
+                        return Err(EvalError::Expression(
+                            "unexpected operand in conditional expression".to_owned(),
+                        ));
+                    }
+                    *slot = Some(element);
+                }
+            }
+        }
+
+        let condition = self.element_value(
+            condition.ok_or_else(|| EvalError::Expression("missing condition".to_owned()))?,
+        )?;
+        if condition.as_boolean("?")? {
+            self.element_value(
+                then_value
+                    .ok_or_else(|| EvalError::Expression("missing true branch".to_owned()))?,
+            )
+        } else {
+            self.element_value(
+                otherwise
+                    .ok_or_else(|| EvalError::Expression("missing false branch".to_owned()))?,
+            )
         }
     }
 
@@ -1680,6 +1925,54 @@ fn loop_values(name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
             format!("loop variable {name} must be a vector or range"),
         )),
     }
+}
+
+fn function_expression(node: &SyntaxNode) -> Option<SyntaxElement> {
+    let mut after_eq = false;
+    for element in node.children_with_tokens() {
+        match element.kind() {
+            SyntaxKind::EQ => after_eq = true,
+            kind if kind.is_trivia() => {}
+            SyntaxKind::SEMICOLON => break,
+            _ if after_eq => return Some(element),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn single_value<'a>(name: &str, args: &'a Arguments) -> Result<&'a Value, EvalError> {
+    if args.positional.len() == 1 {
+        Ok(&args.positional[0])
+    } else {
+        Err(bad_args(name, "expected one argument"))
+    }
+}
+
+fn single_number(name: &str, args: &Arguments) -> Result<f64, EvalError> {
+    single_value(name, args)?.as_number(name)
+}
+
+fn two_values<'a>(name: &str, args: &'a Arguments) -> Result<[&'a Value; 2], EvalError> {
+    match args.positional.as_slice() {
+        [first, second] => Ok([first, second]),
+        _ => Err(bad_args(name, "expected two arguments")),
+    }
+}
+
+fn two_numbers(name: &str, args: &Arguments) -> Result<[f64; 2], EvalError> {
+    let [first, second] = two_values(name, args)?;
+    Ok([first.as_number(name)?, second.as_number(name)?])
+}
+
+fn number_list(name: &str, args: &Arguments) -> Result<Vec<f64>, EvalError> {
+    if let [Value::Vector(values)] = args.positional.as_slice() {
+        return Ok(values.clone());
+    }
+    args.positional
+        .iter()
+        .map(|value| value.as_number(name))
+        .collect()
 }
 
 fn module_name(node: &SyntaxNode) -> Option<String> {

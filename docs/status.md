@@ -49,16 +49,18 @@ vendor/
 - Trivia-preserving lexer.
 - Tolerant recursive-descent parser with error recovery.
 - `TextEdit` / `apply_edit` with bounds and UTF-8 boundary checks.
-- Supported syntax: top-level assignments, module declarations with parameters
-  and defaults, module calls, positional and named arguments, numbers (including
-  negative literals), identifiers, vectors, booleans, ranges, comments,
-  whitespace.
+- Supported syntax: top-level assignments, module and function declarations
+  with parameters and defaults, module calls, function-call expressions,
+  positional and named arguments, numbers (including negative literals),
+  identifiers, vectors, booleans, ranges, comments, whitespace.
 - Expressions support `+`, `-`, `*`, `/`, `%`, comparisons, `&&`, `||`, `!`,
-  ranges, unary signs, and parentheses; the tree keeps every token.
+  ranges, ternary `? :`, call expressions, unary signs, and parentheses; the
+  tree keeps every token.
 - `for` / `if` / `else` statements, including blocks and single-statement bodies.
 - Transform and boolean calls support either a block or a single child module
   call.
-- `module` declarations support block or single-statement bodies.
+- `module` declarations support block or single-statement bodies; `function`
+  declarations use expression bodies.
 
 ### Evaluator
 
@@ -66,8 +68,15 @@ vendor/
 - User modules: declarations are collected per block, so a module can be called
   before its declaration in the same block. Parameters bind positionally or by
   name, defaults can reference earlier parameters, and calls can recurse.
+- User functions: same declaration and binding rules, with expression bodies.
+  Functions can recurse, call other functions, and read caller variables.
+  Conditional expressions (`? :`) evaluate only the selected branch.
+- Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
+  `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
+  `max`, `norm`, `cross`, `len`, `concat`, `is_num`, `is_bool`, and `is_list`.
 - Module and loop scopes shadow caller variables and restore them on exit.
-  Module bodies read caller variables (dynamic scoping, as in OpenSCAD).
+  Module and function bodies read caller variables (dynamic scoping, as in
+  OpenSCAD).
 - `children()` renders all call-site children; `children(n)` selects one by
   index. Children are evaluated in the caller's scope at the transform where
   `children()` appears. `$children` holds the child count.
@@ -151,15 +160,15 @@ vendor/
 
 - Source-faithful editing: `.scad` text is canonical; inspection state is not
   written back.
-- Module definitions are collected at the start of each source file or block,
-  then executed in source order. This permits forward references within a
-  block while keeping nested module definitions scoped to their enclosing
+- Module and function definitions are collected at the start of each source
+  file or block, then executed in source order. This permits forward references
+  within a block while keeping nested definitions scoped to their enclosing
   module.
-- Module and loop variables use a scope stack. Assignments write to the
-  innermost scope, and lookups fall back outward (dynamic scoping). Call-site
-  children of a module are evaluated after temporarily removing the module's
-  scope, so they see the caller's variables; `$` arguments passed to the module
-  are re-applied while children are rendered.
+- Module, function, and loop variables use a scope stack. Assignments write to
+  the innermost scope, and lookups fall back outward (dynamic scoping).
+  Call-site children of a module are evaluated after temporarily removing the
+  module's scope, so they see the caller's variables; `$` arguments passed to
+  the module are re-applied while children are rendered.
 - A user module returns its body shapes directly, without an implicit union.
   This matches the top-level behavior and avoids extra booleans; transforms and
   booleans above the call union them when one result is required.
@@ -256,7 +265,9 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - no strings
-  - no `function` declarations; only `module` declarations are supported
+  - built-in functions omit the string, random, `search`, and `lookup` families
+  - functions are not first-class values
+  - no list comprehensions or postfix indexing (`v[0]`)
   - `children(n)` accepts one integer index; vector or range child selection is
     not supported
   - module bodies return their shapes directly, so a module call does not add a
@@ -296,8 +307,9 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 1. **Finish the language layer**
-   - `function` declarations and call expressions.
    - `include` / `use` with file resolution.
+   - Strings, list comprehensions, and postfix indexing.
+   - More built-ins: `search`, `lookup`, `rands`, `str`, `chr`, `ord`, `version`.
 2. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `offset` chamfer options.
    - `linear_extrude` options: center, twist, scale, slices.

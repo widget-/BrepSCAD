@@ -87,10 +87,11 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | No strings. |
+| Expressions | ✔ | Arithmetic, comparisons, logic, ranges, and ternary `? :`; no strings. |
 | Comments and whitespace | ✔ | |
 | `module` declarations | ✔ | Parameters with defaults; `children()` and `$children`; recursive and nested modules. |
-| `function` declarations | ✖ | Expressions do not parse call syntax yet. |
+| `function` declarations | ✔ | Positional/named parameters with defaults, recursion, and dynamic scope. |
+| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, and type predicates. No string, random, `search`, or `lookup` functions. |
 | `for` / `if` | ✔ | |
 | `include` / `use` | ✖ | |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |

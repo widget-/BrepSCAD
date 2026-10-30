@@ -29,6 +29,8 @@ pub enum EvalError {
     UnknownIdentifier(String),
     #[error("unsupported module: {0}")]
     UnsupportedModule(String),
+    #[error("unknown function: {0}")]
+    UnknownFunction(String),
     #[error("bad arguments for {module}: {message}")]
     BadArguments { module: String, message: String },
     #[error("invalid transform: {0}")]

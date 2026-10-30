@@ -274,6 +274,79 @@ fn parses_module_declaration_with_a_single_statement_body() {
 }
 
 #[test]
+fn round_trips_function_declarations_and_calls() {
+    let source =
+        "function double(x = 2) = x * 2;\ny = double(3) + double(x = 1);\ncube([y, 1, 1]);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+
+    let declaration = parsed
+        .syntax()
+        .descendants()
+        .find(|node| node.kind() == SyntaxKind::FUNCTION_DECLARATION)
+        .expect("function declaration");
+    assert!(
+        declaration
+            .text()
+            .to_string()
+            .starts_with("function double")
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::CALL_EXPR)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn parses_function_calls_inside_expressions() {
+    let source = "x = [f(1), g(2) * 3, -h(4)];\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::CALL_EXPR)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn round_trips_conditional_expressions() {
+    let source = "x = a ? b : c ? d : e;\ny = 1 + 2 > 2 ? f(3) : g(4);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::CONDITIONAL_EXPR)
+            .count(),
+        3
+    );
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SyntaxKind::QUESTION)
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),
