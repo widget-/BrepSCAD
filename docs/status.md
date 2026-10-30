@@ -192,6 +192,7 @@ vendor/
 ## Commands
 
 The project uses Nix/direnv because Rust is not installed system-wide.
+`shell.nix` provides `rustup`; `rust-toolchain.toml` pins Rust 1.95.0.
 
 ```sh
 cd /home/widget/code/misc/visual-openscad

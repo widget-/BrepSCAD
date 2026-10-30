@@ -2,14 +2,9 @@
 
 pkgs.mkShell {
   packages = with pkgs; [
-    cargo
-    rustc
-    rustfmt
-    clippy
-    rust-analyzer
-
-    # Native build essentials. Heavy CAD deps (OCCT, TBB, X11, fontconfig)
-    # will be added with the first B-rep backend.
+    # rustup owns the toolchain; do not also install nixpkgs cargo/rustc,
+    # which would shadow the rustup proxies.
+    rustup
     pkg-config
     openssl
     cmake
@@ -43,6 +38,14 @@ pkgs.mkShell {
   PKG_CONFIG_PATH = pkgs.lib.makeSearchPath "lib/pkgconfig" [ pkgs.openssl.dev ];
 
   shellHook = ''
+    export PATH="$HOME/.cargo/bin:$PATH"
+
+    if ! rustup toolchain list | grep -q '^1\.95\.0'; then
+      rustup toolchain install 1.95.0 --profile minimal \
+        --component clippy --component rustfmt --component rust-analyzer
+    fi
+    rustup component add --toolchain 1.95.0 clippy rustfmt rust-analyzer >/dev/null
+
     echo "brepscad dev shell"
     echo "  rustc: $(rustc --version)"
     echo "  cargo: $(cargo --version)"

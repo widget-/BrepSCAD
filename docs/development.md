@@ -31,6 +31,13 @@ The script does not need a window manager or a visible desktop. It picks a
 random free display number between `:100` and `:199`, so it can run alongside an
 existing X session.
 
+## Toolchain
+
+`shell.nix` provides `rustup`; `rust-toolchain.toml` pins Rust 1.95.0 with
+clippy, rustfmt, and rust-analyzer. The first `nix-shell` or `direnv allow`
+downloads that toolchain. Do not install `cargo` or `rustc` from nixpkgs
+alongside it, or they will shadow the rustup proxies.
+
 ## Full check
 
 ```sh

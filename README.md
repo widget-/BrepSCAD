@@ -31,7 +31,7 @@ The planned backend crates (`kernel-occt`, `kernel-solidcore`) are not created y
 
 ## Development
 
-A `shell.nix` provides the Rust toolchain (cargo, rustc, rustfmt, clippy, rust-analyzer) and native build essentials.
+A `shell.nix` provides `rustup` and native build essentials. `rust-toolchain.toml` pins Rust 1.95.0 with clippy, rustfmt, and rust-analyzer; the first shell downloads that toolchain.
 
 ### Nix / NixOS
 
