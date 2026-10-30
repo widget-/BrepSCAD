@@ -484,6 +484,35 @@ fn named_argument_values_still_resolve_assignment_parameters() {
 }
 
 #[test]
+fn evaluates_a_sphere_and_its_diameter() {
+    let mut kernel = TruckKernel::new();
+
+    let sphere = evaluate("sphere(r = 1);", &mut kernel, 0.01).expect("sphere");
+    let (min, max) = bounds(&sphere.shapes[0].mesh);
+    for axis in 0..3 {
+        assert!(
+            (max[axis] - min[axis] - 2.0).abs() < 0.02,
+            "axis {axis}: {}",
+            max[axis] - min[axis]
+        );
+    }
+
+    let by_diameter = evaluate("sphere(d = 2);", &mut kernel, 0.01).expect("diameter");
+    let (min, max) = bounds(&by_diameter.shapes[0].mesh);
+    assert!((max[0] - min[0] - 2.0).abs() < 0.02);
+}
+
+#[test]
+fn difference_with_a_sphere_tessellates() {
+    let source = "difference() { cube([2, 2, 2]); sphere(1.2); }\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    assert!(evaluation.shapes[0].mesh.triangle_count() > 0);
+    assert_eq!(evaluation.shapes[0].parts.len(), 2);
+}
+
+#[test]
 fn reports_unknown_identifiers() {
     let mut kernel = TruckKernel::new();
     let error = evaluate_to_meshes("cube(size);", &mut kernel, 0.01).expect_err("unknown size");
@@ -494,9 +523,9 @@ fn reports_unknown_identifiers() {
 #[test]
 fn reports_unsupported_modules() {
     let mut kernel = TruckKernel::new();
-    let error = evaluate_to_meshes("sphere(1);", &mut kernel, 0.01).expect_err("unsupported");
+    let error = evaluate_to_meshes("hull() cube(1);", &mut kernel, 0.01).expect_err("unsupported");
 
-    assert!(matches!(error, EvalError::UnsupportedModule(name) if name == "sphere"));
+    assert!(matches!(error, EvalError::UnsupportedModule(name) if name == "hull"));
 }
 
 #[test]

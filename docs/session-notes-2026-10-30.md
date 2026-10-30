@@ -6,7 +6,7 @@
 - Branch: `main`
 - HEAD: `4c6d29d refactor: use composed matrix transforms`
 - Working tree: clean before this note was added
-- Test suite: 74 tests passing
+- Test suite: 78 tests passing
 
 ## What this project is
 
@@ -55,7 +55,7 @@ docs/
 ### Evaluator
 
 - Top-level assignments and variable lookup.
-- `cube`, `cylinder`.
+- `cube`, `cylinder`, `sphere`.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
 - `difference`, `union`, `intersection` with a brace block or one child call.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
@@ -81,7 +81,7 @@ docs/
 
 - `kernel-api` is a capability-based `Kernel` trait with opaque `ShapeId`s.
 - `kernel-truck` supports:
-  - cuboid and cylinder primitives
+  - cuboid, cylinder, and sphere primitives
   - matrix transforms
   - union, difference, intersection
   - tessellation to a neutral triangle mesh
@@ -130,6 +130,9 @@ difference() {
   the `auto` parameter is not supported.
 - Truck is first because it is pure Rust, Apache-2.0, and needs no C++
   toolchain. OCCT is the likely C++ fallback; SolidCore is a watch item.
+- `sphere` is built as a faceted UV B-rep with shared edges and planar
+  triangles. Revolving a half-disc in Truck produced degenerate pole faces that
+  broke tessellation and booleans, so the faceted shell is used instead.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -186,7 +189,8 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
-  - no `sphere`, `polyhedron`, extrusions, or 2D primitives
+  - no `polyhedron`, extrusions, or 2D primitives
+  - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
 - No color or `$fn` handling.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
   not supported. It computes bounds by tessellating the children, so it is
@@ -208,7 +212,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Recommended next steps
 
 1. **Expand the language subset**
-   - `sphere`, extrusions.
+   - Extrusions, `polyhedron`, 2D primitives.
    - `for` / `if` and module/function definitions later.
 2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.

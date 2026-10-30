@@ -11,6 +11,7 @@ pub struct ShapeId(pub u64);
 pub enum Primitive {
     Cuboid { size: [f64; 3] },
     Cylinder { radius: f64, height: f64 },
+    Sphere { radius: f64 },
 }
 
 /// A boolean operation between two shapes.

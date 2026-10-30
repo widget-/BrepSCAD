@@ -508,6 +508,32 @@ impl<K: Kernel> Evaluator<'_, K> {
                     children: Vec::new(),
                 })
             }
+            "sphere" => {
+                args.ensure_known("sphere", &["r", "d"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("sphere", "expected one radius"));
+                }
+                let radius = if let Some(value) = args.named.get("r") {
+                    value.as_number("sphere")?
+                } else if let Some(value) = args.named.get("d") {
+                    value.as_number("sphere")? / 2.0
+                } else {
+                    args.argument("r", 0)
+                        .ok_or_else(|| bad_args("sphere", "expected radius"))?
+                        .as_number("sphere")?
+                };
+                let shape = self.kernel.primitive(Primitive::Sphere { radius })?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: None,
+                    world: parent,
+                    children: Vec::new(),
+                })
+            }
             "resize" => {
                 args.ensure_known("resize", &["newsize"])?;
                 if args.positional.len() > 1 {
