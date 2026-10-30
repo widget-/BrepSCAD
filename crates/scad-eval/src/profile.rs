@@ -6,8 +6,10 @@
 
 use brepscad_kernel_api::{BooleanOp, Transform};
 use clipper2_rust::ClipType;
+use clipper2_rust::clipper::inflate_paths_d;
 use clipper2_rust::core::{FillRule, PathD, PathsD, PointD};
 use clipper2_rust::engine_public::{ClipperD, PolyTreeD};
+use clipper2_rust::offset::{EndType, JoinType};
 
 use crate::EvalError;
 
@@ -92,11 +94,49 @@ pub(crate) fn boolean(
         ));
     }
 
+    Ok(tree_to_profile(&tree))
+}
+
+/// Offset a profile outward for positive `distance`, inward for negative.
+/// `round` selects round joins for `offset(r=...)`; otherwise miter joins
+/// approximate `offset(delta=...)`.
+pub(crate) fn offset(profile: &Profile, distance: f64, round: bool) -> Result<Profile, EvalError> {
+    if distance == 0.0 {
+        return Ok(profile.clone());
+    }
+    let paths = inflate_paths_d(
+        &to_paths(profile),
+        distance,
+        if round {
+            JoinType::Round
+        } else {
+            JoinType::Miter
+        },
+        EndType::Polygon,
+        10.0,
+        6,
+        0.01,
+    );
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut clipper = ClipperD::new(6);
+    clipper.add_subject(&paths);
+    let mut tree = PolyTreeD::new();
+    let mut open = Vec::new();
+    if !clipper.execute_tree(ClipType::Union, FillRule::EvenOdd, &mut tree, &mut open) {
+        return Err(EvalError::Expression("2D offset cleanup failed".to_owned()));
+    }
+    Ok(tree_to_profile(&tree))
+}
+
+fn tree_to_profile(tree: &PolyTreeD) -> Profile {
     let mut profile = Vec::new();
     for &index in tree.nodes[0].children() {
-        collect_region(&tree, index, &mut profile);
+        collect_region(tree, index, &mut profile);
     }
-    Ok(profile)
+    profile
 }
 
 #[cfg(test)]
@@ -255,6 +295,39 @@ mod tests {
             "area = {}",
             area(&result)
         );
+    }
+
+    #[test]
+    fn rounds_an_outward_offset() {
+        let result = offset(&square([2.0, 2.0]), 0.5, true).expect("offset");
+
+        assert_eq!(result.len(), 1);
+        assert!(result[0].holes.is_empty());
+        let (min, max) = bounds(&result);
+        assert!((min[0] + 1.5).abs() < 1.0e-6, "min = {min:?}");
+        assert!((max[0] - 1.5).abs() < 1.0e-6, "max = {max:?}");
+        assert!(area(&result) > 8.5, "area = {}", area(&result));
+    }
+
+    #[test]
+    fn miter_inset_shrinks_a_square() {
+        let result = offset(&square([4.0, 4.0]), -0.5, false).expect("offset");
+
+        assert_eq!(result.len(), 1);
+        let (min, max) = bounds(&result);
+        assert!((min[0] + 1.5).abs() < 1.0e-6, "min = {min:?}");
+        assert!((max[0] - 1.5).abs() < 1.0e-6, "max = {max:?}");
+        assert!(
+            (area(&result) - 9.0).abs() < 1.0e-6,
+            "area = {}",
+            area(&result)
+        );
+    }
+
+    #[test]
+    fn inward_offset_can_empty_a_profile() {
+        let result = offset(&square([1.0, 1.0]), -1.0, true).expect("offset");
+        assert!(result.is_empty() || area(&result) < 1.0e-6);
     }
 
     #[test]

@@ -29,7 +29,7 @@ Legend: **✓** supported; **~** partial / experimental / verify; **✗** not su
 | Cone                                      | ✓    | ✓         | ?                    | ?            | Verify primitive coverage                                                            |
 | Torus                                     | ✓    | ✓         | ?                    | ?            | Verify primitive coverage                                                            |
 | `polyhedron` / explicit vertex-face solid | ✓    | ?         | ?                    | ?            | Build from topology; verify API                                                      |
-| 2D primitives / profiles                  | ✓    | ✗         | ~ (`truck-drafting`) | ~            | SolidCore is 3D solid B-rep only; BrepSCAD handles 2D CSG above the kernel |
+| 2D primitives / profiles                  | ✓    | ✗         | ~ (`truck-drafting`) | ~            | SolidCore is 3D solid B-rep only; BrepSCAD does 2D CSG and offset above the kernel |
 | Union                                     | ✓    | ✓         | ✓                    | ✓            |                                                                                      |
 | Difference                                | ✓    | ✓         | ✓ (`and` + `not`)    | ✓            |                                                                                      |
 | Intersection                              | ✓    | ✓         | ?                    | ?            | Verify                                                                               |

@@ -372,6 +372,91 @@ impl<K: Kernel> Evaluator<'_, K> {
                     children: Vec::new(),
                 })
             }
+            "offset" => {
+                args.ensure_known("offset", &["r", "delta"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("offset", "expected one distance"));
+                }
+                let r = args
+                    .named
+                    .get("r")
+                    .map(|value| value.as_number("offset"))
+                    .transpose()?;
+                let delta = args
+                    .named
+                    .get("delta")
+                    .map(|value| value.as_number("offset"))
+                    .transpose()?;
+                let positional = args
+                    .positional
+                    .first()
+                    .map(|value| value.as_number("offset"))
+                    .transpose()?;
+
+                let (distance, round) = match (r, delta, positional) {
+                    (Some(r), None, None) => (r, true),
+                    (None, Some(delta), None) => (delta, false),
+                    (None, None, Some(distance)) => (distance, true),
+                    (None, None, None) => {
+                        return Err(bad_args("offset", "expected r or delta"));
+                    }
+                    _ => {
+                        return Err(bad_args(
+                            "offset",
+                            "specify exactly one of r, delta, or a positional distance",
+                        ));
+                    }
+                };
+
+                let transform_parameters = node
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .unwrap_or_default();
+
+                let children = match block {
+                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                    None => {
+                        let child = node
+                            .children()
+                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                            .ok_or_else(|| bad_args("offset", "expected a child or block"))?;
+                        vec![self.module_call(child, Transform::IDENTITY)?]
+                    }
+                };
+                if children.len() != 1 {
+                    return Err(bad_args("offset", "expected exactly one 2D child"));
+                }
+                if children[0].dimension != Dimension::TwoD {
+                    return Err(bad_args("offset", "expected a 2D child"));
+                }
+
+                let profile = children[0]
+                    .profile
+                    .as_ref()
+                    .ok_or_else(|| bad_args("offset", "missing 2D profile"))?;
+                let offset_profile = profile::offset(profile, distance, round)?;
+                if offset_profile.is_empty() {
+                    return Err(bad_args("offset", "offset produced empty geometry"));
+                }
+
+                let shape = self
+                    .kernel
+                    .sketch_profile(&profile::to_regions(&offset_profile))?;
+                let shape = self.apply_transform(shape, parent)?;
+                let profile = profile::transform(&offset_profile, parent);
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: Some(transform_parameters),
+                    world: parent,
+                    dimension: Dimension::TwoD,
+                    profile: Some(profile),
+                    children,
+                })
+            }
             "linear_extrude" => {
                 args.ensure_known("linear_extrude", &["height"])?;
                 if args.positional.len() > 1 {

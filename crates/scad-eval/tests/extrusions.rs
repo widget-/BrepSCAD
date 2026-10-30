@@ -121,6 +121,61 @@ fn rotate_extrude_rejects_bad_profiles() {
 }
 
 #[test]
+fn extrudes_a_rounded_offset() {
+    let source = "linear_extrude(2) offset(r = 0.5) square([2, 2]);";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((min[0] + 1.5).abs() < 1.0e-3, "min = {min:?}");
+    assert!((max[0] - 1.5).abs() < 1.0e-3, "max = {max:?}");
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((17.0..18.2).contains(&volume), "volume = {volume}");
+}
+
+#[test]
+fn extrudes_a_miter_inset() {
+    let source = "linear_extrude(2) offset(delta = -0.5) square([2, 2]);";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((min[0] + 0.5).abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[0] - 0.5).abs() < 1.0e-6, "max = {max:?}");
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 2.0).abs() < 1.0e-3, "volume = {volume}");
+}
+
+#[test]
+fn evaluates_a_top_level_offset() {
+    let source = "offset(r = 1) square([2, 2]);";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    assert_eq!(shape.parts.len(), 1);
+    assert_eq!(shape.parts[0].module, "offset");
+    assert!(shape.mesh.triangle_count() > 0);
+}
+
+#[test]
+fn rejects_bad_offsets() {
+    let mut kernel = TruckKernel::new();
+
+    let error = evaluate_to_meshes("offset(r = 1, delta = 1) square(2);", &mut kernel, 0.01)
+        .expect_err("two distances");
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "offset"));
+
+    let error =
+        evaluate_to_meshes("offset(r = 1) cube(1);", &mut kernel, 0.01).expect_err("3D child");
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "offset"));
+
+    let error = evaluate_to_meshes("offset(r = -2) square(2);", &mut kernel, 0.01)
+        .expect_err("empty offset");
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "offset"));
+}
+
+#[test]
 fn rejects_3d_children_in_extrusions() {
     let mut kernel = TruckKernel::new();
 

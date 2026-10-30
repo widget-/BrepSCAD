@@ -66,6 +66,8 @@ scripts/
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
 - 2D booleans run on polygonal profiles (clipper2-rust); results may contain
   holes or multiple disjoint regions.
+- `offset(r=...)` and `offset(delta=...)` for 2D profiles. `r` uses round joins,
+  `delta` uses miter joins.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
 - Arithmetic on numbers and vectors: `+`, `-`, `*`, `/`, `%`, unary signs, and
@@ -154,6 +156,9 @@ scripts/
 - Multi-region profile results extrude or revolve per region and combine the
   resulting shells into one solid. Empty 2D boolean results are rejected because
   the model has no representation for empty geometry.
+- `offset` inflates the profile with Clipper2, then runs an even-odd union to
+  rebuild hole ownership. `r` selects round joins and `delta` miter joins; the
+  offset distance is applied in local profile space before the parent transform.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -210,9 +215,9 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
-  - 2D booleans are polygonal; circles flatten to 64 segments and there is no
-    curve intersection or offset support
-  - empty 2D boolean results are reported as errors
+  - 2D booleans and offsets are polygonal; circles flatten to 64 segments and
+    there is no curve intersection, chamfer, or `$fn` support
+  - empty 2D boolean or offset results are reported as errors
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
   - `rotate_extrude` supports `angle` only, requires `x >= 0`, and has no `start`
   - `polyhedron` requires closed, consistently wound planar faces
@@ -238,7 +243,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Recommended next steps
 
 1. **Finish the 2D/extrusion layer**
-   - `offset()` and polygonal profile smoothing.
+   - Polygonal profile smoothing and `offset` chamfer/$fn options.
    - `linear_extrude` options: center, twist, scale, slices.
    - `rotate_extrude` `start` and negative-side profiles.
    - `for` / `if` and module/function definitions later.
