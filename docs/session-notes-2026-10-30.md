@@ -6,7 +6,7 @@
 - Branch: `main`
 - HEAD: `4c6d29d refactor: use composed matrix transforms`
 - Working tree: clean before this note was added
-- Test suite: 73 tests passing
+- Test suite: 74 tests passing
 
 ## What this project is
 
@@ -130,6 +130,8 @@ difference() {
   the `auto` parameter is not supported.
 - Truck is first because it is pure Rust, Apache-2.0, and needs no C++
   toolchain. OCCT is the likely C++ fallback; SolidCore is a watch item.
+- Truck boolean success is tolerance-sensitive, so failures retry at finer
+  tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
 - Native fast paths for common library constructs (for example, BOSL2 rounded
   boxes) are intended to avoid mesh-CSG workarounds; `scad-intrinsics` is not
@@ -189,8 +191,9 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
   not supported. It computes bounds by tessellating the children, so it is
   slower than a matrix-only transform.
-- Truck booleans use a fixed tolerance (`0.05`) and can fail on touching or
-  coincident faces.
+- Truck booleans try tolerances `0.05`, `0.02`, then `0.01` and keep the first
+  success. Some configurations still fail, and a retry can take seconds.
+- Truck booleans can still fail on touching or coincident faces.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight

@@ -11,7 +11,7 @@ use visual_openscad_kernel_api::{
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
 
-const BOOLEAN_TOLERANCE: f64 = 0.05;
+const BOOLEAN_TOLERANCES: [f64; 3] = [0.05, 0.02, 0.01];
 
 /// A kernel that owns Truck solids in a simple arena.
 #[derive(Debug, Default)]
@@ -74,21 +74,26 @@ impl Kernel for TruckKernel {
 
     fn boolean(&mut self, op: BooleanOp, a: ShapeId, b: ShapeId) -> KernelResult<ShapeId> {
         let a = self.shape(a)?.clone();
-        let mut b = self.shape(b)?.clone();
+        let b = self.shape(b)?.clone();
 
-        let result = match op {
-            BooleanOp::Union => truck_shapeops::or(&a, &b, BOOLEAN_TOLERANCE),
-            BooleanOp::Intersection => truck_shapeops::and(&a, &b, BOOLEAN_TOLERANCE),
-            BooleanOp::Difference => {
-                b.not();
-                truck_shapeops::and(&a, &b, BOOLEAN_TOLERANCE)
+        for tolerance in BOOLEAN_TOLERANCES {
+            let result = match op {
+                BooleanOp::Union => truck_shapeops::or(&a, &b, tolerance),
+                BooleanOp::Intersection => truck_shapeops::and(&a, &b, tolerance),
+                BooleanOp::Difference => {
+                    let mut inverted = b.clone();
+                    inverted.not();
+                    truck_shapeops::and(&a, &inverted, tolerance)
+                }
+            };
+            if let Some(result) = result {
+                return Ok(self.insert(result));
             }
-        };
+        }
 
-        let result = result.ok_or_else(|| {
-            KernelError::Backend("boolean operation returned no solid".to_owned())
-        })?;
-        Ok(self.insert(result))
+        Err(KernelError::Backend(
+            "boolean operation returned no solid at any tolerance".to_owned(),
+        ))
     }
 
     fn tessellate(&self, shape: ShapeId, tolerance: f64) -> KernelResult<Mesh> {
@@ -285,5 +290,31 @@ mod tests {
         assert!(!mesh.positions.is_empty());
         assert!(mesh.triangle_count() > 0);
         assert_eq!(mesh.indices.len() % 3, 0);
+    }
+
+    #[test]
+    fn retries_boolean_with_finer_tolerances() {
+        let mut kernel = TruckKernel::new();
+        for height in [2.01, 2.1] {
+            let cube = kernel
+                .primitive(Primitive::Cuboid {
+                    size: [2.0, 2.0, 2.0],
+                })
+                .expect("cube");
+            let cylinder = kernel
+                .primitive(Primitive::Cylinder {
+                    radius: 0.5,
+                    height,
+                })
+                .expect("cylinder");
+            let result = kernel
+                .boolean(BooleanOp::Difference, cube, cylinder)
+                .expect("difference");
+            let mesh = kernel.tessellate(result, 0.01).expect("tessellation");
+
+            assert!(mesh.triangle_count() > 0);
+            let volume = signed_volume(&mesh);
+            assert!(volume > 0.0, "height {height}: volume = {volume}");
+        }
     }
 }
