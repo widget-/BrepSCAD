@@ -189,17 +189,81 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> bool {
+        self.binary_expr(0)
+    }
+
+    fn binary_expr(&mut self, min_precedence: u8) -> bool {
+        let checkpoint = self.builder.checkpoint();
+        if !self.unary_expr() {
+            return false;
+        }
+        loop {
+            let precedence = match self.current() {
+                SyntaxKind::PLUS | SyntaxKind::MINUS => 1,
+                SyntaxKind::STAR | SyntaxKind::SLASH | SyntaxKind::PERCENT => 2,
+                _ => break,
+            };
+            if precedence < min_precedence {
+                break;
+            }
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::BINARY_EXPR.into());
+            self.bump();
+            if !self.binary_expr(precedence + 1) {
+                self.finish();
+                return false;
+            }
+            self.finish();
+        }
+        true
+    }
+
+    fn unary_expr(&mut self) -> bool {
+        if matches!(self.current(), SyntaxKind::PLUS | SyntaxKind::MINUS) {
+            self.start(SyntaxKind::UNARY_EXPR);
+            self.bump();
+            if !self.unary_expr() {
+                self.finish();
+                return false;
+            }
+            self.finish();
+            true
+        } else {
+            self.primary()
+        }
+    }
+
+    fn primary(&mut self) -> bool {
         match self.current() {
             SyntaxKind::NUMBER | SyntaxKind::IDENT => {
                 self.bump();
                 true
             }
             SyntaxKind::L_BRACK => self.vector(),
+            SyntaxKind::L_PAREN => self.group(),
             _ => {
                 self.error("expected an expression");
                 false
             }
         }
+    }
+
+    fn group(&mut self) -> bool {
+        self.start(SyntaxKind::GROUP);
+        if !self.expect(SyntaxKind::L_PAREN) {
+            self.finish();
+            return false;
+        }
+        if !self.expression() {
+            self.finish();
+            return false;
+        }
+        if !self.expect(SyntaxKind::R_PAREN) {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
     }
 
     fn vector(&mut self) -> bool {

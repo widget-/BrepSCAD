@@ -28,6 +28,14 @@ pub enum SyntaxKind {
     NAMED_ARG,
     ERROR,
     EOF,
+    PLUS,
+    MINUS,
+    STAR,
+    SLASH,
+    PERCENT,
+    BINARY_EXPR,
+    UNARY_EXPR,
+    GROUP,
     __LAST,
 }
 
@@ -72,6 +80,14 @@ impl Language for ScadLanguage {
             20 => SyntaxKind::NAMED_ARG,
             21 => SyntaxKind::ERROR,
             22 => SyntaxKind::EOF,
+            23 => SyntaxKind::PLUS,
+            24 => SyntaxKind::MINUS,
+            25 => SyntaxKind::STAR,
+            26 => SyntaxKind::SLASH,
+            27 => SyntaxKind::PERCENT,
+            28 => SyntaxKind::BINARY_EXPR,
+            29 => SyntaxKind::UNARY_EXPR,
+            30 => SyntaxKind::GROUP,
             _ => SyntaxKind::ERROR,
         }
     }
@@ -89,6 +105,7 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
 
 pub type SyntaxNode = rowan::SyntaxNode<ScadLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<ScadLanguage>;
+pub type SyntaxElement = rowan::SyntaxElement<ScadLanguage>;
 
 /// A diagnostic produced while lexing or parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]

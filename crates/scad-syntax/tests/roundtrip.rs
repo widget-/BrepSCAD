@@ -104,21 +104,72 @@ fn round_trips_named_arguments() {
 }
 
 #[test]
-fn parses_negative_number_literals() {
+fn parses_unary_negative_expressions() {
     let source = "translate([-1, 0, -2.5]) cube([2, 2, 2]);\n";
     let parsed = parse(source);
 
     assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
     assert_eq!(parsed.text(), source);
-    let numbers: Vec<String> = parsed
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::UNARY_EXPR)
+            .count(),
+        2
+    );
+    assert!(
+        parsed
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| token.kind() == SyntaxKind::MINUS)
+    );
+}
+
+#[test]
+fn parses_arithmetic_with_precedence_and_groups() {
+    let source = "x = 1 + 2 * 3; y = (1 + 2) * 3;\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+
+    let assignment = parsed
         .syntax()
-        .descendants_with_tokens()
-        .filter_map(|element| element.into_token())
-        .filter(|token| token.kind() == SyntaxKind::NUMBER)
-        .map(|token| token.text().to_owned())
-        .collect();
-    assert!(numbers.iter().any(|number| number == "-1"));
-    assert!(numbers.iter().any(|number| number == "-2.5"));
+        .descendants()
+        .find(|node| {
+            node.kind() == SyntaxKind::ASSIGNMENT && node.text().to_string().starts_with('x')
+        })
+        .expect("x assignment");
+    let sum = assignment
+        .children()
+        .find(|node| node.kind() == SyntaxKind::BINARY_EXPR)
+        .expect("sum");
+    assert_eq!(sum.text().to_string().trim(), "1 + 2 * 3");
+    let product = sum
+        .children()
+        .find(|node| node.kind() == SyntaxKind::BINARY_EXPR)
+        .expect("product");
+    assert_eq!(product.text().to_string().trim(), "2 * 3");
+
+    let assignment = parsed
+        .syntax()
+        .descendants()
+        .find(|node| {
+            node.kind() == SyntaxKind::ASSIGNMENT && node.text().to_string().starts_with('y')
+        })
+        .expect("y assignment");
+    let product = assignment
+        .children()
+        .find(|node| node.kind() == SyntaxKind::BINARY_EXPR)
+        .expect("product");
+    assert_eq!(product.text().to_string().trim(), "(1 + 2) * 3");
+    let group = product
+        .children()
+        .find(|node| node.kind() == SyntaxKind::GROUP)
+        .expect("group");
+    assert_eq!(group.text().to_string().trim(), "(1 + 2)");
 }
 
 #[test]

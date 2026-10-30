@@ -11,7 +11,9 @@ use thiserror::Error;
 use visual_openscad_kernel_api::{
     BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId, Transform,
 };
-use visual_openscad_scad_syntax::{SyntaxKind, SyntaxNode, TextRange, parse};
+use visual_openscad_scad_syntax::{
+    NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, TextRange, parse,
+};
 
 #[derive(Debug, Error)]
 pub enum EvalError {
@@ -25,6 +27,8 @@ pub enum EvalError {
     BadArguments { module: String, message: String },
     #[error("invalid transform: {0}")]
     InvalidTransform(String),
+    #[error("expression error: {0}")]
+    Expression(String),
     #[error("kernel error: {0}")]
     Kernel(#[from] KernelError),
 }
@@ -209,6 +213,73 @@ impl Value {
         }
         matrix[3] = [0.0, 0.0, 0.0, 1.0];
         Ok(Transform::from_rows(matrix))
+    }
+}
+
+fn number_op(op: SyntaxKind, left: f64, right: f64) -> Result<f64, EvalError> {
+    match op {
+        SyntaxKind::PLUS => Ok(left + right),
+        SyntaxKind::MINUS => Ok(left - right),
+        SyntaxKind::STAR => Ok(left * right),
+        SyntaxKind::SLASH => {
+            if right == 0.0 {
+                Err(EvalError::Expression("division by zero".to_owned()))
+            } else {
+                Ok(left / right)
+            }
+        }
+        SyntaxKind::PERCENT => {
+            if right == 0.0 {
+                Err(EvalError::Expression("division by zero".to_owned()))
+            } else {
+                Ok(left % right)
+            }
+        }
+        _ => Err(EvalError::Expression(format!(
+            "unsupported operator {op:?}"
+        ))),
+    }
+}
+
+fn binary_value(op: SyntaxKind, left: Value, right: Value) -> Result<Value, EvalError> {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            Ok(Value::Number(number_op(op, left, right)?))
+        }
+        (Value::Vector(left), Value::Vector(right)) if left.len() == right.len() => {
+            let values = left
+                .iter()
+                .zip(&right)
+                .map(|(left, right)| number_op(op, *left, *right))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Value::Vector(values))
+        }
+        (Value::Vector(values), Value::Number(scalar)) => Ok(Value::Vector(
+            values
+                .iter()
+                .map(|value| number_op(op, *value, scalar))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        (Value::Number(scalar), Value::Vector(values)) => Ok(Value::Vector(
+            values
+                .iter()
+                .map(|value| number_op(op, scalar, *value))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        _ => Err(EvalError::Expression(
+            "unsupported operand types".to_owned(),
+        )),
+    }
+}
+
+fn unary_value(op: SyntaxKind, value: Value) -> Result<Value, EvalError> {
+    match (op, value) {
+        (SyntaxKind::PLUS, value) => Ok(value),
+        (SyntaxKind::MINUS, Value::Number(value)) => Ok(Value::Number(-value)),
+        (SyntaxKind::MINUS, Value::Vector(values)) => Ok(Value::Vector(
+            values.into_iter().map(|value| -value).collect(),
+        )),
+        _ => Err(EvalError::Expression("unsupported operand type".to_owned())),
     }
 }
 
@@ -655,111 +726,150 @@ impl<K: Kernel> Evaluator<'_, K> {
     fn arg_list(&mut self, node: SyntaxNode) -> Result<Arguments, EvalError> {
         let mut arguments = Arguments::default();
         for element in node.children_with_tokens() {
-            if let Some(token) = element.as_token() {
-                match token.kind() {
-                    SyntaxKind::NUMBER => {
-                        arguments
-                            .positional
-                            .push(Value::Number(parse_number(token.text())?));
-                    }
-                    SyntaxKind::IDENT => arguments.positional.push(self.lookup(token.text())?),
-                    _ => {}
+            match element.kind() {
+                SyntaxKind::L_PAREN | SyntaxKind::R_PAREN | SyntaxKind::COMMA => {}
+                kind if kind.is_trivia() => {}
+                SyntaxKind::NAMED_ARG => {
+                    let Some(child) = element.into_node() else {
+                        continue;
+                    };
+                    let name = first_ident(&child)
+                        .ok_or_else(|| EvalError::Parse("missing argument name".to_owned()))?;
+                    let value = self.expression_after_eq(&child)?.ok_or_else(|| {
+                        EvalError::Parse(format!("missing value for argument {name}"))
+                    })?;
+                    arguments.named.insert(name, value);
                 }
-            } else if let Some(child) = element.as_node() {
-                match child.kind() {
-                    SyntaxKind::VECTOR => {
-                        arguments.positional.push(self.vector(child.clone())?);
-                    }
-                    SyntaxKind::NAMED_ARG => {
-                        let name = first_ident(child)
-                            .ok_or_else(|| EvalError::Parse("missing argument name".to_owned()))?;
-                        let value = self.expression_after_eq(child)?.ok_or_else(|| {
-                            EvalError::Parse(format!("missing value for argument {name}"))
-                        })?;
-                        arguments.named.insert(name, value);
-                    }
-                    _ => {}
-                }
+                _ => arguments.positional.push(self.element_value(element)?),
             }
         }
         Ok(arguments)
     }
 
+    fn element_value(&mut self, element: SyntaxElement) -> Result<Value, EvalError> {
+        match element {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::NUMBER => Ok(Value::Number(parse_number(token.text())?)),
+                SyntaxKind::IDENT => self.lookup(token.text()),
+                kind => Err(EvalError::Expression(format!(
+                    "unexpected token in expression: {kind:?}"
+                ))),
+            },
+            NodeOrToken::Node(node) => self.node_value(&node),
+        }
+    }
+
+    fn node_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        match node.kind() {
+            SyntaxKind::VECTOR => self.vector(node.clone()),
+            SyntaxKind::BINARY_EXPR => self.binary_expr_value(node),
+            SyntaxKind::UNARY_EXPR => self.unary_expr_value(node),
+            SyntaxKind::GROUP => self.group_value(node),
+            kind => Err(EvalError::Expression(format!(
+                "unexpected node in expression: {kind:?}"
+            ))),
+        }
+    }
+
+    fn binary_expr_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut operands = Vec::new();
+        let mut op = None;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::PLUS
+                | SyntaxKind::MINUS
+                | SyntaxKind::STAR
+                | SyntaxKind::SLASH
+                | SyntaxKind::PERCENT => op = Some(element.kind()),
+                kind if kind.is_trivia() => {}
+                _ => operands.push(self.element_value(element)?),
+            }
+        }
+
+        let mut operands = operands.into_iter();
+        let left = operands
+            .next()
+            .ok_or_else(|| EvalError::Expression("missing left operand".to_owned()))?;
+        let right = operands
+            .next()
+            .ok_or_else(|| EvalError::Expression("missing right operand".to_owned()))?;
+        if operands.next().is_some() {
+            return Err(EvalError::Expression(
+                "too many operands in binary expression".to_owned(),
+            ));
+        }
+        let op = op.ok_or_else(|| EvalError::Expression("missing operator".to_owned()))?;
+        binary_value(op, left, right)
+    }
+
+    fn unary_expr_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut operand = None;
+        let mut op = None;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::PLUS | SyntaxKind::MINUS => op = Some(element.kind()),
+                kind if kind.is_trivia() => {}
+                _ => operand = Some(self.element_value(element)?),
+            }
+        }
+        unary_value(
+            op.ok_or_else(|| EvalError::Expression("missing operator".to_owned()))?,
+            operand.ok_or_else(|| EvalError::Expression("missing operand".to_owned()))?,
+        )
+    }
+
+    fn group_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::L_PAREN | SyntaxKind::R_PAREN => {}
+                kind if kind.is_trivia() => {}
+                _ => return self.element_value(element),
+            }
+        }
+        Err(EvalError::Expression("empty group".to_owned()))
+    }
+
     fn expression_after_eq(&mut self, node: &SyntaxNode) -> Result<Option<Value>, EvalError> {
         let mut after_eq = false;
         for element in node.children_with_tokens() {
-            if let Some(token) = element.as_token() {
-                if token.kind() == SyntaxKind::EQ {
-                    after_eq = true;
-                    continue;
-                }
-                if !after_eq || token.kind().is_trivia() {
-                    continue;
-                }
-                match token.kind() {
-                    SyntaxKind::NUMBER => {
-                        return Ok(Some(Value::Number(parse_number(token.text())?)));
-                    }
-                    SyntaxKind::IDENT => return Ok(Some(self.lookup(token.text())?)),
-                    _ => {}
-                }
-            } else if let Some(child) = element.as_node() {
-                if after_eq && child.kind() == SyntaxKind::VECTOR {
-                    return Ok(Some(self.vector(child.clone())?));
-                }
+            match element.kind() {
+                SyntaxKind::EQ => after_eq = true,
+                kind if kind.is_trivia() => {}
+                _ if after_eq => return Ok(Some(self.element_value(element)?)),
+                _ => {}
             }
         }
         Ok(None)
     }
 
     fn vector(&mut self, node: SyntaxNode) -> Result<Value, EvalError> {
-        let mut values = Vec::new();
+        let mut numbers = Vec::new();
         let mut rows = Vec::new();
         for element in node.children_with_tokens() {
-            if let Some(token) = element.as_token() {
-                match token.kind() {
-                    SyntaxKind::NUMBER => values.push(parse_number(token.text())?),
-                    SyntaxKind::IDENT => {
-                        values.push(self.lookup(token.text())?.as_number("vector")?);
+            match element.kind() {
+                SyntaxKind::L_BRACK | SyntaxKind::R_BRACK | SyntaxKind::COMMA => {}
+                kind if kind.is_trivia() => {}
+                _ => match self.element_value(element)? {
+                    Value::Number(value) => numbers.push(value),
+                    Value::Vector(values) => rows.push(values),
+                    Value::Matrix(_) => {
+                        return Err(EvalError::Expression(
+                            "vectors support at most two levels".to_owned(),
+                        ));
                     }
-                    _ => {}
-                }
-            } else if let Some(child) = element.as_node() {
-                if child.kind() == SyntaxKind::VECTOR {
-                    rows.push(self.number_row(child.clone())?);
-                }
+                },
             }
         }
 
-        match (values.is_empty(), rows.is_empty()) {
-            (_, true) => Ok(Value::Vector(values)),
-            (true, false) => Ok(Value::Matrix(rows)),
-            (false, false) => Err(EvalError::Parse(
+        if rows.is_empty() {
+            Ok(Value::Vector(numbers))
+        } else if numbers.is_empty() {
+            Ok(Value::Matrix(rows))
+        } else {
+            Err(EvalError::Expression(
                 "cannot mix scalars and vectors in one vector".to_owned(),
-            )),
+            ))
         }
-    }
-
-    fn number_row(&mut self, node: SyntaxNode) -> Result<Vec<f64>, EvalError> {
-        let mut values = Vec::new();
-        for element in node.children_with_tokens() {
-            if let Some(token) = element.as_token() {
-                match token.kind() {
-                    SyntaxKind::NUMBER => values.push(parse_number(token.text())?),
-                    SyntaxKind::IDENT => {
-                        values.push(self.lookup(token.text())?.as_number("matrix")?);
-                    }
-                    _ => {}
-                }
-            } else if let Some(child) = element.as_node() {
-                if child.kind() == SyntaxKind::VECTOR {
-                    return Err(EvalError::Parse(
-                        "matrices must be two levels deep".to_owned(),
-                    ));
-                }
-            }
-        }
-        Ok(values)
     }
 
     fn lookup(&self, name: &str) -> Result<Value, EvalError> {
@@ -950,12 +1060,32 @@ fn collect_numbers(node: &SyntaxNode, parameters: &mut BTreeMap<usize, Parameter
 }
 
 fn collect_identifiers(node: &SyntaxNode, names: &mut BTreeSet<String>) {
-    for element in node.descendants_with_tokens() {
-        let Some(token) = element.as_token() else {
-            continue;
-        };
-        if token.kind() == SyntaxKind::IDENT {
-            names.insert(token.text().to_owned());
+    for element in node.children_with_tokens() {
+        collect_element_identifiers(element, names);
+    }
+}
+
+fn collect_element_identifiers(element: SyntaxElement, names: &mut BTreeSet<String>) {
+    match element {
+        NodeOrToken::Token(token) => {
+            if token.kind() == SyntaxKind::IDENT {
+                names.insert(token.text().to_owned());
+            }
+        }
+        NodeOrToken::Node(node) => {
+            if node.kind() == SyntaxKind::NAMED_ARG {
+                let mut after_eq = false;
+                for element in node.children_with_tokens() {
+                    match element.kind() {
+                        SyntaxKind::EQ => after_eq = true,
+                        kind if kind.is_trivia() => {}
+                        _ if after_eq => collect_element_identifiers(element, names),
+                        _ => {}
+                    }
+                }
+            } else {
+                collect_identifiers(&node, names);
+            }
         }
     }
 }

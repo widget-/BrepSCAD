@@ -6,7 +6,7 @@
 - Branch: `main`
 - HEAD: `4c6d29d refactor: use composed matrix transforms`
 - Working tree: clean before this note was added
-- Test suite: 65 tests passing
+- Test suite: 73 tests passing
 
 ## What this project is
 
@@ -47,6 +47,8 @@ docs/
 - Supported syntax: top-level assignments, module calls, positional and named
   arguments, numbers (including negative literals), identifiers, vectors,
   comments, whitespace.
+- Expressions support `+`, `-`, `*`, `/`, and `%` with standard precedence,
+  unary signs, and parentheses; the tree keeps every token.
 - Transform and boolean calls support either a block or a single child module
   call.
 
@@ -58,6 +60,8 @@ docs/
 - `difference`, `union`, `intersection` with a brace block or one child call.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
+- Arithmetic on numbers and vectors: `+`, `-`, `*`, `/`, `%`, unary signs, and
+  grouping. Division or modulo by zero is an expression error.
 - Nested transforms compose into one matrix before reaching a primitive.
 - Each evaluated top-level shape exposes:
   - its final mesh
@@ -177,7 +181,6 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Known limitations
 
 - Parser/evaluator subset is small:
-  - no arithmetic or general expressions
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
@@ -202,7 +205,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Recommended next steps
 
 1. **Expand the language subset**
-   - Expressions, `sphere`, extrusions.
+   - `sphere`, extrusions.
    - `for` / `if` and module/function definitions later.
 2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
