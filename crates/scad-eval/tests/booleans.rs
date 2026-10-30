@@ -1,8 +1,8 @@
 mod common;
 
+use brepscad_eval::{evaluate, evaluate_to_meshes};
+use brepscad_kernel_truck::TruckKernel;
 use common::bounds;
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{evaluate, evaluate_to_meshes};
 
 #[test]
 fn evaluates_a_cube_with_a_hole() {

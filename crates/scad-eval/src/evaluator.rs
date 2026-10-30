@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use visual_openscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
-use visual_openscad_scad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
+use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
+use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
 use crate::model::{EvaluatedShape, Evaluation};

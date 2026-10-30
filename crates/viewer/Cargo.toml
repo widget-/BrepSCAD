@@ -1,5 +1,5 @@
 [package]
-name = "visual-openscad-viewer"
+name = "brepscad-viewer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,7 @@ eframe = { version = "0.32", default-features = false, features = [
 ] }
 glam = "0.34"
 wgpu = { version = "25", default-features = false, features = ["vulkan", "gles", "wgsl"] }
-visual-openscad-kernel-api.workspace = true
-visual-openscad-kernel-truck.workspace = true
-visual-openscad-scad-eval.workspace = true
-visual-openscad-scad-syntax.workspace = true
+brepscad-kernel-api.workspace = true
+brepscad-kernel-truck.workspace = true
+brepscad-eval.workspace = true
+brepscad-syntax.workspace = true

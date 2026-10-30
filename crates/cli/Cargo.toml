@@ -1,5 +1,5 @@
 [package]
-name = "visual-openscad"
+name = "brepscad"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,5 +8,5 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-visual-openscad-kernel-truck.workspace = true
-visual-openscad-scad-eval.workspace = true
+brepscad-kernel-truck.workspace = true
+brepscad-eval.workspace = true

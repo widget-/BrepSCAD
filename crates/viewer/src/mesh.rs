@@ -1,7 +1,7 @@
 //! Combining evaluated shapes and operands into render/pick meshes.
 
-use visual_openscad_kernel_api::Mesh;
-use visual_openscad_scad_eval::Evaluation;
+use brepscad_eval::Evaluation;
+use brepscad_kernel_api::Mesh;
 
 use crate::picking::PickPart;
 
@@ -46,7 +46,7 @@ pub(crate) fn combine_parts(evaluation: &Evaluation) -> (Mesh, Vec<PickPart>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use visual_openscad_scad_eval::{EvaluatedShape, Part, TreeNode};
+    use brepscad_eval::{EvaluatedShape, Part, TreeNode};
 
     fn triangle_mesh() -> Mesh {
         Mesh {

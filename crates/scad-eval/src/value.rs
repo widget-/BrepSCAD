@@ -1,7 +1,7 @@
 //! Expression values and arithmetic.
 
-use visual_openscad_kernel_api::Transform;
-use visual_openscad_scad_syntax::SyntaxKind;
+use brepscad_kernel_api::Transform;
+use brepscad_syntax::SyntaxKind;
 
 use crate::{EvalError, bad_args};
 

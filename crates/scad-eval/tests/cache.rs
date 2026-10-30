@@ -1,5 +1,5 @@
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{MeshCache, evaluate_with_cache};
+use brepscad_eval::{MeshCache, evaluate_with_cache};
+use brepscad_kernel_truck::TruckKernel;
 
 #[test]
 fn reuses_unchanged_leaf_meshes_across_parameter_edits() {

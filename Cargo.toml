@@ -23,7 +23,7 @@ truck-meshalgo = { version = "0.4", default-features = false, features = ["analy
 truck-modeling = "0.6"
 truck-shapeops = { version = "0.4", default-features = false }
 
-visual-openscad-kernel-api = { path = "crates/kernel-api" }
-visual-openscad-kernel-truck = { path = "crates/kernel-truck" }
-visual-openscad-scad-eval = { path = "crates/scad-eval" }
-visual-openscad-scad-syntax = { path = "crates/scad-syntax" }
+brepscad-kernel-api = { path = "crates/kernel-api" }
+brepscad-kernel-truck = { path = "crates/kernel-truck" }
+brepscad-eval = { path = "crates/scad-eval" }
+brepscad-syntax = { path = "crates/scad-syntax" }

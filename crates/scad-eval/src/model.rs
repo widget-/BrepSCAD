@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use visual_openscad_kernel_api::Mesh;
+use brepscad_kernel_api::Mesh;
 
 /// The result of evaluating a source file.
 #[derive(Debug, Clone)]

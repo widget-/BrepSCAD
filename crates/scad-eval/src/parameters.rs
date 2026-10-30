@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 
-use visual_openscad_scad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, TextRange};
+use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, TextRange};
 
 use crate::EvalError;
 use crate::model::Parameter;

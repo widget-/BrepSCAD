@@ -1,4 +1,4 @@
-use visual_openscad_scad_syntax::{
+use brepscad_syntax::{
     EditError, Parse, SyntaxKind, SyntaxToken, TextEdit, TextRange, TextSize, apply_edit, parse,
 };
 

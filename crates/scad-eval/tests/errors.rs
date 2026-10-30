@@ -1,5 +1,5 @@
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{EvalError, evaluate_to_meshes};
+use brepscad_eval::{EvalError, evaluate_to_meshes};
+use brepscad_kernel_truck::TruckKernel;
 
 #[test]
 fn rejects_unknown_named_arguments() {

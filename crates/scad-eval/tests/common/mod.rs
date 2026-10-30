@@ -1,4 +1,4 @@
-use visual_openscad_kernel_api::Mesh;
+use brepscad_kernel_api::Mesh;
 
 pub fn bounds(mesh: &Mesh) -> ([f64; 3], [f64; 3]) {
     let mut min = [f64::INFINITY; 3];

@@ -10,8 +10,8 @@ mod parameters;
 mod parts;
 mod value;
 
+use brepscad_kernel_api::KernelError;
 use thiserror::Error;
-use visual_openscad_kernel_api::KernelError;
 
 pub use cache::MeshCache;
 pub use evaluator::{evaluate, evaluate_to_meshes, evaluate_with_cache};

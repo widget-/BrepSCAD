@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use visual_openscad_kernel_api::{Mesh, Transform};
+use brepscad_kernel_api::{Mesh, Transform};
 
 use crate::model::Parameter;
 

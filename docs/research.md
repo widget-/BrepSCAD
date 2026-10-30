@@ -1,4 +1,4 @@
-# Visual OpenSCAD --- prior art and architecture research
+# BrepSCAD --- prior art and architecture research
 
 Last updated: 2026-10-28
 Status: research notes. Current direction as of 2026-10-28: **B-rep-first**. Exact OpenSCAD output identity is out of scope (users who need it should stay on OpenSCAD). Candidate backends are **OCCT, SolidCore, and Truck**; Manifold is not a selectable backend and may only survive as an internal mesh fallback for `hull`/`minkowski`/mesh imports. The per-operation capability matrix lives in [`docs/kernels.md`](kernels.md).

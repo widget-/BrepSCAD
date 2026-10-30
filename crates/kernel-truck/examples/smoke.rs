@@ -1,5 +1,5 @@
-use visual_openscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive};
-use visual_openscad_kernel_truck::TruckKernel;
+use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive};
+use brepscad_kernel_truck::TruckKernel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut kernel = TruckKernel::new();

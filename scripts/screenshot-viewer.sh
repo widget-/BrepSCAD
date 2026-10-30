@@ -5,10 +5,10 @@ set -euo pipefail
 
 output=${1:?usage: $0 <output.png> [settle-seconds]}
 settle=${2:-4}
-binary=${VIEWER_BIN:-target/debug/visual-openscad-viewer}
+binary=${VIEWER_BIN:-target/debug/brepscad-viewer}
 
 if [[ ! -x "$binary" ]]; then
-    echo "missing $binary; run: cargo build -p visual-openscad-viewer" >&2
+    echo "missing $binary; run: cargo build -p brepscad-viewer" >&2
     exit 1
 fi
 

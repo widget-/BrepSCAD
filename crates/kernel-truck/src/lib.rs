@@ -5,12 +5,12 @@
 
 mod primitives;
 
+use brepscad_kernel_api::{
+    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
+};
 use primitives::{cuboid, cylinder, sphere};
 use truck_meshalgo::prelude::*;
 use truck_modeling::*;
-use visual_openscad_kernel_api::{
-    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
-};
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
 

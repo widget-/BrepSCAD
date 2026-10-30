@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use visual_openscad_kernel_api::{Kernel, Mesh, ShapeId, Transform};
+use brepscad_kernel_api::{Kernel, Mesh, ShapeId, Transform};
 
 use crate::EvalError;
 use crate::cache::{MeshCache, MeshKey};

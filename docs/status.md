@@ -10,6 +10,8 @@ text is the canonical document. The editor should present a source-shaped tree,
 write edits back into the source immediately, and keep inspection state
 (such as showing one intermediate state) session-only.
 
+BrepSCAD is an independent project and is not affiliated with OpenSCAD.
+
 Exact OpenSCAD output identity is explicitly out of scope. Users who need that
 should use OpenSCAD itself. Manifold is not a selectable backend; at most it
 could be an internal mesh fallback for inherently mesh operations such as
@@ -19,7 +21,7 @@ could be an internal mesh fallback for inherently mesh operations such as
 
 ```text
 crates/
-  cli/          CLI entry point (package `visual-openscad`)
+  cli/          CLI entry point (package `brepscad`)
   kernel-api/   kernel trait, ShapeId, capabilities, neutral mesh, matrix transform
   kernel-truck/ Truck B-rep adapter
   scad-eval/    evaluator and operand/parameter provenance
@@ -150,7 +152,7 @@ The project uses Nix/direnv because Rust is not installed system-wide.
 cd /home/widget/code/misc/visual-openscad
 direnv allow .
 nix-shell --run 'cargo test --workspace'
-nix-shell --run 'cargo run -p visual-openscad-viewer'
+nix-shell --run 'cargo run -p brepscad-viewer'
 ```
 
 Full check:
@@ -162,14 +164,14 @@ nix-shell --run 'cargo fmt --all --check && cargo clippy --workspace --all-targe
 CLI:
 
 ```sh
-nix-shell --run 'cargo run -p visual-openscad -- path/to/model.scad'
+nix-shell --run 'cargo run -p brepscad -- path/to/model.scad'
 ```
 
 The viewer needs a working wgpu adapter (Vulkan or GLES). On this machine it
 runs under Wayland. A quick smoke test is:
 
 ```sh
-nix-shell --run 'timeout 8s target/debug/visual-openscad-viewer'
+nix-shell --run 'timeout 8s target/debug/brepscad-viewer'
 ```
 
 Exit code `124` means it stayed alive until the timeout and did not panic.

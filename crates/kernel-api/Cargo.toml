@@ -1,5 +1,5 @@
 [package]
-name = "visual-openscad-kernel-api"
+name = "brepscad-kernel-api"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

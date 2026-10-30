@@ -1,5 +1,5 @@
 [package]
-name = "visual-openscad-scad-eval"
+name = "brepscad-eval"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,8 @@ publish = false
 
 [dependencies]
 thiserror.workspace = true
-visual-openscad-kernel-api.workspace = true
-visual-openscad-scad-syntax.workspace = true
+brepscad-kernel-api.workspace = true
+brepscad-syntax.workspace = true
 
 [dev-dependencies]
-visual-openscad-kernel-truck = { path = "../kernel-truck" }
+brepscad-kernel-truck = { path = "../kernel-truck" }

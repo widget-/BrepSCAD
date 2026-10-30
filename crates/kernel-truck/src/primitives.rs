@@ -1,7 +1,7 @@
 //! Truck primitive builders.
 
+use brepscad_kernel_api::KernelError;
 use truck_modeling::*;
-use visual_openscad_kernel_api::KernelError;
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
 

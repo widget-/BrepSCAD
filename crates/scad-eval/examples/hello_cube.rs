@@ -1,5 +1,5 @@
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::evaluate_to_meshes;
+use brepscad_eval::evaluate_to_meshes;
+use brepscad_kernel_truck::TruckKernel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = include_str!("../../../assets/sample.scad");

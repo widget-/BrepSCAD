@@ -43,7 +43,7 @@ pkgs.mkShell {
   PKG_CONFIG_PATH = pkgs.lib.makeSearchPath "lib/pkgconfig" [ pkgs.openssl.dev ];
 
   shellHook = ''
-    echo "visual-openscad dev shell"
+    echo "brepscad dev shell"
     echo "  rustc: $(rustc --version)"
     echo "  cargo: $(cargo --version)"
   '';

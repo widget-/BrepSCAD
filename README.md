@@ -1,6 +1,8 @@
-# Visual OpenSCAD
+# BrepSCAD
 
-Working title for a B-rep-first visual editor for OpenSCAD-style `.scad` source.
+A B-rep-first visual editor for OpenSCAD-style `.scad` source.
+
+BrepSCAD is an independent project and is not affiliated with OpenSCAD.
 
 > **Status: prototype.** The source parser, evaluator, Truck kernel, and viewer work for a small OpenSCAD subset.
 
@@ -19,7 +21,7 @@ Manifold is not a selectable backend. It may survive only as an internal mesh fa
 
 ```text
 crates/
-  cli/          CLI entry point (package `visual-openscad`)
+  cli/          CLI entry point (package `brepscad`)
   kernel-api/   Kernel trait, ShapeId, capabilities, neutral mesh
   kernel-truck/ Truck adapter: cuboid, cylinder, sphere, sketch, extrude
   scad-eval/    minimal evaluator: assignments, 3D primitives, 2D sketches
@@ -48,7 +50,7 @@ Then, once per checkout:
 
 ```sh
 direnv allow
-cargo run -p visual-openscad
+cargo run -p brepscad
 cargo test --workspace
 ```
 
@@ -56,7 +58,7 @@ Without direnv:
 
 ```sh
 nix-shell --run 'cargo test --workspace'
-nix-shell --run 'cargo run -p visual-openscad'
+nix-shell --run 'cargo run -p brepscad'
 ```
 
 ### Direct toolchain
@@ -64,7 +66,7 @@ nix-shell --run 'cargo run -p visual-openscad'
 With a Rust toolchain installed:
 
 ```sh
-cargo run -p visual-openscad
+cargo run -p brepscad
 cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -77,7 +79,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses the built-in `assets/sample.scad` cube-with-hole sample, which the viewer and the `hello_cube` example also load.
 
 ```sh
-cargo run -p visual-openscad -- path/to/model.scad
+cargo run -p brepscad -- path/to/model.scad
 ```
 
 The current subset supports top-level assignments, positional and named arguments, arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary signs, and parentheses), `cube`, `cylinder`, `sphere`, `square`, `circle`, `polygon`, `linear_extrude`, `translate` / `rotate` / `scale` / `multmatrix` / `mirror` / `resize` with a single child or block, and the `difference` / `union` / `intersection` modules with a block or a single child. `multmatrix` accepts a 4×3 or 4×4 matrix; `resize` accepts a `newsize` vector; `sphere` accepts `r` or `d` and is faceted at a fixed 32×16 resolution. `linear_extrude` accepts a height and one 2D child; 2D booleans and `rotate_extrude` are not implemented.
@@ -87,7 +89,7 @@ The current subset supports top-level assignments, positional and named argument
 The first GUI prototype renders the evaluated mesh with a depth-tested wgpu viewport, an editable source panel, and an Evaluate button.
 
 ```sh
-cargo run -p visual-openscad-viewer
+cargo run -p brepscad-viewer
 ```
 
 Drag to orbit and scroll to zoom. Click the model to select an operand, or use the Shapes panel, which shows the source-shaped tree of booleans, transforms, and leaf primitives. Clicking a leaf selects it and fills the Properties panel, including cutters enclosed by the base shape. The Properties panel lists numeric literals in that operand and in the assignments it references. Drag a value, or click it and type a new number, then press Enter or click away. The edit is written back to the source and the model re-evaluates, reusing tessellated leaf meshes whose module, parameters, and transform did not change. The selected operand is not highlighted yet. The source panel remains the general edit loop. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
@@ -97,7 +99,7 @@ Drag to orbit and scroll to zoom. Click the model to select an operand, or use t
 To inspect the UI without opening a window on the desktop, render it on a virtual X display:
 
 ```sh
-cargo build -p visual-openscad-viewer
+cargo build -p brepscad-viewer
 scripts/screenshot-viewer.sh /tmp/viewer.png
 ```
 

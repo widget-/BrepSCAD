@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::evaluate_to_meshes;
+use brepscad_eval::evaluate_to_meshes;
+use brepscad_kernel_truck::TruckKernel;
 
 const DEFAULT_SOURCE: &str = include_str!("../../../assets/sample.scad");
 
@@ -9,7 +9,7 @@ fn main() -> Result<()> {
     let first = args.next();
 
     if matches!(first.as_deref(), Some("--help" | "-h")) {
-        println!("usage: visual-openscad [file.scad]");
+        println!("usage: brepscad [file.scad]");
         return Ok(());
     }
     if args.next().is_some() {

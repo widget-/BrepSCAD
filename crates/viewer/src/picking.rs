@@ -1,7 +1,7 @@
 //! CPU ray picking against operand meshes.
 
+use brepscad_kernel_api::Mesh;
 use glam::Vec3;
-use visual_openscad_kernel_api::Mesh;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PickPart {

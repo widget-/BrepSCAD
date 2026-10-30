@@ -1,14 +1,14 @@
 use std::ops::Range;
 use std::time::Instant;
 
+use brepscad_eval::{Evaluation, MeshCache, TreeNode, evaluate_with_cache};
+use brepscad_kernel_api::Mesh;
+use brepscad_kernel_truck::TruckKernel;
+use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 use eframe::egui;
 use eframe::wgpu;
 use egui::containers::scroll_area::ScrollSource;
 use glam::Vec2;
-use visual_openscad_kernel_api::Mesh;
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{Evaluation, MeshCache, TreeNode, evaluate_with_cache};
-use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
 use crate::camera::Camera;
 use crate::mesh::{combine_evaluation, combine_parts};
@@ -252,7 +252,7 @@ impl eframe::App for ViewerApp {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Visual OpenSCAD");
+                ui.heading("BrepSCAD");
                 ui.separator();
                 if ui.button("Evaluate").clicked() {
                     self.pending_evaluate = true;

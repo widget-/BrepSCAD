@@ -1,5 +1,5 @@
 [package]
-name = "visual-openscad-kernel-truck"
+name = "brepscad-kernel-truck"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-visual-openscad-kernel-api.workspace = true
+brepscad-kernel-api.workspace = true
 
 truck-meshalgo.workspace = true
 truck-modeling.workspace = true

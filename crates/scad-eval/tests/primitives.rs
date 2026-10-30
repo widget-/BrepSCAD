@@ -1,9 +1,9 @@
 mod common;
 
+use brepscad_eval::{evaluate, evaluate_to_meshes};
+use brepscad_kernel_truck::TruckKernel;
+use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 use common::bounds;
-use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{evaluate, evaluate_to_meshes};
-use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
 #[test]
 fn evaluates_a_cube() {

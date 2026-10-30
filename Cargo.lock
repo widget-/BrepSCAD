@@ -206,6 +206,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "brepscad"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "brepscad-eval",
+ "brepscad-kernel-truck",
+]
+
+[[package]]
+name = "brepscad-eval"
+version = "0.1.0"
+dependencies = [
+ "brepscad-kernel-api",
+ "brepscad-kernel-truck",
+ "brepscad-syntax",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "brepscad-kernel-api"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "brepscad-kernel-truck"
+version = "0.1.0"
+dependencies = [
+ "brepscad-kernel-api",
+ "truck-meshalgo",
+ "truck-modeling",
+ "truck-shapeops",
+]
+
+[[package]]
+name = "brepscad-syntax"
+version = "0.1.0"
+dependencies = [
+ "rowan",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "brepscad-viewer"
+version = "0.1.0"
+dependencies = [
+ "brepscad-eval",
+ "brepscad-kernel-api",
+ "brepscad-kernel-truck",
+ "brepscad-syntax",
+ "bytemuck",
+ "eframe",
+ "glam",
+ "wgpu",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2933,64 +2991,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "visual-openscad"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "visual-openscad-kernel-truck",
- "visual-openscad-scad-eval",
-]
-
-[[package]]
-name = "visual-openscad-kernel-api"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "visual-openscad-kernel-truck"
-version = "0.1.0"
-dependencies = [
- "truck-meshalgo",
- "truck-modeling",
- "truck-shapeops",
- "visual-openscad-kernel-api",
-]
-
-[[package]]
-name = "visual-openscad-scad-eval"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
- "visual-openscad-kernel-api",
- "visual-openscad-kernel-truck",
- "visual-openscad-scad-syntax",
-]
-
-[[package]]
-name = "visual-openscad-scad-syntax"
-version = "0.1.0"
-dependencies = [
- "rowan",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "visual-openscad-viewer"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "eframe",
- "glam",
- "visual-openscad-kernel-api",
- "visual-openscad-kernel-truck",
- "visual-openscad-scad-eval",
- "visual-openscad-scad-syntax",
- "wgpu",
-]
 
 [[package]]
 name = "vtkio"

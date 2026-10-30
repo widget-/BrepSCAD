@@ -1,11 +1,11 @@
 use std::mem::size_of;
 use std::num::NonZeroU64;
 
+use brepscad_kernel_api::Mesh;
 use bytemuck::{Pod, Zeroable};
 use eframe::egui;
 use eframe::egui_wgpu::{self, wgpu};
 use glam::Vec3;
-use visual_openscad_kernel_api::Mesh;
 use wgpu::util::DeviceExt as _;
 
 use crate::camera::Camera;

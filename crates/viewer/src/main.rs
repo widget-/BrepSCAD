@@ -11,12 +11,12 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("Visual OpenSCAD"),
+            .with_title("BrepSCAD"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Visual OpenSCAD",
+        "BrepSCAD",
         options,
         Box::new(|cc| Ok(Box::new(ViewerApp::new(cc)))),
     )

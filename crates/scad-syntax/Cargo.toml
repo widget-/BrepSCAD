@@ -1,5 +1,5 @@
 [package]
-name = "visual-openscad-scad-syntax"
+name = "brepscad-syntax"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
