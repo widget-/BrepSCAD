@@ -4,7 +4,7 @@
 //! `cube`, `cylinder`, and the boolean modules `difference`, `union`, and
 //! `intersection` with brace-delimited children.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ops::Range;
 
 use thiserror::Error;
@@ -71,6 +71,87 @@ pub struct Parameter {
     pub source: String,
 }
 
+/// A bounded cache of tessellated leaf meshes, reused across evaluations.
+///
+/// Entries are keyed by the leaf's module, resolved numeric parameters
+/// (including inherited transform parameters), composed world transform, and
+/// tessellation tolerance. Editing a parameter re-tessellates only the leaves
+/// whose geometry changed.
+#[derive(Debug, Default)]
+pub struct MeshCache {
+    entries: HashMap<MeshKey, Mesh>,
+    order: VecDeque<MeshKey>,
+    hits: usize,
+    misses: usize,
+}
+
+const MESH_CACHE_LIMIT: usize = 512;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MeshKey {
+    module: String,
+    values: Vec<u64>,
+    transform: [u64; 16],
+    tolerance: u64,
+}
+
+impl MeshKey {
+    fn new(module: &str, parameters: &[Parameter], world: Transform, tolerance: f64) -> Self {
+        let mut transform = [0_u64; 16];
+        for (index, value) in world.cols.iter().flatten().enumerate() {
+            transform[index] = value.to_bits();
+        }
+        Self {
+            module: module.to_owned(),
+            values: parameters
+                .iter()
+                .map(|parameter| parameter.value.to_bits())
+                .collect(),
+            transform,
+            tolerance: tolerance.to_bits(),
+        }
+    }
+}
+
+impl MeshCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of tessellations served from the cache.
+    pub fn hits(&self) -> usize {
+        self.hits
+    }
+
+    /// Number of tessellations performed because the key was absent.
+    pub fn misses(&self) -> usize {
+        self.misses
+    }
+
+    fn get(&mut self, key: &MeshKey) -> Option<Mesh> {
+        match self.entries.get(key) {
+            Some(mesh) => {
+                self.hits += 1;
+                Some(mesh.clone())
+            }
+            None => {
+                self.misses += 1;
+                None
+            }
+        }
+    }
+
+    fn insert(&mut self, key: MeshKey, mesh: Mesh) {
+        if self.entries.len() >= MESH_CACHE_LIMIT {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.entries.insert(key, mesh);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     Number(f64),
@@ -116,6 +197,16 @@ pub fn evaluate<K: Kernel>(
     kernel: &mut K,
     tolerance: f64,
 ) -> Result<Evaluation, EvalError> {
+    evaluate_with_cache(source, kernel, tolerance, &mut MeshCache::default())
+}
+
+/// Like [`evaluate`], but reuses leaf meshes from `cache`.
+pub fn evaluate_with_cache<K: Kernel>(
+    source: &str,
+    kernel: &mut K,
+    tolerance: f64,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvalError> {
     let parsed = parse(source);
     if !parsed.errors().is_empty() {
         let messages = parsed
@@ -145,7 +236,7 @@ pub fn evaluate<K: Kernel>(
     let mut shapes = Vec::new();
     for root in roots {
         let mesh = kernel.tessellate(root.shape, tolerance)?;
-        let (parts, tree) = collect_parts(&root, root.shape, &mesh, kernel, tolerance)?;
+        let (parts, tree) = collect_parts(&root, root.shape, &mesh, kernel, tolerance, cache)?;
         shapes.push(EvaluatedShape {
             mesh,
             source_range: root.source_range,
@@ -178,6 +269,7 @@ struct Node {
     source_range: Range<usize>,
     parameters: Vec<Parameter>,
     transform_parameters: Option<Vec<Parameter>>,
+    world: Transform,
     children: Vec<Node>,
 }
 
@@ -243,6 +335,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     source_range,
                     parameters,
                     transform_parameters: None,
+                    world: parent,
                     children: Vec::new(),
                 })
             }
@@ -262,6 +355,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     source_range,
                     parameters,
                     transform_parameters: None,
+                    world: parent,
                     children: Vec::new(),
                 })
             }
@@ -313,6 +407,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     source_range,
                     parameters,
                     transform_parameters: Some(transform_parameters),
+                    world: combined,
                     children,
                 })
             }
@@ -340,6 +435,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     source_range,
                     parameters,
                     transform_parameters: None,
+                    world: parent,
                     children,
                 })
             }
@@ -444,32 +540,37 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 }
 
+struct PartContext<'a, K: Kernel> {
+    kernel: &'a mut K,
+    root_shape: ShapeId,
+    root_mesh: &'a Mesh,
+    tolerance: f64,
+    cache: &'a mut MeshCache,
+}
+
 fn collect_parts<K: Kernel>(
     node: &Node,
     root_shape: ShapeId,
     root_mesh: &Mesh,
     kernel: &mut K,
     tolerance: f64,
+    cache: &mut MeshCache,
 ) -> Result<(Vec<Part>, TreeNode), EvalError> {
     let mut parts = Vec::new();
-    let tree = collect_parts_inner(
-        node,
+    let mut context = PartContext {
+        kernel,
         root_shape,
         root_mesh,
-        kernel,
         tolerance,
-        &BTreeMap::new(),
-        &mut parts,
-    )?;
+        cache,
+    };
+    let tree = collect_parts_inner(node, &mut context, &BTreeMap::new(), &mut parts)?;
     Ok((parts, tree))
 }
 
 fn collect_parts_inner<K: Kernel>(
     node: &Node,
-    root_shape: ShapeId,
-    root_mesh: &Mesh,
-    kernel: &mut K,
-    tolerance: f64,
+    context: &mut PartContext<'_, K>,
     inherited: &BTreeMap<usize, Parameter>,
     parts: &mut Vec<Part>,
 ) -> Result<TreeNode, EvalError> {
@@ -483,21 +584,30 @@ fn collect_parts_inner<K: Kernel>(
     }
 
     if node.children.is_empty() {
-        let mesh = if node.shape == root_shape {
-            root_mesh.clone()
-        } else {
-            kernel.tessellate(node.shape, tolerance)?
-        };
         for parameter in &node.parameters {
             scope
                 .entry(parameter.range.start)
                 .or_insert_with(|| parameter.clone());
         }
+        let parameters: Vec<Parameter> = scope.into_values().collect();
+        let mesh = if node.shape == context.root_shape {
+            context.root_mesh.clone()
+        } else {
+            let key = MeshKey::new(&node.module, &parameters, node.world, context.tolerance);
+            match context.cache.get(&key) {
+                Some(mesh) => mesh,
+                None => {
+                    let mesh = context.kernel.tessellate(node.shape, context.tolerance)?;
+                    context.cache.insert(key, mesh.clone());
+                    mesh
+                }
+            }
+        };
         let part_index = parts.len();
         parts.push(Part {
             module: node.module.clone(),
             source_range: node.source_range.clone(),
-            parameters: scope.into_values().collect(),
+            parameters,
             mesh,
         });
         Ok(TreeNode {
@@ -509,9 +619,7 @@ fn collect_parts_inner<K: Kernel>(
     } else {
         let mut children = Vec::new();
         for child in &node.children {
-            children.push(collect_parts_inner(
-                child, root_shape, root_mesh, kernel, tolerance, &scope, parts,
-            )?);
+            children.push(collect_parts_inner(child, context, &scope, parts)?);
         }
         Ok(TreeNode {
             module: node.module.clone(),

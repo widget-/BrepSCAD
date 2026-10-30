@@ -12,7 +12,7 @@ use glam::{Vec2, Vec3};
 use renderer::MeshRenderer;
 use visual_openscad_kernel_api::Mesh;
 use visual_openscad_kernel_truck::TruckKernel;
-use visual_openscad_scad_eval::{Evaluation, TreeNode, evaluate};
+use visual_openscad_scad_eval::{Evaluation, MeshCache, TreeNode, evaluate_with_cache};
 use visual_openscad_scad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 
 const SAMPLE: &str = r#"size = [2, 2, 2];
@@ -57,6 +57,7 @@ struct ParameterDraft {
 struct ViewerApp {
     source: String,
     evaluation: Evaluation,
+    mesh_cache: MeshCache,
     mesh: Mesh,
     pick_mesh: Mesh,
     pick_parts: Vec<PickPart>,
@@ -76,7 +77,8 @@ impl ViewerApp {
             .as_ref()
             .expect("the viewer requires the wgpu backend");
 
-        let (evaluation, error) = evaluate_source(SAMPLE);
+        let mut mesh_cache = MeshCache::new();
+        let (evaluation, error) = evaluate_source(SAMPLE, &mut mesh_cache);
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
@@ -86,6 +88,7 @@ impl ViewerApp {
         Self {
             source: SAMPLE.to_owned(),
             evaluation,
+            mesh_cache,
             mesh,
             pick_mesh,
             pick_parts,
@@ -101,7 +104,7 @@ impl ViewerApp {
 
     fn reload(&mut self, device: &wgpu::Device) {
         let started = Instant::now();
-        let (evaluation, error) = evaluate_source(&self.source);
+        let (evaluation, error) = evaluate_source(&self.source, &mut self.mesh_cache);
 
         if error.is_none() {
             let mesh = combine_evaluation(&evaluation);
@@ -428,9 +431,9 @@ fn tree_ui(
     }
 }
 
-fn evaluate_source(source: &str) -> (Evaluation, Option<String>) {
+fn evaluate_source(source: &str, cache: &mut MeshCache) -> (Evaluation, Option<String>) {
     let mut kernel = TruckKernel::new();
-    match evaluate(source, &mut kernel, 0.01) {
+    match evaluate_with_cache(source, &mut kernel, 0.01, cache) {
         Ok(evaluation) => (evaluation, None),
         Err(error) => (Evaluation { shapes: Vec::new() }, Some(error.to_string())),
     }
@@ -558,7 +561,7 @@ mod tests {
 
     #[test]
     fn built_in_sample_evaluates() {
-        let (evaluation, error) = evaluate_source(SAMPLE);
+        let (evaluation, error) = evaluate_source(SAMPLE, &mut MeshCache::default());
         assert!(error.is_none(), "{error:?}");
         assert_eq!(evaluation.shapes.len(), 1);
         assert_eq!(evaluation.shapes[0].parts.len(), 2);

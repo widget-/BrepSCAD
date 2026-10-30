@@ -6,7 +6,7 @@
 - Branch: `main`
 - HEAD: `4c6d29d refactor: use composed matrix transforms`
 - Working tree: clean before this note was added
-- Test suite: 41 tests passing
+- Test suite: 44 tests passing
 
 ## What this project is
 
@@ -64,6 +64,10 @@ docs/
   - a source-shaped tree of groups and leaves; leaves index into `parts`
 - Transform parameters are inherited by the leaf operands, so they appear in
   the properties panel and remain editable.
+- Leaf meshes are cached across evaluations. The key covers the module, its
+  resolved numeric parameters, the composed world transform, and the
+  tessellation tolerance, so only leaves whose geometry changed are
+  re-tessellated.
 
 ### Kernel
 
@@ -176,25 +180,22 @@ Exit code `124` means it stayed alive until the timeout and did not panic.
 
 ## Recommended next steps
 
-1. **Evaluation cache**
-   - Cache parts by source range/content hash.
-   - Avoid re-tessellating every operand on each parameter edit.
-2. **Complete the transform set**
+1. **Complete the transform set**
    - `multmatrix`, `mirror`, `resize`.
    - Validate singular matrices and reflections.
    - Decide on non-uniform scale policy per kernel.
-3. **Expand the language subset**
+2. **Expand the language subset**
    - Named arguments, expressions, `sphere`, extrusions.
    - Single-child boolean forms.
    - `for` / `if` and module/function definitions later.
-4. **Native intrinsics**
+3. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-5. **Kernel adapters**
+4. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-6. **Selection polish**
+5. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 
