@@ -56,7 +56,10 @@ scripts/
 
 - Top-level assignments and variable lookup.
 - `cube`, `cylinder`, `sphere`.
+- `square`, `circle`, `polygon` sketches and `linear_extrude`.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
+- Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
+  and `linear_extrude` turns exactly one 2D child into a solid.
 - `difference`, `union`, `intersection` with a brace block or one child call.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
@@ -82,8 +85,10 @@ scripts/
 - `kernel-api` is a capability-based `Kernel` trait with opaque `ShapeId`s.
 - `kernel-truck` supports:
   - cuboid, cylinder, and sphere primitives
-  - matrix transforms
-  - union, difference, intersection
+  - square, circle, and polygon sketches
+  - linear extrusion of a sketch along Z
+  - matrix transforms on faces and solids
+  - union, difference, intersection on solids
   - tessellation to a neutral triangle mesh
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
@@ -126,6 +131,10 @@ scripts/
 - `sphere` is built as a faceted UV B-rep with shared edges and planar
   triangles. Revolving a half-disc in Truck produced degenerate pole faces that
   broke tessellation and booleans, so the faceted shell is used instead.
+- 2D profiles are centered in XY and extrusions are centered on Z, matching the
+  centered 3D primitives rather than OpenSCAD's origin-at-a-corner convention.
+  Profile children are filtered out of the selectable-part tree; the extrusion
+  itself is the selectable part.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -182,7 +191,9 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
-  - no `polyhedron`, extrusions, or 2D primitives
+  - no `polyhedron` or `rotate_extrude`
+  - no 2D booleans; `linear_extrude` takes exactly one 2D child
+  - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
   - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
 - No color or `$fn` handling.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
@@ -204,8 +215,9 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 
 ## Recommended next steps
 
-1. **Expand the language subset**
-   - Extrusions, `polyhedron`, 2D primitives.
+1. **Finish the 2D/extrusion layer**
+   - `rotate_extrude`, 2D booleans, `polyhedron`.
+   - `linear_extrude` options: center, twist, scale, slices.
    - `for` / `if` and module/function definitions later.
 2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.

@@ -30,6 +30,26 @@ impl Value {
         }
     }
 
+    pub(crate) fn as_size2(&self, module: &str) -> Result<[f64; 2], EvalError> {
+        match self {
+            Self::Number(value) => Ok([*value; 2]),
+            Self::Vector(values) if values.len() == 2 => Ok([values[0], values[1]]),
+            _ => Err(bad_args(module, "expected a 2-element vector or a scalar")),
+        }
+    }
+
+    pub(crate) fn as_polygon_points(&self, module: &str) -> Result<Vec<[f64; 2]>, EvalError> {
+        let Self::Matrix(rows) = self else {
+            return Err(bad_args(module, "expected a list of 2D points"));
+        };
+        rows.iter()
+            .map(|row| match row.as_slice() {
+                [x, y] => Ok([*x, *y]),
+                _ => Err(bad_args(module, "each point must have two coordinates")),
+            })
+            .collect()
+    }
+
     pub(crate) fn as_vector3(&self, module: &str) -> Result<[f64; 3], EvalError> {
         match self {
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),

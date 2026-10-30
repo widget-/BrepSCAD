@@ -9,6 +9,12 @@ use crate::EvalError;
 use crate::cache::{MeshCache, MeshKey};
 use crate::model::{Parameter, Part, TreeNode};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Dimension {
+    TwoD,
+    ThreeD,
+}
+
 #[derive(Debug)]
 pub(crate) struct Node {
     pub(crate) shape: ShapeId,
@@ -17,6 +23,7 @@ pub(crate) struct Node {
     pub(crate) parameters: Vec<Parameter>,
     pub(crate) transform_parameters: Option<Vec<Parameter>>,
     pub(crate) world: Transform,
+    pub(crate) dimension: Dimension,
     pub(crate) children: Vec<Node>,
 }
 
@@ -63,7 +70,13 @@ fn collect_parts_inner<K: Kernel>(
         }
     }
 
-    if node.children.is_empty() {
+    let mesh_children: Vec<&Node> = node
+        .children
+        .iter()
+        .filter(|child| child.dimension == Dimension::ThreeD)
+        .collect();
+
+    if mesh_children.is_empty() {
         for parameter in &node.parameters {
             scope
                 .entry(parameter.range.start)
@@ -98,7 +111,7 @@ fn collect_parts_inner<K: Kernel>(
         })
     } else {
         let mut children = Vec::new();
-        for child in &node.children {
+        for child in mesh_children {
             children.push(collect_parts_inner(child, context, &scope, parts)?);
         }
         Ok(TreeNode {

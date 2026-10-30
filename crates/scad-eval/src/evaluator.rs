@@ -2,13 +2,13 @@
 
 use std::collections::HashMap;
 
-use visual_openscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Transform};
+use visual_openscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use visual_openscad_scad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
 use crate::model::{EvaluatedShape, Evaluation};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
-use crate::parts::{Node, collect_parts};
+use crate::parts::{Dimension, Node, collect_parts};
 use crate::value::{Value, binary_value, unary_value};
 use crate::{EvalError, bad_args};
 
@@ -31,6 +31,21 @@ impl Arguments {
         }
         self.argument(name, 0)
             .ok_or_else(|| bad_args(module, "expected one argument"))
+    }
+
+    fn radius(&self, module: &str) -> Result<f64, EvalError> {
+        if self.positional.len() > 1 {
+            return Err(bad_args(module, "expected one radius"));
+        }
+        if let Some(value) = self.named.get("r") {
+            value.as_number(module)
+        } else if let Some(value) = self.named.get("d") {
+            Ok(value.as_number(module)? / 2.0)
+        } else {
+            self.argument("r", 0)
+                .ok_or_else(|| bad_args(module, "expected radius"))?
+                .as_number(module)
+        }
     }
 
     fn ensure_known(&self, module: &str, allowed: &[&str]) -> Result<(), EvalError> {
@@ -198,6 +213,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     parameters,
                     transform_parameters: None,
                     world: parent,
+                    dimension: Dimension::ThreeD,
                     children: Vec::new(),
                 })
             }
@@ -225,23 +241,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                     parameters,
                     transform_parameters: None,
                     world: parent,
+                    dimension: Dimension::ThreeD,
                     children: Vec::new(),
                 })
             }
             "sphere" => {
                 args.ensure_known("sphere", &["r", "d"])?;
-                if args.positional.len() > 1 {
-                    return Err(bad_args("sphere", "expected one radius"));
-                }
-                let radius = if let Some(value) = args.named.get("r") {
-                    value.as_number("sphere")?
-                } else if let Some(value) = args.named.get("d") {
-                    value.as_number("sphere")? / 2.0
-                } else {
-                    args.argument("r", 0)
-                        .ok_or_else(|| bad_args("sphere", "expected radius"))?
-                        .as_number("sphere")?
-                };
+                let radius = args.radius("sphere")?;
                 let shape = self.kernel.primitive(Primitive::Sphere { radius })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
@@ -251,7 +257,116 @@ impl<K: Kernel> Evaluator<'_, K> {
                     parameters,
                     transform_parameters: None,
                     world: parent,
+                    dimension: Dimension::ThreeD,
                     children: Vec::new(),
+                })
+            }
+            "square" => {
+                args.ensure_known("square", &["size"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("square", "expected one size"));
+                }
+                let size = args
+                    .argument("size", 0)
+                    .ok_or_else(|| bad_args("square", "expected size"))?
+                    .as_size2("square")?;
+                let shape = self.kernel.sketch(Sketch::Square { size })?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: None,
+                    world: parent,
+                    dimension: Dimension::TwoD,
+                    children: Vec::new(),
+                })
+            }
+            "circle" => {
+                args.ensure_known("circle", &["r", "d"])?;
+                let radius = args.radius("circle")?;
+                let shape = self.kernel.sketch(Sketch::Circle { radius })?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: None,
+                    world: parent,
+                    dimension: Dimension::TwoD,
+                    children: Vec::new(),
+                })
+            }
+            "polygon" => {
+                args.ensure_known("polygon", &["points"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("polygon", "expected one point list"));
+                }
+                let points = args
+                    .argument("points", 0)
+                    .ok_or_else(|| bad_args("polygon", "expected points"))?
+                    .as_polygon_points("polygon")?;
+                let shape = self.kernel.sketch(Sketch::Polygon { points })?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: None,
+                    world: parent,
+                    dimension: Dimension::TwoD,
+                    children: Vec::new(),
+                })
+            }
+            "linear_extrude" => {
+                args.ensure_known("linear_extrude", &["height"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("linear_extrude", "expected one height"));
+                }
+                let height = args
+                    .argument("height", 0)
+                    .ok_or_else(|| bad_args("linear_extrude", "expected height"))?
+                    .as_number("linear_extrude")?;
+
+                let transform_parameters = node
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .unwrap_or_default();
+
+                let children = match block {
+                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                    None => {
+                        let child = node
+                            .children()
+                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                            .ok_or_else(|| {
+                                bad_args("linear_extrude", "expected a child or block")
+                            })?;
+                        vec![self.module_call(child, Transform::IDENTITY)?]
+                    }
+                };
+                if children.len() != 1 {
+                    return Err(bad_args("linear_extrude", "expected exactly one 2D child"));
+                }
+                if children[0].dimension != Dimension::TwoD {
+                    return Err(bad_args("linear_extrude", "expected a 2D child"));
+                }
+
+                let shape = self.kernel.extrude(children[0].shape, height)?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: Some(transform_parameters),
+                    world: parent,
+                    dimension: Dimension::ThreeD,
+                    children,
                 })
             }
             "resize" => {
@@ -285,6 +400,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                 };
                 if children.is_empty() {
                     return Err(bad_args("resize", "expected at least one child"));
+                }
+                let dimension = children[0].dimension;
+                if children.iter().any(|child| child.dimension != dimension) {
+                    return Err(bad_args("resize", "cannot mix 2D and 3D children"));
+                }
+                if dimension == Dimension::TwoD && children.len() > 1 {
+                    return Err(bad_args("resize", "2D unions are not supported"));
                 }
 
                 let mut united = children[0].shape;
@@ -325,6 +447,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     parameters,
                     transform_parameters: Some(transform_parameters),
                     world: combined,
+                    dimension,
                     children,
                 })
             }
@@ -376,6 +499,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
+                let dimension = children[0].dimension;
+                if children.iter().any(|child| child.dimension != dimension) {
+                    return Err(bad_args(name.as_str(), "cannot mix 2D and 3D children"));
+                }
+                if dimension == Dimension::TwoD && children.len() > 1 {
+                    return Err(bad_args(name.as_str(), "2D unions are not supported"));
+                }
 
                 let mut shapes = children.iter().map(|child| child.shape);
                 let mut result = shapes.next().expect("checked non-empty");
@@ -390,6 +520,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     parameters,
                     transform_parameters: Some(transform_parameters),
                     world: combined,
+                    dimension,
                     children,
                 })
             }
@@ -407,6 +538,12 @@ impl<K: Kernel> Evaluator<'_, K> {
                 };
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
+                }
+                if children
+                    .iter()
+                    .any(|child| child.dimension != Dimension::ThreeD)
+                {
+                    return Err(bad_args(name.as_str(), "2D booleans are not supported"));
                 }
 
                 let op = match name.as_str() {
@@ -427,6 +564,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     parameters,
                     transform_parameters: None,
                     world: parent,
+                    dimension: Dimension::ThreeD,
                     children,
                 })
             }
