@@ -335,6 +335,71 @@ fn bounds(mesh: &visual_openscad_kernel_api::Mesh) -> ([f64; 3], [f64; 3]) {
 }
 
 #[test]
+fn evaluates_named_primitive_arguments() {
+    let mut kernel = TruckKernel::new();
+    let cube = evaluate("cube(size = [2, 4, 6]);", &mut kernel, 0.01).expect("cube");
+    let (min, max) = bounds(&cube.shapes[0].mesh);
+    assert!((max[0] - min[0] - 2.0).abs() < 1e-6);
+    assert!((max[1] - min[1] - 4.0).abs() < 1e-6);
+    assert!((max[2] - min[2] - 6.0).abs() < 1e-6);
+
+    let cylinder = evaluate("cylinder(0.5, h = 4);", &mut kernel, 0.01).expect("cylinder");
+    let (min, max) = bounds(&cylinder.shapes[0].mesh);
+    assert!((max[2] - min[2] - 4.0).abs() < 1e-6);
+}
+
+#[test]
+fn evaluates_named_transform_arguments() {
+    let source = "translate(v = [1, 0, 0]) rotate(a = [0, 0, 90]) cube(size = [2, 1, 1]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!(
+        (max[0] - min[0] - 1.0).abs() < 1e-6,
+        "x = {}",
+        max[0] - min[0]
+    );
+    assert!(
+        (max[1] - min[1] - 2.0).abs() < 1e-6,
+        "y = {}",
+        max[1] - min[1]
+    );
+}
+
+#[test]
+fn evaluates_a_named_multmatrix() {
+    let source = "multmatrix(m = [[1, 0, 0, 5], [0, 1, 0, 0], [0, 0, 1, 0]]) cube([2, 2, 2]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let (min, _) = bounds(&evaluation.shapes[0].mesh);
+    assert!((min[0] - 4.0).abs() < 1e-6, "min_x = {}", min[0]);
+}
+
+#[test]
+fn rejects_unknown_named_arguments() {
+    let mut kernel = TruckKernel::new();
+    let error =
+        evaluate_to_meshes("cube(side = 2);", &mut kernel, 0.01).expect_err("unknown argument");
+
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "cube"));
+}
+
+#[test]
+fn evaluates_single_child_boolean_forms() {
+    let source = "difference() translate([1, 0, 0]) cube([2, 2, 2]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    assert_eq!(shape.parts.len(), 1);
+    assert!(shape.mesh.triangle_count() > 0);
+    let (min, _) = bounds(&shape.mesh);
+    assert!((min[0] - 0.0).abs() < 1e-6, "min_x = {}", min[0]);
+}
+
+#[test]
 fn reports_unknown_identifiers() {
     let mut kernel = TruckKernel::new();
     let error = evaluate_to_meshes("cube(size);", &mut kernel, 0.01).expect_err("unknown size");

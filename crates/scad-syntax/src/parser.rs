@@ -153,7 +153,12 @@ impl<'a> Parser<'a> {
             return true;
         }
         loop {
-            if !self.expression() {
+            if self.current() == SyntaxKind::IDENT && self.peek(1) == SyntaxKind::EQ {
+                if !self.named_arg() {
+                    self.finish();
+                    return false;
+                }
+            } else if !self.expression() {
                 self.finish();
                 return false;
             }
@@ -170,6 +175,17 @@ impl<'a> Parser<'a> {
             self.finish();
             return false;
         }
+    }
+
+    fn named_arg(&mut self) -> bool {
+        self.start(SyntaxKind::NAMED_ARG);
+        self.bump();
+        if !self.expect(SyntaxKind::EQ) || !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
     }
 
     fn expression(&mut self) -> bool {

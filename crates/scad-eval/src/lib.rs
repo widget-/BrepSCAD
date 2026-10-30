@@ -212,6 +212,46 @@ impl Value {
     }
 }
 
+#[derive(Debug, Default)]
+struct Arguments {
+    positional: Vec<Value>,
+    named: HashMap<String, Value>,
+}
+
+impl Arguments {
+    fn argument(&self, name: &str, index: usize) -> Option<&Value> {
+        self.named.get(name).or_else(|| self.positional.get(index))
+    }
+
+    fn one(&self, module: &str, name: &str) -> Result<&Value, EvalError> {
+        if self.positional.len() > 1 {
+            return Err(bad_args(module, "expected one argument"));
+        }
+        self.argument(name, 0)
+            .ok_or_else(|| bad_args(module, "expected one argument"))
+    }
+
+    fn ensure_known(&self, module: &str, allowed: &[&str]) -> Result<(), EvalError> {
+        for name in self.named.keys() {
+            if !allowed.contains(&name.as_str()) {
+                return Err(bad_args(
+                    module,
+                    format!("unsupported named argument {name}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_empty(&self, module: &str) -> Result<(), EvalError> {
+        if self.positional.is_empty() && self.named.is_empty() {
+            Ok(())
+        } else {
+            Err(bad_args(module, "expected no arguments"))
+        }
+    }
+}
+
 /// Parses and evaluates `source`, returning each top-level shape with its
 /// source range, numeric parameter bindings, and selectable operands.
 pub fn evaluate<K: Kernel>(
@@ -342,7 +382,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             .find(|child| child.kind() == SyntaxKind::ARG_LIST)
         {
             Some(arg_list) => self.arg_list(arg_list)?,
-            None => Vec::new(),
+            None => Arguments::default(),
         };
         let block = node
             .children()
@@ -350,7 +390,14 @@ impl<K: Kernel> Evaluator<'_, K> {
 
         match name.as_str() {
             "cube" => {
-                let size = single_arg(&args, "cube")?.as_size("cube")?;
+                args.ensure_known("cube", &["size"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("cube", "expected one argument"));
+                }
+                let size = args
+                    .argument("size", 0)
+                    .ok_or_else(|| bad_args("cube", "expected size"))?
+                    .as_size("cube")?;
                 let shape = self.kernel.primitive(Primitive::Cuboid { size })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
@@ -364,11 +411,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "cylinder" => {
-                if args.len() != 2 {
+                args.ensure_known("cylinder", &["r", "h"])?;
+                if args.positional.len() > 2 {
                     return Err(bad_args("cylinder", "expected radius and height"));
                 }
-                let radius = args[0].as_number("cylinder")?;
-                let height = args[1].as_number("cylinder")?;
+                let radius = args
+                    .argument("r", 0)
+                    .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
+                    .as_number("cylinder")?;
+                let height = args
+                    .argument("h", 1)
+                    .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
+                    .as_number("cylinder")?;
                 let shape = self
                     .kernel
                     .primitive(Primitive::Cylinder { radius, height })?;
@@ -384,7 +438,14 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "resize" => {
-                let newsize = single_arg(&args, "resize")?.as_vector3("resize")?;
+                args.ensure_known("resize", &["newsize"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("resize", "expected one argument"));
+                }
+                let newsize = args
+                    .argument("newsize", 0)
+                    .ok_or_else(|| bad_args("resize", "expected newsize"))?
+                    .as_vector3("resize")?;
                 if newsize.iter().any(|value| *value < 0.0) {
                     return Err(bad_args("resize", "dimensions must be non-negative"));
                 }
@@ -451,7 +512,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "translate" | "rotate" | "scale" | "multmatrix" | "mirror" => {
-                let argument = single_arg(&args, name.as_str())?;
+                let first = match name.as_str() {
+                    "rotate" => "a",
+                    "multmatrix" => "m",
+                    _ => "v",
+                };
+                args.ensure_known(name.as_str(), &[first])?;
+                let argument = args.one(name.as_str(), first)?;
                 let local = match name.as_str() {
                     "translate" => Transform::from_translation(argument.as_vector3("translate")?),
                     "rotate" => {
@@ -510,8 +577,17 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "difference" | "union" | "intersection" => {
-                let block = block.ok_or_else(|| bad_args(name.as_str(), "expected a block"))?;
-                let children = self.block(block, parent)?;
+                args.ensure_empty(name.as_str())?;
+                let children = match block {
+                    Some(block) => self.block(block, parent)?,
+                    None => {
+                        let child = node
+                            .children()
+                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                            .ok_or_else(|| bad_args(name.as_str(), "expected a block or child"))?;
+                        vec![self.module_call(child, parent)?]
+                    }
+                };
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
@@ -576,22 +652,37 @@ impl<K: Kernel> Evaluator<'_, K> {
         Ok(())
     }
 
-    fn arg_list(&mut self, node: SyntaxNode) -> Result<Vec<Value>, EvalError> {
-        let mut args = Vec::new();
+    fn arg_list(&mut self, node: SyntaxNode) -> Result<Arguments, EvalError> {
+        let mut arguments = Arguments::default();
         for element in node.children_with_tokens() {
             if let Some(token) = element.as_token() {
                 match token.kind() {
-                    SyntaxKind::NUMBER => args.push(Value::Number(parse_number(token.text())?)),
-                    SyntaxKind::IDENT => args.push(self.lookup(token.text())?),
+                    SyntaxKind::NUMBER => {
+                        arguments
+                            .positional
+                            .push(Value::Number(parse_number(token.text())?));
+                    }
+                    SyntaxKind::IDENT => arguments.positional.push(self.lookup(token.text())?),
                     _ => {}
                 }
             } else if let Some(child) = element.as_node() {
-                if child.kind() == SyntaxKind::VECTOR {
-                    args.push(self.vector(child.clone())?);
+                match child.kind() {
+                    SyntaxKind::VECTOR => {
+                        arguments.positional.push(self.vector(child.clone())?);
+                    }
+                    SyntaxKind::NAMED_ARG => {
+                        let name = first_ident(child)
+                            .ok_or_else(|| EvalError::Parse("missing argument name".to_owned()))?;
+                        let value = self.expression_after_eq(child)?.ok_or_else(|| {
+                            EvalError::Parse(format!("missing value for argument {name}"))
+                        })?;
+                        arguments.named.insert(name, value);
+                    }
+                    _ => {}
                 }
             }
         }
-        Ok(args)
+        Ok(arguments)
     }
 
     fn expression_after_eq(&mut self, node: &SyntaxNode) -> Result<Option<Value>, EvalError> {
@@ -779,14 +870,6 @@ fn first_ident(node: &SyntaxNode) -> Option<String> {
 fn parse_number(text: &str) -> Result<f64, EvalError> {
     text.parse::<f64>()
         .map_err(|_| EvalError::Parse(format!("invalid number: {text}")))
-}
-
-fn single_arg<'a>(args: &'a [Value], module: &str) -> Result<&'a Value, EvalError> {
-    if args.len() == 1 {
-        Ok(&args[0])
-    } else {
-        Err(bad_args(module, "expected one argument"))
-    }
 }
 
 fn bad_args(module: &str, message: impl Into<String>) -> EvalError {

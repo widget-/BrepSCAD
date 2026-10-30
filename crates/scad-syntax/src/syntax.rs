@@ -25,6 +25,7 @@ pub enum SyntaxKind {
     ARG_LIST,
     BLOCK,
     VECTOR,
+    NAMED_ARG,
     ERROR,
     EOF,
     __LAST,
@@ -68,8 +69,9 @@ impl Language for ScadLanguage {
             17 => SyntaxKind::ARG_LIST,
             18 => SyntaxKind::BLOCK,
             19 => SyntaxKind::VECTOR,
-            20 => SyntaxKind::ERROR,
-            21 => SyntaxKind::EOF,
+            20 => SyntaxKind::NAMED_ARG,
+            21 => SyntaxKind::ERROR,
+            22 => SyntaxKind::EOF,
             _ => SyntaxKind::ERROR,
         }
     }

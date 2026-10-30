@@ -81,7 +81,7 @@ The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statis
 cargo run -p visual-openscad -- path/to/model.scad
 ```
 
-The current subset supports top-level assignments, `cube`, `cylinder`, `translate` / `rotate` / `scale` / `multmatrix` / `mirror` / `resize` with a single child or block, and the `difference` / `union` / `intersection` blocks. `multmatrix` accepts a 4×3 or 4×4 matrix; `resize` accepts a positional `newsize` vector.
+The current subset supports top-level assignments, positional and named arguments, `cube`, `cylinder`, `translate` / `rotate` / `scale` / `multmatrix` / `mirror` / `resize` with a single child or block, and the `difference` / `union` / `intersection` modules with a block or a single child. `multmatrix` accepts a 4×3 or 4×4 matrix; `resize` accepts a `newsize` vector.
 
 ## Viewer
 

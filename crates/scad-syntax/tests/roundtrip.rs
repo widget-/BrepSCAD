@@ -87,6 +87,23 @@ fn round_trips_transform_with_single_child() {
 }
 
 #[test]
+fn round_trips_named_arguments() {
+    let source = "cube(size = [2, 3, 4]);\ncylinder(r = 0.5, h = 4);\ntranslate(v = [1, 0, 0]) cube(size = 2);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    assert_eq!(
+        parsed
+            .syntax()
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::NAMED_ARG)
+            .count(),
+        5
+    );
+}
+
+#[test]
 fn parses_negative_number_literals() {
     let source = "translate([-1, 0, -2.5]) cube([2, 2, 2]);\n";
     let parsed = parse(source);
