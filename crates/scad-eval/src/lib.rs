@@ -7,6 +7,7 @@ mod cache;
 mod evaluator;
 mod model;
 mod parameters;
+mod parts;
 mod value;
 
 use thiserror::Error;
