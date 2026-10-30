@@ -8,7 +8,8 @@ Licensed under Apache-2.0; see [`LICENSE`](truck-shapeops/LICENSE).
 Local patch: `src/transversal/divide_face/mod.rs` rebuilds divided faces with
 `Face::try_new(...).ok()?` instead of `Face::debug_new(...)`. A non-simple
 generated wire now returns `None`, letting `brepscad-kernel-truck` retry the
-boolean instead of panicking.
+boolean instead of panicking. `src/alternative.rs` also allows the unused
+`Alternative` helper under the crate's release-mode `deny(warnings)`.
 
 Remove this directory and the `[patch.crates-io]` entry in the workspace
 manifest once a released Truck version contains equivalent behavior. Upstream

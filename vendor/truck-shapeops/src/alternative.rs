@@ -1,5 +1,6 @@
 use truck_meshalgo::prelude::*;
 
+#[allow(dead_code)] // PATCH(BrepSCAD): upstream leaves this helper unused in release builds.
 #[derive(Clone, Debug)]
 pub enum Alternative<T, U> {
     FirstType(T),
