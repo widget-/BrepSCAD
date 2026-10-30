@@ -124,7 +124,7 @@ pub fn evaluate<K: Kernel>(
         };
 
         for statement in parsed.syntax().children() {
-            if let Some(node) = evaluator.statement(statement)? {
+            if let Some(node) = evaluator.statement(statement, Transform::IDENTITY)? {
                 roots.push(node);
             }
         }
@@ -175,13 +175,17 @@ struct Evaluator<'a, K: Kernel> {
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
-    fn statement(&mut self, node: SyntaxNode) -> Result<Option<Node>, EvalError> {
+    fn statement(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Option<Node>, EvalError> {
         match node.kind() {
             SyntaxKind::ASSIGNMENT => {
                 self.assignment(node)?;
                 Ok(None)
             }
-            SyntaxKind::MODULE_CALL => self.module_call(node).map(Some),
+            SyntaxKind::MODULE_CALL => self.module_call(node, parent).map(Some),
             _ => Ok(None),
         }
     }
@@ -197,7 +201,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         Ok(())
     }
 
-    fn module_call(&mut self, node: SyntaxNode) -> Result<Node, EvalError> {
+    fn module_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Node, EvalError> {
         let name =
             first_ident(&node).ok_or_else(|| EvalError::Parse("missing module name".to_owned()))?;
         let module = name.clone();
@@ -219,6 +223,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             "cube" => {
                 let size = single_arg(&args, "cube")?.as_size("cube")?;
                 let shape = self.kernel.primitive(Primitive::Cuboid { size })?;
+                let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,
                     module,
@@ -237,6 +242,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let shape = self
                     .kernel
                     .primitive(Primitive::Cylinder { radius, height })?;
+                let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,
                     module,
@@ -248,14 +254,19 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             "translate" | "rotate" | "scale" => {
                 let argument = single_arg(&args, name.as_str())?;
-                let transform = match name.as_str() {
-                    "translate" => Transform::Translate(argument.as_vector3("translate")?),
+                let local = match name.as_str() {
+                    "translate" => Transform::from_translation(argument.as_vector3("translate")?),
                     "rotate" => {
                         let [x, y, z] = argument.as_vector3("rotate")?;
-                        Transform::Rotate([x.to_radians(), y.to_radians(), z.to_radians()])
+                        Transform::from_rotation_xyz([
+                            x.to_radians(),
+                            y.to_radians(),
+                            z.to_radians(),
+                        ])
                     }
-                    _ => Transform::Scale(argument.as_scale("scale")?),
+                    _ => Transform::from_scale(argument.as_scale("scale")?),
                 };
+                let combined = parent.compose(local);
 
                 let transform_parameters = node
                     .children()
@@ -263,22 +274,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
                     .unwrap_or_default();
 
-                let mut children = match block {
-                    Some(block) => self.block(block)?,
+                let children = match block {
+                    Some(block) => self.block(block, combined)?,
                     None => {
                         let child = node
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a child or block"))?;
-                        vec![self.module_call(child)?]
+                        vec![self.module_call(child, combined)?]
                     }
                 };
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
-                }
-
-                for child in &mut children {
-                    self.transform_node(child, transform)?;
                 }
 
                 let mut shapes = children.iter().map(|child| child.shape);
@@ -298,7 +305,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             "difference" | "union" | "intersection" => {
                 let block = block.ok_or_else(|| bad_args(name.as_str(), "expected a block"))?;
-                let children = self.block(block)?;
+                let children = self.block(block, parent)?;
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
@@ -327,22 +334,26 @@ impl<K: Kernel> Evaluator<'_, K> {
         }
     }
 
-    fn block(&mut self, node: SyntaxNode) -> Result<Vec<Node>, EvalError> {
+    fn block(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
         let mut nodes = Vec::new();
         for statement in node.children() {
-            if let Some(node) = self.statement(statement)? {
+            if let Some(node) = self.statement(statement, parent)? {
                 nodes.push(node);
             }
         }
         Ok(nodes)
     }
 
-    fn transform_node(&mut self, node: &mut Node, transform: Transform) -> Result<(), EvalError> {
-        node.shape = self.kernel.transform(node.shape, transform)?;
-        for child in &mut node.children {
-            self.transform_node(child, transform)?;
+    fn apply_transform(
+        &mut self,
+        shape: ShapeId,
+        transform: Transform,
+    ) -> Result<ShapeId, EvalError> {
+        if transform.is_identity() {
+            Ok(shape)
+        } else {
+            Ok(self.kernel.transform(shape, transform)?)
         }
-        Ok(())
     }
 
     fn arg_list(&mut self, node: SyntaxNode) -> Result<Vec<Value>, EvalError> {

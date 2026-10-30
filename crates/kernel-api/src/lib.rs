@@ -21,13 +21,110 @@ pub enum BooleanOp {
     Intersection,
 }
 
-/// A neutral affine transform.
+/// A neutral column-major affine transform.
+///
+/// `cols[column][row]`. Use [`Transform::compose`] to combine an outer
+/// transform with a child transform; the child is applied first.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Transform {
-    Translate([f64; 3]),
+pub struct Transform {
+    pub cols: [[f64; 4]; 4],
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl Transform {
+    pub const IDENTITY: Self = Self {
+        cols: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    };
+
+    pub fn from_translation([x, y, z]: [f64; 3]) -> Self {
+        let mut transform = Self::IDENTITY;
+        transform.cols[3][0] = x;
+        transform.cols[3][1] = y;
+        transform.cols[3][2] = z;
+        transform
+    }
+
+    pub fn from_scale([x, y, z]: [f64; 3]) -> Self {
+        let mut transform = Self::IDENTITY;
+        transform.cols[0][0] = x;
+        transform.cols[1][1] = y;
+        transform.cols[2][2] = z;
+        transform
+    }
+
+    pub fn from_rotation_x(angle: f64) -> Self {
+        let (sin, cos) = angle.sin_cos();
+        let mut transform = Self::IDENTITY;
+        transform.cols[1][1] = cos;
+        transform.cols[1][2] = sin;
+        transform.cols[2][1] = -sin;
+        transform.cols[2][2] = cos;
+        transform
+    }
+
+    pub fn from_rotation_y(angle: f64) -> Self {
+        let (sin, cos) = angle.sin_cos();
+        let mut transform = Self::IDENTITY;
+        transform.cols[0][0] = cos;
+        transform.cols[0][2] = -sin;
+        transform.cols[2][0] = sin;
+        transform.cols[2][2] = cos;
+        transform
+    }
+
+    pub fn from_rotation_z(angle: f64) -> Self {
+        let (sin, cos) = angle.sin_cos();
+        let mut transform = Self::IDENTITY;
+        transform.cols[0][0] = cos;
+        transform.cols[0][1] = sin;
+        transform.cols[1][0] = -sin;
+        transform.cols[1][1] = cos;
+        transform
+    }
+
     /// Euler angles in radians, applied around X, then Y, then Z.
-    Rotate([f64; 3]),
-    Scale([f64; 3]),
+    pub fn from_rotation_xyz([x, y, z]: [f64; 3]) -> Self {
+        Self::from_rotation_z(z)
+            .compose(Self::from_rotation_y(y))
+            .compose(Self::from_rotation_x(x))
+    }
+
+    /// Returns `self * child`: the child transform is applied first.
+    pub fn compose(self, child: Self) -> Self {
+        let mut cols = [[0.0; 4]; 4];
+        for (column, out_col) in cols.iter_mut().enumerate() {
+            for (row, out) in out_col.iter_mut().enumerate() {
+                *out = (0..4)
+                    .map(|k| self.cols[k][row] * child.cols[column][k])
+                    .sum();
+            }
+        }
+        Self { cols }
+    }
+
+    pub fn apply(self, [x, y, z]: [f64; 3]) -> [f64; 3] {
+        let out_x =
+            self.cols[0][0] * x + self.cols[1][0] * y + self.cols[2][0] * z + self.cols[3][0];
+        let out_y =
+            self.cols[0][1] * x + self.cols[1][1] * y + self.cols[2][1] * z + self.cols[3][1];
+        let out_z =
+            self.cols[0][2] * x + self.cols[1][2] * y + self.cols[2][2] * z + self.cols[3][2];
+        [out_x, out_y, out_z]
+    }
+
+    pub fn is_identity(&self) -> bool {
+        *self == Self::IDENTITY
+    }
 }
 
 /// A neutral triangle mesh produced by tessellation.
@@ -128,5 +225,26 @@ mod tests {
             indices: vec![0, 1, 2],
         };
         assert_eq!(mesh.triangle_count(), 1);
+    }
+
+    #[test]
+    fn transform_composes_child_before_parent() {
+        let transform = Transform::from_translation([1.0, 0.0, 0.0])
+            .compose(Transform::from_scale([2.0, 2.0, 2.0]));
+
+        let point = transform.apply([1.0, 0.0, 0.0]);
+        assert!((point[0] - 3.0).abs() < 1e-12);
+        assert!(point[1].abs() < 1e-12);
+        assert!(point[2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn rotation_xyz_rotates_x_into_y() {
+        let transform = Transform::from_rotation_xyz([0.0, 0.0, std::f64::consts::FRAC_PI_2]);
+
+        let point = transform.apply([1.0, 0.0, 0.0]);
+        assert!(point[0].abs() < 1e-12);
+        assert!((point[1] - 1.0).abs() < 1e-12);
+        assert!(point[2].abs() < 1e-12);
     }
 }

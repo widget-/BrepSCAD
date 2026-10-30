@@ -62,19 +62,8 @@ impl Kernel for TruckKernel {
 
     fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
         let solid = self.shape(shape)?;
-        let transformed = match transform {
-            Transform::Translate([x, y, z]) => builder::translated(solid, Vector3::new(x, y, z)),
-            Transform::Rotate([x, y, z]) => {
-                let rotated = builder::rotated(solid, Point3::origin(), Vector3::unit_x(), Rad(x));
-                let rotated =
-                    builder::rotated(&rotated, Point3::origin(), Vector3::unit_y(), Rad(y));
-                builder::rotated(&rotated, Point3::origin(), Vector3::unit_z(), Rad(z))
-            }
-            Transform::Scale([x, y, z]) => {
-                builder::scaled(solid, Point3::origin(), Vector3::new(x, y, z))
-            }
-        };
-        Ok(self.insert(transformed))
+        let matrix = matrix4(transform);
+        Ok(self.insert(builder::transformed(solid, matrix)))
     }
 
     fn boolean(&mut self, op: BooleanOp, a: ShapeId, b: ShapeId) -> KernelResult<ShapeId> {
@@ -138,6 +127,15 @@ fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
     Ok(builder::tsweep(&disk, Vector3::new(0.0, height, 0.0)))
 }
 
+fn matrix4(transform: Transform) -> Matrix4 {
+    let cols = transform.cols;
+    Matrix4::new(
+        cols[0][0], cols[0][1], cols[0][2], cols[0][3], cols[1][0], cols[1][1], cols[1][2],
+        cols[1][3], cols[2][0], cols[2][1], cols[2][2], cols[2][3], cols[3][0], cols[3][1],
+        cols[3][2], cols[3][3],
+    )
+}
+
 fn to_neutral_mesh(mesh: &PolygonMesh) -> Mesh {
     let positions = mesh
         .positions()
@@ -191,7 +189,7 @@ mod tests {
             })
             .expect("cube");
         let moved = kernel
-            .transform(cube, Transform::Translate([1.0, 0.0, 0.0]))
+            .transform(cube, Transform::from_translation([1.0, 0.0, 0.0]))
             .expect("translate");
         let mesh = kernel.tessellate(moved, 0.1).expect("tessellation");
 
