@@ -40,6 +40,13 @@ pub enum Sketch {
     Polygon { points: Vec<[f64; 2]> },
 }
 
+/// A planar region with an outer contour and optional holes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileRegion {
+    pub outer: Vec<[f64; 2]>,
+    pub holes: Vec<Vec<[f64; 2]>>,
+}
+
 /// A boolean operation between two shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BooleanOp {
@@ -97,6 +104,11 @@ pub trait Kernel {
 
     fn sketch(&mut self, _sketch: Sketch) -> Result<ShapeId, KernelError> {
         Err(KernelError::Unsupported("sketch"))
+    }
+
+    /// Build one or more planar regions with holes, as produced by 2D CSG.
+    fn sketch_profile(&mut self, _regions: &[ProfileRegion]) -> Result<ShapeId, KernelError> {
+        Err(KernelError::Unsupported("sketch_profile"))
     }
 
     fn extrude(&mut self, _shape: ShapeId, _height: f64) -> Result<ShapeId, KernelError> {

@@ -2,10 +2,53 @@
 
 use std::collections::HashMap;
 
-use brepscad_kernel_api::KernelError;
+use brepscad_kernel_api::{KernelError, ProfileRegion};
 use truck_modeling::*;
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
+
+pub(crate) fn profile_face(region: &ProfileRegion) -> KernelResult<Face> {
+    let outer = contour_wire(&region.outer)?;
+    let mut wires = Vec::with_capacity(1 + region.holes.len());
+    wires.push(outer);
+    for hole in &region.holes {
+        wires.push(contour_wire(hole)?);
+    }
+    builder::try_attach_plane(&wires)
+        .map_err(|error| KernelError::Backend(format!("profile face: {error:?}")))
+}
+
+fn contour_wire(points: &[[f64; 2]]) -> KernelResult<Wire> {
+    if points.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(KernelError::Backend(
+            "profile points must be finite".to_owned(),
+        ));
+    }
+
+    let mut cleaned: Vec<[f64; 2]> = Vec::with_capacity(points.len());
+    for point in points {
+        if cleaned.last() != Some(point) {
+            cleaned.push(*point);
+        }
+    }
+    if cleaned.len() > 1 && cleaned.first() == cleaned.last() {
+        cleaned.pop();
+    }
+    if cleaned.len() < 3 {
+        return Err(KernelError::Backend(
+            "profile contours need at least three distinct points".to_owned(),
+        ));
+    }
+
+    let vertices: Vec<Vertex> = cleaned
+        .iter()
+        .map(|[x, y]| builder::vertex(Point3::new(*x, *y, 0.0)))
+        .collect();
+    let edges: Vec<Edge> = (0..vertices.len())
+        .map(|index| builder::line(&vertices[index], &vertices[(index + 1) % vertices.len()]))
+        .collect();
+    Ok(edges.into_iter().collect())
+}
 
 pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelResult<Solid> {
     if points.len() < 4 || faces.len() < 4 {

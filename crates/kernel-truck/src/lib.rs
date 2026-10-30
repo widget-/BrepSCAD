@@ -6,7 +6,8 @@
 mod primitives;
 
 use brepscad_kernel_api::{
-    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
+    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ProfileRegion, ShapeId, Sketch,
+    Transform,
 };
 use primitives::{cuboid, cylinder, polyhedron, sphere};
 use truck_meshalgo::prelude::*;
@@ -19,6 +20,7 @@ const BOOLEAN_TOLERANCES: [f64; 3] = [0.05, 0.02, 0.01];
 #[derive(Debug)]
 enum OwnedShape {
     Face(Face),
+    Faces(Vec<Face>),
     Solid(Solid),
 }
 
@@ -48,15 +50,16 @@ impl TruckKernel {
     fn solid(&self, id: ShapeId) -> KernelResult<&Solid> {
         match self.shape(id)? {
             OwnedShape::Solid(solid) => Ok(solid),
-            OwnedShape::Face(_) => Err(KernelError::Backend(
+            OwnedShape::Face(_) | OwnedShape::Faces(_) => Err(KernelError::Backend(
                 "operation requires a solid, not a sketch".to_owned(),
             )),
         }
     }
 
-    fn face(&self, id: ShapeId) -> KernelResult<&Face> {
+    fn faces(&self, id: ShapeId) -> KernelResult<&[Face]> {
         match self.shape(id)? {
-            OwnedShape::Face(face) => Ok(face),
+            OwnedShape::Face(face) => Ok(std::slice::from_ref(face)),
+            OwnedShape::Faces(faces) => Ok(faces),
             OwnedShape::Solid(_) => Err(KernelError::Backend(
                 "operation requires a sketch, not a solid".to_owned(),
             )),
@@ -100,15 +103,36 @@ impl Kernel for TruckKernel {
         Ok(self.insert(OwnedShape::Face(face)))
     }
 
+    fn sketch_profile(&mut self, regions: &[ProfileRegion]) -> KernelResult<ShapeId> {
+        if regions.is_empty() {
+            return Err(KernelError::Backend(
+                "profile sketch needs at least one region".to_owned(),
+            ));
+        }
+        let mut faces = Vec::with_capacity(regions.len());
+        for region in regions {
+            faces.push(primitives::profile_face(region)?);
+        }
+        let shape = if faces.len() == 1 {
+            OwnedShape::Face(faces.remove(0))
+        } else {
+            OwnedShape::Faces(faces)
+        };
+        Ok(self.insert(shape))
+    }
+
     fn extrude(&mut self, shape: ShapeId, height: f64) -> KernelResult<ShapeId> {
         if height <= 0.0 {
             return Err(KernelError::Backend(
                 "extrusion height must be positive".to_owned(),
             ));
         }
-        let face = self.face(shape)?;
-        let centered = builder::translated(face, Vector3::new(0.0, 0.0, -height / 2.0));
-        let solid = builder::tsweep(&centered, Vector3::new(0.0, 0.0, height));
+        let solids = self
+            .faces(shape)?
+            .iter()
+            .map(|face| extrude_face(face, height))
+            .collect::<Vec<_>>();
+        let solid = combine_solids(solids)?;
         Ok(self.insert(OwnedShape::Solid(solid)))
     }
 
@@ -121,17 +145,12 @@ impl Kernel for TruckKernel {
                 "revolve angle must be in (0, 2*pi]".to_owned(),
             ));
         }
-
-        let face = self.face(shape)?;
-        // rotate the XY profile into XZ: local Y becomes the revolve height
-        let rotation =
-            Matrix4::from_axis_angle(Vector3::unit_x(), Rad(std::f64::consts::FRAC_PI_2));
-        let profile = builder::transformed(face, rotation);
-        let solid = builder::rsweep(&profile, Point3::origin(), Vector3::unit_z(), Rad(angle));
-        let mut solid = solid;
-        if angle > 0.0 {
-            solid.not();
-        }
+        let solids = self
+            .faces(shape)?
+            .iter()
+            .map(|face| revolve_face(face, angle))
+            .collect::<Vec<_>>();
+        let solid = combine_solids(solids)?;
         Ok(self.insert(OwnedShape::Solid(solid)))
     }
 
@@ -149,6 +168,12 @@ impl Kernel for TruckKernel {
                 OwnedShape::Solid(transformed)
             }
             OwnedShape::Face(face) => OwnedShape::Face(builder::transformed(face, matrix)),
+            OwnedShape::Faces(faces) => OwnedShape::Faces(
+                faces
+                    .iter()
+                    .map(|face| builder::transformed(face, matrix))
+                    .collect(),
+            ),
         };
         Ok(self.insert(transformed))
     }
@@ -180,14 +205,11 @@ impl Kernel for TruckKernel {
     fn tessellate(&self, shape: ShapeId, tolerance: f64) -> KernelResult<Mesh> {
         let mut mesh = match self.shape(shape)? {
             OwnedShape::Solid(solid) => solid.triangulation(tolerance).to_polygon(),
-            OwnedShape::Face(face) => {
-                let shell: Shell = vec![face.clone()].into_iter().collect();
-                let meshed = shell.triangulation(tolerance);
+            OwnedShape::Face(face) => tessellate_face(face, tolerance),
+            OwnedShape::Faces(faces) => {
                 let mut mesh = PolygonMesh::default();
-                for poly_face in meshed.iter() {
-                    if let Some(part) = poly_face.surface() {
-                        mesh.merge(part);
-                    }
+                for face in faces {
+                    mesh.merge(tessellate_face(face, tolerance));
                 }
                 mesh
             }
@@ -197,6 +219,43 @@ impl Kernel for TruckKernel {
             .remove_unused_attrs();
         Ok(to_neutral_mesh(&mesh))
     }
+}
+
+fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
+    let shell: Shell = vec![face.clone()].into_iter().collect();
+    let meshed = shell.triangulation(tolerance);
+    let mut mesh = PolygonMesh::default();
+    for poly_face in meshed.iter() {
+        if let Some(part) = poly_face.surface() {
+            mesh.merge(part);
+        }
+    }
+    mesh
+}
+
+fn extrude_face(face: &Face, height: f64) -> Solid {
+    let centered = builder::translated(face, Vector3::new(0.0, 0.0, -height / 2.0));
+    builder::tsweep(&centered, Vector3::new(0.0, 0.0, height))
+}
+
+fn revolve_face(face: &Face, angle: f64) -> Solid {
+    // rotate the XY profile into XZ: local Y becomes the revolve height
+    let rotation = Matrix4::from_axis_angle(Vector3::unit_x(), Rad(std::f64::consts::FRAC_PI_2));
+    let profile = builder::transformed(face, rotation);
+    let mut solid = builder::rsweep(&profile, Point3::origin(), Vector3::unit_z(), Rad(angle));
+    if angle > 0.0 {
+        solid.not();
+    }
+    solid
+}
+
+fn combine_solids(solids: Vec<Solid>) -> KernelResult<Solid> {
+    let mut boundaries = Vec::new();
+    for solid in solids {
+        boundaries.extend(solid.into_boundaries());
+    }
+    Solid::try_new(boundaries)
+        .map_err(|error| KernelError::Backend(format!("extruded profile: {error:?}")))
 }
 
 fn matrix4(transform: Transform) -> Matrix4 {
@@ -737,6 +796,49 @@ mod tests {
             matches!(error, KernelError::Backend(ref message) if message.contains("range")),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn profile_with_a_hole_extrudes() {
+        let mut kernel = TruckKernel::new();
+        let region = ProfileRegion {
+            outer: vec![[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]],
+            holes: vec![vec![[-1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [1.0, -1.0]]],
+        };
+        let sketch = kernel.sketch_profile(&[region]).expect("profile");
+        let solid = kernel.extrude(sketch, 2.0).expect("extrude");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        assert!((volume - 24.0).abs() < 0.01, "volume = {volume}");
+    }
+
+    #[test]
+    fn disjoint_profile_regions_extrude_together() {
+        let mut kernel = TruckKernel::new();
+        let left = ProfileRegion {
+            outer: vec![[-2.0, -0.5], [-1.0, -0.5], [-1.0, 0.5], [-2.0, 0.5]],
+            holes: Vec::new(),
+        };
+        let right = ProfileRegion {
+            outer: vec![[1.0, -0.5], [2.0, -0.5], [2.0, 0.5], [1.0, 0.5]],
+            holes: Vec::new(),
+        };
+        let sketch = kernel
+            .sketch_profile(&[left, right])
+            .expect("profile regions");
+        let solid = kernel.extrude(sketch, 2.0).expect("extrude");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        assert!((volume - 4.0).abs() < 0.01, "volume = {volume}");
+    }
+
+    #[test]
+    fn empty_profile_regions_are_rejected() {
+        let mut kernel = TruckKernel::new();
+        let error = kernel.sketch_profile(&[]).expect_err("empty profile");
+        assert!(matches!(error, KernelError::Backend(message) if message.contains("region")));
     }
 
     fn bounds(mesh: &Mesh) -> ([f64; 3], [f64; 3]) {
