@@ -105,6 +105,8 @@ The script starts `Xvfb`, runs the viewer at 1280×800, captures one frame with 
 
 ## Documentation
 
+- [`docs/status.md`](docs/status.md) — current capabilities, limitations, and next steps.
+- [`docs/notes/`](docs/notes/) — dated session snapshots.
 - [`docs/research.md`](docs/research.md) — prior art, source-first architecture, kernel trade-offs, native library fast paths.
 - [`docs/kernels.md`](docs/kernels.md) — per-operation capability matrix for OCCT, SolidCore, and Truck.
 

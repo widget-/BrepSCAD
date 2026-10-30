@@ -1,12 +1,7 @@
-# Session notes — 2026-10-30
+# Project status
 
-## Snapshot
-
-- Repository: `/home/widget/code/misc/visual-openscad`
-- Branch: `main`
-- HEAD: `4c6d29d refactor: use composed matrix transforms`
-- Working tree: clean before this note was added
-- Test suite: 78 tests passing
+This file tracks the current state. Dated snapshots live in
+[`notes/`](notes/).
 
 ## What this project is
 
@@ -30,9 +25,15 @@ crates/
   scad-eval/    evaluator and operand/parameter provenance
   scad-syntax/  lossless rowan CST, lexer, parser, text edits
   viewer/       eframe/egui/wgpu viewer
+assets/
+  sample.scad   built-in cube-with-hole source
 docs/
+  status.md     current capabilities and next steps
+  notes/        dated session snapshots
   research.md   prior art, source-first architecture, kernel trade-offs
   kernels.md    OCCT / SolidCore / Truck capability matrix
+scripts/
+  screenshot-viewer.sh
 ```
 
 ## What works
@@ -219,14 +220,10 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 
 ## Relevant docs
 
+- `docs/status.md` — this file: current capabilities, limitations, and next
+  steps.
+- `docs/notes/2026-10-30.md` — first-session snapshot and checkout sync note.
 - `docs/research.md` — prior art, source-first architecture, kernel trade-offs,
   native library fast paths.
 - `docs/kernels.md` — per-operation OCCT/SolidCore/Truck capability matrix.
 - `README.md` — current build/run instructions and supported subset.
-
-## Sync note
-
-This checkout was copied from `widget-desktop` to
-`laptop:/home/widget/code/misc/visual-openscad` with `rsync`, excluding
-`target/`, `.direnv/`, and `result*`. The Git history is included. No remote
-exists yet.
