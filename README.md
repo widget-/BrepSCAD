@@ -19,7 +19,7 @@ Manifold is not a selectable backend. It may survive only as an internal mesh fa
 
 ```text
 crates/
-  app/          binary entry point
+  cli/          CLI entry point (package `visual-openscad`)
   kernel-api/   Kernel trait, ShapeId, capabilities, neutral mesh
   kernel-truck/ Truck adapter: cuboid, cylinder, sphere, boolean, tessellation
   scad-eval/    minimal evaluator: assignments, cube/cylinder/sphere, difference

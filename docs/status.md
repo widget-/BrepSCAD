@@ -19,7 +19,7 @@ could be an internal mesh fallback for inherently mesh operations such as
 
 ```text
 crates/
-  app/          CLI entry point
+  cli/          CLI entry point (package `visual-openscad`)
   kernel-api/   kernel trait, ShapeId, capabilities, neutral mesh, matrix transform
   kernel-truck/ Truck B-rep adapter
   scad-eval/    evaluator and operand/parameter provenance
