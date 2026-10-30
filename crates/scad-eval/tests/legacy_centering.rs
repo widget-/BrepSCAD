@@ -84,6 +84,15 @@ fn legacy_linear_extrusions_start_at_z_zero() {
 }
 
 #[test]
+fn legacy_centering_evaluates_the_default_sample() {
+    let source = "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    translate([0.2, 0, 0]) cylinder(0.5, 4);\n}\n";
+    let evaluation = evaluate(source, true);
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    assert!(evaluation.shapes[0].mesh.triangle_count() > 0);
+}
+
+#[test]
 fn legacy_placement_composes_with_parent_transforms() {
     let legacy = evaluate("translate([10, 0, 0]) cube(2);", true);
     let (min, max) = bounds(&legacy.shapes[0].mesh);

@@ -37,6 +37,8 @@ docs/
   kernels.md    OCCT / SolidCore / Truck capability matrix
 scripts/
   screenshot-viewer.sh
+vendor/
+  truck-shapeops/ patched Truck boolean crate
 ```
 
 ## What works
@@ -108,6 +110,9 @@ scripts/
   - axis-aligned bounds for solids and sketches
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
+- `truck-shapeops` is vendored with a local fallible-face patch: malformed
+  generated wires return `None` and trigger the boolean retry path instead of
+  panicking. See [`vendor/README.md`](../vendor/README.md).
 
 ### Viewer
 
@@ -241,8 +246,10 @@ For headless UI snapshots, see
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
   not supported. It asks the kernel for bounds, which are tessellation-derived,
   so it is slower than a matrix-only transform.
-- Truck booleans try tolerances `0.05`, `0.02`, then `0.01` and keep the first
-  success. Some configurations still fail, and a retry can take seconds.
+- Truck booleans try tolerances `0.05`, `0.02`, then `0.01`, then a tiny
+  difference-only tool nudge and translated-operand retries. Some configurations
+  still fail. The vendored shapeops patch prevents malformed wires from
+  panicking the application.
 - Truck booleans can still fail on touching or coincident faces.
 - Selection:
   - per leaf primitive, not per nested boolean group

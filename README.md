@@ -23,6 +23,8 @@ crates/
   scad-eval/    evaluator, parameter discovery, 2D profile CSG
   scad-syntax/  lossless CST, lexer, parser, and text edits
   viewer/       egui + wgpu viewer with source editor and orbit camera
+vendor/
+  truck-shapeops/ patched Truck boolean crate (see vendor/README.md)
 ```
 
 The planned backend crates (`kernel-occt`, `kernel-solidcore`) are not created yet; the viewer currently combines UI and rendering in one crate.
@@ -146,6 +148,7 @@ Licensed under the BSD 3-Clause license. See [`LICENSE`](LICENSE).
 BrepSCAD depends on several third-party libraries. Of note:
 
 - Truck is MIT/Apache-2.0 dual-licensed.
+- The vendored `truck-shapeops` crate is Apache-2.0; its license and patch notes are in [`vendor/`](vendor/README.md).
 - clipper2-rust is BSL-1.0, the same license as Clipper2.
 
 Planned backends:

@@ -5,6 +5,8 @@
 
 mod primitives;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use brepscad_kernel_api::{
     BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ProfileRegion, ShapeId, Sketch,
     Transform,
@@ -16,6 +18,20 @@ use truck_modeling::*;
 type KernelResult<T> = std::result::Result<T, KernelError>;
 
 const BOOLEAN_TOLERANCES: [f64; 3] = [0.05, 0.02, 0.01];
+const BOOLEAN_SHIFTS: [[f64; 3]; 4] = [
+    [0.0, 0.0, 0.0],
+    [1.0e-4, 1.0e-4, -1.0e-4],
+    [-1.0e-4, 2.0e-4, 1.0e-4],
+    [2.0e-4, -1.0e-4, 2.0e-4],
+];
+const BOOLEAN_NUDGES: [[f64; 3]; 6] = [
+    [0.0, 0.0, 2.0e-5],
+    [0.0, 0.0, -2.0e-5],
+    [0.0, -2.0e-5, 0.0],
+    [0.0, 2.0e-5, 0.0],
+    [2.0e-5, 0.0, 0.0],
+    [-2.0e-5, 0.0, 0.0],
+];
 
 #[derive(Debug)]
 enum OwnedShape {
@@ -188,17 +204,57 @@ impl Kernel for TruckKernel {
         let b = self.solid(b)?.clone();
 
         for tolerance in BOOLEAN_TOLERANCES {
-            let result = match op {
-                BooleanOp::Union => truck_shapeops::or(&a, &b, tolerance),
-                BooleanOp::Intersection => truck_shapeops::and(&a, &b, tolerance),
-                BooleanOp::Difference => {
-                    let mut inverted = b.clone();
-                    inverted.not();
-                    truck_shapeops::and(&a, &inverted, tolerance)
+            for shift in BOOLEAN_SHIFTS {
+                let offset = Vector3::new(shift[0], shift[1], shift[2]);
+                let shifted_a = if shift == [0.0, 0.0, 0.0] {
+                    a.clone()
+                } else {
+                    builder::translated(&a, offset)
+                };
+                let shifted_b = if shift == [0.0, 0.0, 0.0] {
+                    b.clone()
+                } else {
+                    builder::translated(&b, offset)
+                };
+
+                let result = catch_unwind(AssertUnwindSafe(|| match op {
+                    BooleanOp::Union => truck_shapeops::or(&shifted_a, &shifted_b, tolerance),
+                    BooleanOp::Intersection => {
+                        truck_shapeops::and(&shifted_a, &shifted_b, tolerance)
+                    }
+                    BooleanOp::Difference => {
+                        let mut inverted = shifted_b.clone();
+                        inverted.not();
+                        truck_shapeops::and(&shifted_a, &inverted, tolerance)
+                    }
+                }));
+
+                if let Ok(Some(mut result)) = result {
+                    if shift != [0.0, 0.0, 0.0] {
+                        result = builder::translated(&result, -offset);
+                    }
+                    return Ok(self.insert(OwnedShape::Solid(result)));
                 }
-            };
-            if let Some(result) = result {
-                return Ok(self.insert(OwnedShape::Solid(result)));
+            }
+        }
+
+        if op == BooleanOp::Difference {
+            // Last-resort fallback for degenerate corner cuts. The vendored
+            // shapeops patch turns bad generated wires into None; this nudge
+            // gives the retry a numerically distinct tool position.
+            for nudge in BOOLEAN_NUDGES {
+                let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
+                let nudged = builder::translated(&b, offset);
+                for tolerance in BOOLEAN_TOLERANCES {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        let mut inverted = nudged.clone();
+                        inverted.not();
+                        truck_shapeops::and(&a, &inverted, tolerance)
+                    }));
+                    if let Ok(Some(result)) = result {
+                        return Ok(self.insert(OwnedShape::Solid(result)));
+                    }
+                }
             }
         }
 
@@ -617,6 +673,31 @@ mod tests {
 
         assert!((min[0] - 0.0).abs() < 1e-6, "min = {min:?}");
         assert!((max[0] - 2.0).abs() < 1e-6, "max = {max:?}");
+    }
+
+    #[test]
+    fn legacy_corner_difference_is_robust() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let cube = kernel
+            .transform(cube, Transform::from_translation([1.0, 1.0, 1.0]))
+            .expect("legacy cube");
+        let cylinder = kernel
+            .primitive(Primitive::Cylinder {
+                radius: 0.5,
+                height: 4.0,
+            })
+            .expect("cylinder");
+        let cylinder = kernel
+            .transform(cylinder, Transform::from_translation([0.2, 0.0, 2.0]))
+            .expect("legacy cylinder");
+
+        let result = kernel.boolean(BooleanOp::Difference, cube, cylinder);
+        assert!(result.is_ok(), "difference: {result:?}");
     }
 
     #[test]
