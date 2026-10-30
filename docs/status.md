@@ -59,6 +59,7 @@ scripts/
 - Top-level assignments and variable lookup.
 - `cube`, `cylinder`, `sphere`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude`.
+- `rotate_extrude` with an optional sweep angle.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` turns exactly one 2D child into a solid.
@@ -89,6 +90,7 @@ scripts/
   - cuboid, cylinder, and sphere primitives
   - square, circle, and polygon sketches
   - linear extrusion of a sketch along Z
+  - rotational extrusion of a sketch around Z
   - matrix transforms on faces and solids
   - union, difference, intersection on solids
   - tessellation to a neutral triangle mesh
@@ -137,6 +139,9 @@ scripts/
   centered 3D primitives rather than OpenSCAD's origin-at-a-corner convention.
   Profile children are filtered out of the selectable-part tree; the extrusion
   itself is the selectable part.
+- `rotate_extrude` maps the profile's local X to radius and local Y to Z, then
+  revolves around Z. Positive sweeps are flipped to keep outward orientation;
+  profiles are required to lie at `x >= 0`.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement.
 - Backend adapters should remain separate crates behind the common trait.
@@ -193,9 +198,10 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - no strings or booleans
   - no `module` / `function` declarations
   - no `for` / `if`
-  - no `polyhedron` or `rotate_extrude`
-  - no 2D booleans; `linear_extrude` takes exactly one 2D child
+  - no `polyhedron`
+  - no 2D booleans; extrusions take exactly one 2D child
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
+  - `rotate_extrude` supports `angle` only, requires `x >= 0`, and has no `start`
   - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
 - No color or `$fn` handling.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
@@ -218,8 +224,9 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 ## Recommended next steps
 
 1. **Finish the 2D/extrusion layer**
-   - `rotate_extrude`, 2D booleans, `polyhedron`.
+   - 2D booleans, `polyhedron`.
    - `linear_extrude` options: center, twist, scale, slices.
+   - `rotate_extrude` `start` and negative-side profiles.
    - `for` / `if` and module/function definitions later.
 2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.

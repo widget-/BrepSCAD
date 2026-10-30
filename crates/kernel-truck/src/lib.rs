@@ -111,6 +111,29 @@ impl Kernel for TruckKernel {
         Ok(self.insert(OwnedShape::Solid(solid)))
     }
 
+    fn revolve(&mut self, shape: ShapeId, angle: f64) -> KernelResult<ShapeId> {
+        if !angle.is_finite()
+            || angle.abs() < 1.0e-9
+            || angle.abs() > std::f64::consts::TAU + 1.0e-9
+        {
+            return Err(KernelError::Backend(
+                "revolve angle must be in (0, 2*pi]".to_owned(),
+            ));
+        }
+
+        let face = self.face(shape)?;
+        // rotate the XY profile into XZ: local Y becomes the revolve height
+        let rotation =
+            Matrix4::from_axis_angle(Vector3::unit_x(), Rad(std::f64::consts::FRAC_PI_2));
+        let profile = builder::transformed(face, rotation);
+        let solid = builder::rsweep(&profile, Point3::origin(), Vector3::unit_z(), Rad(angle));
+        let mut solid = solid;
+        if angle > 0.0 {
+            solid.not();
+        }
+        Ok(self.insert(OwnedShape::Solid(solid)))
+    }
+
     fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
         let shape = self.shape(shape)?;
         let matrix = matrix4(transform);
@@ -511,6 +534,112 @@ mod tests {
         let error = kernel
             .boolean(BooleanOp::Union, cube, sketch)
             .expect_err("sketch boolean");
+        assert!(matches!(error, KernelError::Backend(message) if message.contains("sketch")));
+    }
+
+    #[test]
+    fn revolves_a_profile_into_a_tube() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [1.0, 2.0] })
+            .expect("square");
+        let profile = kernel
+            .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
+            .expect("translate");
+        let solid = kernel
+            .revolve(profile, std::f64::consts::TAU)
+            .expect("revolve");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+
+        assert!((min[2] + 1.0).abs() < 1e-6, "min = {min:?}");
+        assert!((max[2] - 1.0).abs() < 1e-6, "max = {max:?}");
+        let volume = signed_volume(&mesh);
+        let expected = 4.0 * std::f64::consts::PI;
+        assert!(
+            (volume - expected).abs() < expected * 0.02,
+            "volume = {volume}"
+        );
+    }
+
+    #[test]
+    fn revolves_a_circle_into_a_torus() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Circle { radius: 1.0 })
+            .expect("circle");
+        let profile = kernel
+            .transform(sketch, Transform::from_translation([2.0, 0.0, 0.0]))
+            .expect("translate");
+        let solid = kernel
+            .revolve(profile, std::f64::consts::TAU)
+            .expect("revolve");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        let expected = 4.0 * std::f64::consts::PI * std::f64::consts::PI;
+        assert!(
+            (volume - expected).abs() < expected * 0.02,
+            "volume = {volume}"
+        );
+    }
+
+    #[test]
+    fn partial_revolve_produces_a_solid() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [1.0, 2.0] })
+            .expect("square");
+        let profile = kernel
+            .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
+            .expect("translate");
+        let solid = kernel
+            .revolve(profile, std::f64::consts::FRAC_PI_2)
+            .expect("revolve");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        let expected = std::f64::consts::PI;
+        assert!(
+            (volume - expected).abs() < expected * 0.02,
+            "volume = {volume}"
+        );
+    }
+
+    #[test]
+    fn negative_revolve_keeps_outward_orientation() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [1.0, 2.0] })
+            .expect("square");
+        let profile = kernel
+            .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
+            .expect("translate");
+        let solid = kernel
+            .revolve(profile, -std::f64::consts::FRAC_PI_2)
+            .expect("revolve");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        let expected = std::f64::consts::PI;
+        assert!(
+            (volume - expected).abs() < expected * 0.02,
+            "volume = {volume}"
+        );
+    }
+
+    #[test]
+    fn revolve_rejects_solids() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+
+        let error = kernel
+            .revolve(cube, std::f64::consts::TAU)
+            .expect_err("solid revolve");
         assert!(matches!(error, KernelError::Backend(message) if message.contains("sketch")));
     }
 

@@ -92,6 +92,15 @@ pub trait Kernel {
         Err(KernelError::Unsupported("extrude"))
     }
 
+    /// Revolve a planar sketch around the Z axis.
+    ///
+    /// `angle` is in radians, with the sweep direction following its sign. The
+    /// sketch's local X becomes the radius and local Y becomes Z, matching
+    /// OpenSCAD's `rotate_extrude`.
+    fn revolve(&mut self, _shape: ShapeId, _angle: f64) -> Result<ShapeId, KernelError> {
+        Err(KernelError::Unsupported("revolve"))
+    }
+
     fn transform(
         &mut self,
         _shape: ShapeId,

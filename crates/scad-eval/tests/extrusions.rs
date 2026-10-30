@@ -77,6 +77,50 @@ fn extrudes_a_circle() {
 }
 
 #[test]
+fn rotates_a_profile_into_a_torus() {
+    let source = "rotate_extrude() translate([2, 0, 0]) circle(r = 1);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    let volume = signed_volume(&shape.mesh);
+    let expected = 4.0 * std::f64::consts::PI * std::f64::consts::PI;
+    assert!(
+        (volume - expected).abs() < expected * 0.02,
+        "volume = {volume}"
+    );
+    assert_eq!(shape.parts.len(), 1);
+    assert_eq!(shape.parts[0].module, "rotate_extrude");
+}
+
+#[test]
+fn rotate_extrude_honors_angle() {
+    let source = "rotate_extrude(angle = 90) translate([1, 0, 0]) square([1, 2]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    let expected = std::f64::consts::PI;
+    assert!(
+        (volume - expected).abs() < expected * 0.02,
+        "volume = {volume}"
+    );
+}
+
+#[test]
+fn rotate_extrude_rejects_bad_profiles() {
+    let mut kernel = TruckKernel::new();
+
+    let error = evaluate_to_meshes("rotate_extrude() square(2);", &mut kernel, 0.01)
+        .expect_err("profile crosses axis");
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "rotate_extrude"));
+
+    let error =
+        evaluate_to_meshes("rotate_extrude() cube(1);", &mut kernel, 0.01).expect_err("3D profile");
+    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "rotate_extrude"));
+}
+
+#[test]
 fn rejects_mixed_dimensions_and_2d_csg() {
     let mut kernel = TruckKernel::new();
 

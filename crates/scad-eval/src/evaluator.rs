@@ -369,6 +369,67 @@ impl<K: Kernel> Evaluator<'_, K> {
                     children,
                 })
             }
+            "rotate_extrude" => {
+                args.ensure_known("rotate_extrude", &["angle"])?;
+                if args.positional.len() > 1 {
+                    return Err(bad_args("rotate_extrude", "expected one angle"));
+                }
+                let angle = match args.argument("angle", 0) {
+                    Some(value) => value.as_number("rotate_extrude")?,
+                    None => 360.0,
+                };
+
+                let transform_parameters = node
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .unwrap_or_default();
+
+                let children = match block {
+                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                    None => {
+                        let child = node
+                            .children()
+                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                            .ok_or_else(|| {
+                                bad_args("rotate_extrude", "expected a child or block")
+                            })?;
+                        vec![self.module_call(child, Transform::IDENTITY)?]
+                    }
+                };
+                if children.len() != 1 {
+                    return Err(bad_args("rotate_extrude", "expected exactly one 2D child"));
+                }
+                if children[0].dimension != Dimension::TwoD {
+                    return Err(bad_args("rotate_extrude", "expected a 2D child"));
+                }
+
+                let mesh = self.kernel.tessellate(children[0].shape, self.tolerance)?;
+                let (min, max) = mesh_bounds(&mesh)
+                    .ok_or_else(|| bad_args("rotate_extrude", "cannot revolve an empty profile"))?;
+                if min[0] < -1.0e-6 {
+                    return Err(bad_args("rotate_extrude", "profile must lie at x >= 0"));
+                }
+                if max[0] <= 1.0e-6 {
+                    return Err(bad_args(
+                        "rotate_extrude",
+                        "profile must not lie on the axis",
+                    ));
+                }
+
+                let shape = self.kernel.revolve(children[0].shape, angle.to_radians())?;
+                let shape = self.apply_transform(shape, parent)?;
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: Some(transform_parameters),
+                    world: parent,
+                    dimension: Dimension::ThreeD,
+                    children,
+                })
+            }
             "resize" => {
                 args.ensure_known("resize", &["newsize"])?;
                 if args.positional.len() > 1 {
