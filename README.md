@@ -1,21 +1,17 @@
 # BrepSCAD
 
-A B-rep-first visual editor for OpenSCAD-style `.scad` source.
+An (extremely) experimental alternative to OpenSCAD, using B-rep geometry rather than OpenSCAD’s CGAL/Manifold CSG backends.
 
 BrepSCAD is an independent project and is not affiliated with OpenSCAD.
-
-> **Status: prototype.** The source parser, evaluator, Truck kernel, and viewer work for a small OpenSCAD subset.
 
 ## Goals
 
 - Keep `.scad` text as the canonical document.
-- Present a source-shaped tree; edits write back into the source immediately.
-- Use B-rep as the canonical geometry representation.
-- Support multiple kernel backends behind a common capability API: OCCT, SolidCore, and Truck.
-- Add native fast paths for common library constructs (for example, BOSL2 rounded boxes) instead of forcing them through mesh CSG.
-- Exact OpenSCAD output identity is *not* a goal. Use OpenSCAD itself when that is required.
-
-Manifold is not a selectable backend. It may survive only as an internal mesh fallback for `hull`, `minkowski`, and mesh imports.
+- Allow direct manipulation in the UI, saved back to the source.
+- Use B-rep geometry as the canonical representation, rather than mesh tris.
+- Support multiple kernel backends.
+- Implement faster and/or more accurate versions of some common OpenSCAD geometry libraries.
+- Render all OpenSCAD source files "close enough" to the original.
 
 ## Workspace
 
@@ -29,39 +25,26 @@ crates/
   viewer/       egui + wgpu viewer with source editor and orbit camera
 ```
 
-The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers (including negative literals), identifiers, nested vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, faceted spheres, polyhedra, planar sketches, linear and rotational extrusion, transforms, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, `sphere`, `polyhedron`, `square`, `circle`, `polygon`, `offset`, `linear_extrude`, `rotate_extrude`, `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`, and the boolean modules. 2D booleans and offsets run on polygonal profiles via `clipper2-rust`; the B-rep kernel only sees the extrusion boundary. The `viewer` binary renders the evaluated mesh with an egui source editor and a wgpu viewport.
+The planned backend crates (`kernel-occt`, `kernel-solidcore`) are not created yet; the viewer currently combines UI and rendering in one crate.
 
-The planned backend crates (`kernel-occt`, `kernel-solidcore`) and the UI/render crates are not created yet.
-
-## Build
+## Development
 
 A `shell.nix` provides the Rust toolchain (cargo, rustc, rustfmt, clippy, rust-analyzer) and native build essentials.
 
-### Nix + direnv
-
-On NixOS, enable direnv and nix-direnv:
-
-```nix
-programs.direnv.enable = true;
-programs.direnv.nix-direnv.enable = true;
-```
-
-Then, once per checkout:
+### Nix / NixOS
 
 ```sh
+# with direnv:
 direnv allow
 cargo run -p brepscad
 cargo test --workspace
-```
 
-Without direnv:
-
-```sh
+# without direnv:
 nix-shell --run 'cargo test --workspace'
 nix-shell --run 'cargo run -p brepscad'
 ```
 
-### Direct toolchain
+### Everything else
 
 With a Rust toolchain installed:
 
@@ -72,56 +55,88 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`Cargo.lock` should be committed once generated; this is a binary workspace, not a library published to crates.io.
+## CLI Usage
 
-## Run
-
-The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statistics. With no path it uses the built-in `assets/sample.scad` cube-with-hole sample, which the viewer and the `hello_cube` example also load.
+The CLI is mainly for evaluation and debugging. It prints the number
+of top-level meshes and the triangle/vertex counts for each mesh:
 
 ```sh
+# Evaluate a source file.
 cargo run -p brepscad -- path/to/model.scad
 ```
 
-The current subset supports top-level assignments, positional and named arguments, arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary signs, and parentheses), `cube`, `cylinder`, `sphere`, `polyhedron`, `square`, `circle`, `polygon`, `offset`, `linear_extrude`, `rotate_extrude`, `translate` / `rotate` / `scale` / `multmatrix` / `mirror` / `resize` with a single child or block, and the `difference` / `union` / `intersection` modules with a block or a single child. `multmatrix` accepts a 4×3 or 4×4 matrix; `resize` accepts a `newsize` vector; `sphere` accepts `r` or `d` and is faceted at a fixed 32×16 resolution. Extrusions accept exactly one 2D child; `rotate_extrude` also takes `angle` and `start` and requires the profile to lie at `x >= 0`. `polyhedron` requires a closed, consistently wound shell with planar faces. 2D booleans and `offset(r=)`/`offset(delta=)` use polygonal profiles: circles are flattened to 64 segments for CSG, and disjoint results are extruded as one multi-shell solid.
+```text
+meshes: 1
+mesh 0: 464 triangles, 232 vertices
+```
 
-## Viewer
+## Language support matrix
 
-The first GUI prototype renders the evaluated mesh with a depth-tested wgpu viewport, an editable source panel, and an Evaluate button.
+Status: ✔ supported, ◐ partial, ✖ not implemented.
+
+| Operation | Status | Notes |
+| ----------- | -------- | ------- |
+| Top-level assignments | ✔ | |
+| Module calls | ✔ | |
+| Expressions | ✔ | No strings or booleans. |
+| Comments and whitespace | ✔ | |
+| `module` / `function` declarations | ✖ | |
+| `for` / `if` | ✖ | |
+| `include` / `use` | ✖ | |
+| `$fn`, `$fa`, `$fs` | ✖ | Tessellation is fixed per primitive. |
+| `cube`, `cylinder`, `sphere` | ✔ | `sphere` is a fixed 32×16 facet approximation. |
+| `polyhedron` | ✔ | Closed, consistently wound shell with planar faces. |
+| `square`, `circle`, `polygon` | ✔ | `square`/`circle` centered in XY; `polygon` points used as given. |
+| `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `rotate` vector form only; `resize` `newsize` only, no `auto`. |
+| `linear_extrude` | ◐ | `height` only; centered on Z; no `center`, `twist`, `scale`, or `slices`. |
+| `rotate_extrude` | ◐ | Profile must lie at `x >= 0`. |
+| `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. |
+| `offset` | ✔ | No `chamfer` or `$fn`. |
+| `color` | ✖ | |
+| `hull`, `minkowski` | ✖ | |
+| `import`, `export`, `surface` | ✖ | No file I/O yet. |
+| `projection` | ✖ | |
+
+## Feature matrix
+
+Status: ✔ supported, ◐ partial, ✖ not implemented.
+
+| Feature | Status | Notes |
+| --------- | -------- | ------- |
+| Source editor | ✔ | In-memory basic textbox. |
+| Source tree | ✔ | Groups and selectable leaf primitives. |
+| UI parameter editing | ◐ | Numeric parameters only. |
+| Preview-based selection | ✔ | |
+| 2D profile CSG | ✔ | Via `clipper2-rust`. |
+| Alternate kernels | ✖ | Truck only; OCCT and SolidCore are candidates. |
+| File open/save | ✖ | |
+| Export | ✖ | |
+| Undo/redo | ✖ | |
+| Persistence | ✖ | Source text is in memory only; no project/session persistence. |
+
+## GUI
 
 ```sh
 cargo run -p brepscad-viewer
 ```
 
-Drag to orbit and scroll to zoom. Click the model to select an operand, or use the Shapes panel, which shows the source-shaped tree of booleans, transforms, and leaf primitives. Clicking a leaf selects it and fills the Properties panel, including cutters enclosed by the base shape. The Properties panel lists numeric literals in that operand and in the assignments it references. Drag a value, or click it and type a new number, then press Enter or click away. The edit is written back to the source and the model re-evaluates, reusing tessellated leaf meshes whose module, parameters, and transform did not change. The selected operand is not highlighted yet. The source panel remains the general edit loop. The viewer requires a working wgpu adapter (Vulkan or GLES); the Nix shell provides the runtime libraries.
-
-### Headless UI snapshot
-
-To inspect the UI without opening a window on the desktop, render it on a virtual X display:
-
-```sh
-cargo build -p brepscad-viewer
-scripts/screenshot-viewer.sh /tmp/viewer.png
-```
-
-The script starts `Xvfb`, runs the viewer at 1280×800, captures one frame with ffmpeg's `x11grab`, and shuts everything down. It requires `Xvfb` and an ffmpeg build with `x11grab`; it does not need a window manager or a visible desktop.
-
 ## Documentation
 
 - [`docs/status.md`](docs/status.md) — current capabilities, limitations, and next steps.
-- [`docs/notes/`](docs/notes/) — dated session snapshots.
+- [`docs/development.md`](docs/development.md) — development helpers
 - [`docs/research.md`](docs/research.md) — prior art, source-first architecture, kernel trade-offs, native library fast paths.
 - [`docs/kernels.md`](docs/kernels.md) — per-operation capability matrix for OCCT, SolidCore, and Truck.
 
 ## Licence
 
-BSD-3-Clause. See [`LICENSE`](LICENSE).
+Licensed under the BSD 3-Clause license. See [`LICENSE`](LICENSE).
 
-The copyright line in `LICENSE` is a placeholder; replace it with your legal name or entity before distributing.
+BrepSCAD depends on several third-party libraries. Of note:
 
-Dependencies keep their own licences. In particular:
+- Truck is MIT/Apache-2.0 dual-licensed.
+- clipper2-rust is BSL-1.0, the same license as Clipper2.
+
+Planned backends:
 
 - OCCT is LGPL-2.1 with an exception; if it is shipped, dynamic linking/relinkable distribution and notice obligations apply.
-- SolidCore and Truck are Apache-2.0.
-- Manifold, if used internally for mesh-only operations, is Apache-2.0.
-
-Do not add AGPL dependencies without changing the project licence.
+- SolidCore is Apache-2.0.

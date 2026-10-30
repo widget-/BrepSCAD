@@ -31,6 +31,7 @@ assets/
   sample.scad   built-in cube-with-hole source
 docs/
   status.md     current capabilities and next steps
+  development.md development helpers, headless UI snapshots
   notes/        dated session snapshots
   research.md   prior art, source-first architecture, kernel trade-offs
   kernels.md    OCCT / SolidCore / Truck capability matrix
@@ -140,8 +141,9 @@ scripts/
 - `sphere` is built as a faceted UV B-rep with shared edges and planar
   triangles. Revolving a half-disc in Truck produced degenerate pole faces that
   broke tessellation and booleans, so the faceted shell is used instead.
-- 2D profiles are centered in XY and extrusions are centered on Z, matching the
-  centered 3D primitives rather than OpenSCAD's origin-at-a-corner convention.
+- `square` and `circle` profiles are centered in XY, `polygon` points are used
+  as given, and extrusions are centered on Z, matching the centered 3D
+  primitives rather than OpenSCAD's origin-at-a-corner convention.
   Profile children are filtered out of the selectable-part tree; the extrusion
   itself is the selectable part.
 - `rotate_extrude` maps the profile's local X to radius and local Y to Z, then
@@ -200,16 +202,8 @@ nix-shell --run 'timeout 8s target/debug/brepscad-viewer'
 
 Exit code `124` means it stayed alive until the timeout and did not panic.
 
-For a screenshot without opening a window on the desktop, use the headless
-capture script:
-
-```sh
-scripts/screenshot-viewer.sh /tmp/viewer.png
-```
-
-It starts `Xvfb` on a free display, runs the viewer, captures one frame with
-ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
-`x11grab`; no window manager is needed.
+For headless UI snapshots, see
+[`development.md`](development.md#headless-ui-snapshot).
 
 ## Known limitations
 
