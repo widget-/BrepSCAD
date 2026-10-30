@@ -507,14 +507,21 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "rotate_extrude" => {
-                args.ensure_known("rotate_extrude", &["angle"])?;
-                if args.positional.len() > 1 {
-                    return Err(bad_args("rotate_extrude", "expected one angle"));
+                args.ensure_known("rotate_extrude", &["angle", "start"])?;
+                if args.positional.len() > 2 {
+                    return Err(bad_args("rotate_extrude", "expected an angle and start"));
                 }
                 let angle = match args.argument("angle", 0) {
                     Some(value) => value.as_number("rotate_extrude")?,
                     None => 360.0,
                 };
+                let start = match args.argument("start", 1) {
+                    Some(value) => value.as_number("rotate_extrude")?,
+                    None => 0.0,
+                };
+                if !start.is_finite() {
+                    return Err(bad_args("rotate_extrude", "start must be finite"));
+                }
 
                 let transform_parameters = node
                     .children()
@@ -554,7 +561,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                     ));
                 }
 
-                let shape = self.kernel.revolve(children[0].shape, angle.to_radians())?;
+                let shape = self.kernel.revolve(
+                    children[0].shape,
+                    start.to_radians(),
+                    angle.to_radians(),
+                )?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,

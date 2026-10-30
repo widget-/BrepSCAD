@@ -59,7 +59,7 @@ scripts/
 - Top-level assignments and variable lookup.
 - `cube`, `cylinder`, `sphere`, `polyhedron`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude`.
-- `rotate_extrude` with an optional sweep angle.
+- `rotate_extrude` with optional sweep and start angles.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` turns exactly one 2D child into a solid.
@@ -144,8 +144,9 @@ scripts/
   Profile children are filtered out of the selectable-part tree; the extrusion
   itself is the selectable part.
 - `rotate_extrude` maps the profile's local X to radius and local Y to Z, then
-  revolves around Z. Positive sweeps are flipped to keep outward orientation;
-  profiles are required to lie at `x >= 0`.
+  revolves around Z. `start` rotates the profile about Z before sweeping.
+  Positive sweeps are flipped to keep outward orientation; profiles are
+  required to lie at `x >= 0`.
 - `polyhedron` builds shared edges from the input points and faces, then relies
   on `Solid::try_new` to validate the shell. Faces must be planar and the input
   must be closed and consistently wound; no repair is attempted.
@@ -219,7 +220,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
     there is no curve intersection, chamfer, or `$fn` support
   - empty 2D boolean or offset results are reported as errors
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
-  - `rotate_extrude` supports `angle` only, requires `x >= 0`, and has no `start`
+  - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
 - No color or `$fn` handling.
@@ -245,7 +246,7 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
 1. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `offset` chamfer/$fn options.
    - `linear_extrude` options: center, twist, scale, slices.
-   - `rotate_extrude` `start` and negative-side profiles.
+   - `rotate_extrude` negative-side profiles.
    - `for` / `if` and module/function definitions later.
 2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.

@@ -108,6 +108,25 @@ fn rotate_extrude_honors_angle() {
 }
 
 #[test]
+fn rotate_extrude_honors_start() {
+    let source = "rotate_extrude(angle = 90, start = 90) translate([1, 0, 0]) square([1, 2]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+    let (min, max) = bounds(&shape.mesh);
+
+    assert!(max[0] <= 1.0e-6, "max = {max:?}");
+    assert!(min[0] < -1.4, "min = {min:?}");
+    assert!(max[1] > 1.4, "max = {max:?}");
+    let volume = signed_volume(&shape.mesh);
+    let expected = std::f64::consts::PI;
+    assert!(
+        (volume - expected).abs() < expected * 0.02,
+        "volume = {volume}"
+    );
+}
+
+#[test]
 fn rotate_extrude_rejects_bad_profiles() {
     let mut kernel = TruckKernel::new();
 

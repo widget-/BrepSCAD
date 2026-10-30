@@ -136,7 +136,12 @@ impl Kernel for TruckKernel {
         Ok(self.insert(OwnedShape::Solid(solid)))
     }
 
-    fn revolve(&mut self, shape: ShapeId, angle: f64) -> KernelResult<ShapeId> {
+    fn revolve(&mut self, shape: ShapeId, start: f64, angle: f64) -> KernelResult<ShapeId> {
+        if !start.is_finite() {
+            return Err(KernelError::Backend(
+                "revolve start must be finite".to_owned(),
+            ));
+        }
         if !angle.is_finite()
             || angle.abs() < 1.0e-9
             || angle.abs() > std::f64::consts::TAU + 1.0e-9
@@ -148,7 +153,7 @@ impl Kernel for TruckKernel {
         let solids = self
             .faces(shape)?
             .iter()
-            .map(|face| revolve_face(face, angle))
+            .map(|face| revolve_face(face, start, angle))
             .collect::<Vec<_>>();
         let solid = combine_solids(solids)?;
         Ok(self.insert(OwnedShape::Solid(solid)))
@@ -238,10 +243,18 @@ fn extrude_face(face: &Face, height: f64) -> Solid {
     builder::tsweep(&centered, Vector3::new(0.0, 0.0, height))
 }
 
-fn revolve_face(face: &Face, angle: f64) -> Solid {
+fn revolve_face(face: &Face, start: f64, angle: f64) -> Solid {
     // rotate the XY profile into XZ: local Y becomes the revolve height
     let rotation = Matrix4::from_axis_angle(Vector3::unit_x(), Rad(std::f64::consts::FRAC_PI_2));
     let profile = builder::transformed(face, rotation);
+    let profile = if start == 0.0 {
+        profile
+    } else {
+        builder::transformed(
+            &profile,
+            Matrix4::from_axis_angle(Vector3::unit_z(), Rad(start)),
+        )
+    };
     let mut solid = builder::rsweep(&profile, Point3::origin(), Vector3::unit_z(), Rad(angle));
     if angle > 0.0 {
         solid.not();
@@ -607,7 +620,7 @@ mod tests {
             .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
             .expect("translate");
         let solid = kernel
-            .revolve(profile, std::f64::consts::TAU)
+            .revolve(profile, 0.0, std::f64::consts::TAU)
             .expect("revolve");
         let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
         let (min, max) = bounds(&mesh);
@@ -632,7 +645,7 @@ mod tests {
             .transform(sketch, Transform::from_translation([2.0, 0.0, 0.0]))
             .expect("translate");
         let solid = kernel
-            .revolve(profile, std::f64::consts::TAU)
+            .revolve(profile, 0.0, std::f64::consts::TAU)
             .expect("revolve");
         let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
 
@@ -654,7 +667,7 @@ mod tests {
             .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
             .expect("translate");
         let solid = kernel
-            .revolve(profile, std::f64::consts::FRAC_PI_2)
+            .revolve(profile, 0.0, std::f64::consts::FRAC_PI_2)
             .expect("revolve");
         let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
 
@@ -667,6 +680,52 @@ mod tests {
     }
 
     #[test]
+    fn revolve_start_rotates_the_sweep() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [1.0, 2.0] })
+            .expect("square");
+        let profile = kernel
+            .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
+            .expect("translate");
+        let solid = kernel
+            .revolve(
+                profile,
+                std::f64::consts::FRAC_PI_2,
+                std::f64::consts::FRAC_PI_2,
+            )
+            .expect("revolve");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+        let (min, max) = bounds(&mesh);
+
+        assert!(max[0] <= 1.0e-6, "max = {max:?}");
+        assert!(min[0] < -1.4, "min = {min:?}");
+        assert!(max[1] > 1.4, "max = {max:?}");
+        let volume = signed_volume(&mesh);
+        let expected = std::f64::consts::PI;
+        assert!(
+            (volume - expected).abs() < expected * 0.02,
+            "volume = {volume}"
+        );
+    }
+
+    #[test]
+    fn revolve_rejects_a_non_finite_start() {
+        let mut kernel = TruckKernel::new();
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [1.0, 2.0] })
+            .expect("square");
+        let profile = kernel
+            .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
+            .expect("translate");
+
+        let error = kernel
+            .revolve(profile, f64::NAN, std::f64::consts::TAU)
+            .expect_err("non-finite start");
+        assert!(matches!(error, KernelError::Backend(message) if message.contains("start")));
+    }
+
+    #[test]
     fn negative_revolve_keeps_outward_orientation() {
         let mut kernel = TruckKernel::new();
         let sketch = kernel
@@ -676,7 +735,7 @@ mod tests {
             .transform(sketch, Transform::from_translation([1.0, 0.0, 0.0]))
             .expect("translate");
         let solid = kernel
-            .revolve(profile, -std::f64::consts::FRAC_PI_2)
+            .revolve(profile, 0.0, -std::f64::consts::FRAC_PI_2)
             .expect("revolve");
         let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
 
@@ -698,7 +757,7 @@ mod tests {
             .expect("cube");
 
         let error = kernel
-            .revolve(cube, std::f64::consts::TAU)
+            .revolve(cube, 0.0, std::f64::consts::TAU)
             .expect_err("solid revolve");
         assert!(matches!(error, KernelError::Backend(message) if message.contains("sketch")));
     }
