@@ -62,6 +62,8 @@ scripts/
 - `for` loops over ranges and vectors, with multiple bindings and block or
   single-statement bodies.
 - `if` / `else` with boolean or numeric truthiness.
+- `$fn` switches between faceted and analytic geometry at 33 segments;
+  `$fa`/`$fs` only affect 2D profile sampling.
 - `cube`, `cylinder`, `sphere`, `polyhedron`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude`.
 - `rotate_extrude` with optional sweep and start angles.
@@ -142,6 +144,10 @@ scripts/
   `auto` parameter is not supported.
 - Truck is first because it is pure Rust, Apache-2.0, and needs no C++
   toolchain. OCCT is the likely C++ fallback; SolidCore is a watch item.
+- `$fn` below 33 builds a faceted B-rep with exactly that segment count;
+  `$fn` at 33 or above, or unset, uses analytic geometry where available.
+  `$fa`/`$fs` do not choose the geometry representation; they only sample
+  2D profiles for CSG.
 - `sphere` is built as a faceted UV B-rep with shared edges and planar
   triangles. Revolving a half-disc in Truck produced degenerate pole faces that
   broke tessellation and booleans, so the faceted shell is used instead.
@@ -216,14 +222,15 @@ For headless UI snapshots, see
   - no `module` / `function` declarations
   - `for` / `if` results used where exactly one child is required (extrusions,
     offset) still error if they emit zero or multiple shapes
-  - 2D booleans and offsets are polygonal; circles flatten to 64 segments and
-    there is no curve intersection, chamfer, or `$fn` support
+  - 2D booleans and offsets are polygonal; circles flatten to sampled profiles
+    and there is no curve intersection or chamfer support
+  - `$fa`/`$fs` do not affect geometry; they only sample 2D profiles
   - empty 2D boolean or offset results are reported as errors
   - `linear_extrude` supports `height` only; no `center`, twist, scale, or slices
   - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
-  - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
-- No color or `$fn` handling.
+  - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
+- No color handling.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
   not supported. It asks the kernel for bounds, which are tessellation-derived,
   so it is slower than a matrix-only transform.
@@ -244,7 +251,7 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 1. **Finish the 2D/extrusion layer**
-   - Polygonal profile smoothing and `offset` chamfer/$fn options.
+   - Polygonal profile smoothing and `offset` chamfer options.
    - `linear_extrude` options: center, twist, scale, slices.
    - `rotate_extrude` negative-side profiles.
    - Module/function declarations.

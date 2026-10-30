@@ -245,15 +245,20 @@ pub(crate) fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
 const SPHERE_SEGMENTS: usize = 32;
 const SPHERE_RINGS: usize = 16;
 
-pub(crate) fn sphere(radius: f64) -> KernelResult<Solid> {
+pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid> {
     if radius <= 0.0 {
         return Err(KernelError::Backend(
             "sphere radius must be positive".to_owned(),
         ));
     }
 
-    let segments = SPHERE_SEGMENTS;
-    let rings = SPHERE_RINGS;
+    let (segments, rings) = match segments {
+        Some(segments) => {
+            let segments = segments.max(3);
+            (segments, (segments / 2).max(3))
+        }
+        None => (SPHERE_SEGMENTS, SPHERE_RINGS),
+    };
     let north = builder::vertex(Point3::new(0.0, 0.0, radius));
     let south = builder::vertex(Point3::new(0.0, 0.0, -radius));
 

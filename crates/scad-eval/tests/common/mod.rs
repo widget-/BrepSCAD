@@ -1,5 +1,6 @@
 use brepscad_kernel_api::Mesh;
 
+#[allow(dead_code)]
 pub fn bounds(mesh: &Mesh) -> ([f64; 3], [f64; 3]) {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];

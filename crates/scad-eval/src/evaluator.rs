@@ -14,12 +14,15 @@ use crate::value::{Value, binary_value, unary_value};
 use crate::{EvalError, bad_args};
 
 const SINGULAR_DETERMINANT: f64 = 1.0e-12;
+const FACETED_MAX: usize = 32;
+const PROFILE_SEGMENTS_MAX: usize = 256;
 
 #[derive(Debug, Default)]
 struct Arguments {
     positional: Vec<Value>,
     named: HashMap<String, Value>,
     named_order: Vec<String>,
+    special: HashMap<String, Value>,
 }
 
 impl Arguments {
@@ -348,9 +351,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("h", 1)
                     .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
                     .as_number("cylinder")?;
-                let shape = self
-                    .kernel
-                    .primitive(Primitive::Cylinder { radius, height })?;
+                let shape = match self.fn_segments(&args)? {
+                    Some(segments) => {
+                        let profile = profile::circle_with_segments(radius, segments);
+                        let sketch = self.kernel.sketch_profile(&profile::to_regions(&profile))?;
+                        self.kernel.extrude(sketch, height)?
+                    }
+                    None => self
+                        .kernel
+                        .primitive(Primitive::Cylinder { radius, height })?,
+                };
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,
@@ -367,7 +377,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             "sphere" => {
                 args.ensure_known("sphere", &["r", "d"])?;
                 let radius = args.radius("sphere")?;
-                let shape = self.kernel.primitive(Primitive::Sphere { radius })?;
+                let segments = self.fn_segments(&args)?;
+                let shape = self
+                    .kernel
+                    .primitive(Primitive::Sphere { radius, segments })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,
@@ -444,10 +457,21 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if radius <= 0.0 {
                     return Err(bad_args("circle", "radius must be positive"));
                 }
-                let profile = profile::circle(radius);
-                let profile = profile::transform(&profile, parent);
-                let shape = self.kernel.sketch(Sketch::Circle { radius })?;
+                let segments = self.fn_segments(&args)?;
+                let base_profile = match segments {
+                    Some(segments) => profile::circle_with_segments(radius, segments),
+                    None => {
+                        profile::circle_with_segments(radius, self.profile_segments(&args, radius)?)
+                    }
+                };
+                let shape = match segments {
+                    Some(_) => self.kernel.sketch(Sketch::Polygon {
+                        points: base_profile[0].outer.clone(),
+                    })?,
+                    None => self.kernel.sketch(Sketch::Circle { radius })?,
+                };
                 let shape = self.apply_transform(shape, parent)?;
+                let profile = profile::transform(&base_profile, parent);
                 Ok(Node {
                     shape,
                     module,
@@ -530,16 +554,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
                     .unwrap_or_default();
 
-                let children = match block {
-                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                let children = self.with_special_overrides(&args, |evaluator| match block {
+                    Some(block) => evaluator.block(block, Transform::IDENTITY),
                     None => {
                         let child = node
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args("offset", "expected a child or block"))?;
-                        self.statement(child, Transform::IDENTITY)?
+                        evaluator.statement(child, Transform::IDENTITY)
                     }
-                };
+                })?;
                 if children.len() != 1 {
                     return Err(bad_args("offset", "expected exactly one 2D child"));
                 }
@@ -589,8 +613,8 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
                     .unwrap_or_default();
 
-                let children = match block {
-                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                let children = self.with_special_overrides(&args, |evaluator| match block {
+                    Some(block) => evaluator.block(block, Transform::IDENTITY),
                     None => {
                         let child = node
                             .children()
@@ -598,9 +622,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .ok_or_else(|| {
                                 bad_args("linear_extrude", "expected a child or block")
                             })?;
-                        self.statement(child, Transform::IDENTITY)?
+                        evaluator.statement(child, Transform::IDENTITY)
                     }
-                };
+                })?;
                 if children.len() != 1 {
                     return Err(bad_args("linear_extrude", "expected exactly one 2D child"));
                 }
@@ -645,8 +669,8 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
                     .unwrap_or_default();
 
-                let children = match block {
-                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                let children = self.with_special_overrides(&args, |evaluator| match block {
+                    Some(block) => evaluator.block(block, Transform::IDENTITY),
                     None => {
                         let child = node
                             .children()
@@ -654,9 +678,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                             .ok_or_else(|| {
                                 bad_args("rotate_extrude", "expected a child or block")
                             })?;
-                        self.statement(child, Transform::IDENTITY)?
+                        evaluator.statement(child, Transform::IDENTITY)
                     }
-                };
+                })?;
                 if children.len() != 1 {
                     return Err(bad_args("rotate_extrude", "expected exactly one 2D child"));
                 }
@@ -825,16 +849,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
                     .unwrap_or_default();
 
-                let children = match block {
-                    Some(block) => self.block(block, combined)?,
+                let children = self.with_special_overrides(&args, |evaluator| match block {
+                    Some(block) => evaluator.block(block, combined),
                     None => {
                         let child = node
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a child or block"))?;
-                        self.statement(child, combined)?
+                        evaluator.statement(child, combined)
                     }
-                };
+                })?;
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
@@ -887,16 +911,16 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             "difference" | "union" | "intersection" => {
                 args.ensure_empty(name.as_str())?;
-                let children = match block {
-                    Some(block) => self.block(block, parent)?,
+                let children = self.with_special_overrides(&args, |evaluator| match block {
+                    Some(block) => evaluator.block(block, parent),
                     None => {
                         let child = node
                             .children()
                             .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
                             .ok_or_else(|| bad_args(name.as_str(), "expected a block or child"))?;
-                        self.statement(child, parent)?
+                        evaluator.statement(child, parent)
                     }
-                };
+                })?;
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }
@@ -1016,13 +1040,89 @@ impl<K: Kernel> Evaluator<'_, K> {
                     let value = self.expression_after_eq(&child)?.ok_or_else(|| {
                         EvalError::Parse(format!("missing value for argument {name}"))
                     })?;
-                    arguments.named_order.push(name.clone());
-                    arguments.named.insert(name, value);
+                    if name.starts_with('$') {
+                        arguments.special.insert(name, value);
+                    } else {
+                        arguments.named_order.push(name.clone());
+                        arguments.named.insert(name, value);
+                    }
                 }
                 _ => arguments.positional.push(self.element_value(element)?),
             }
         }
         Ok(arguments)
+    }
+
+    fn special_number(&self, args: &Arguments, name: &str) -> Result<Option<f64>, EvalError> {
+        if let Some(value) = args.special.get(name) {
+            return Ok(Some(value.as_number(name)?));
+        }
+        self.variables
+            .get(name)
+            .map(|value| value.as_number(name))
+            .transpose()
+    }
+
+    fn fn_segments(&self, args: &Arguments) -> Result<Option<usize>, EvalError> {
+        let Some(value) = self.special_number(args, "$fn")? else {
+            return Ok(None);
+        };
+        if !value.is_finite() {
+            return Err(bad_args("$fn", "must be finite"));
+        }
+        if value <= 0.0 || value > FACETED_MAX as f64 {
+            return Ok(None);
+        }
+        Ok(Some(value.ceil().max(3.0) as usize))
+    }
+
+    fn profile_segments(&self, args: &Arguments, radius: f64) -> Result<usize, EvalError> {
+        if let Some(value) = self.special_number(args, "$fn")? {
+            if !value.is_finite() {
+                return Err(bad_args("$fn", "must be finite"));
+            }
+            if value > 0.0 {
+                return Ok((value.ceil().max(3.0) as usize).min(PROFILE_SEGMENTS_MAX));
+            }
+        }
+
+        let fa = self.special_number(args, "$fa")?;
+        let fs = self.special_number(args, "$fs")?;
+        if fa.is_none() && fs.is_none() {
+            return Ok(profile::CIRCLE_SEGMENTS);
+        }
+
+        let fa = fa.map_or(12.0, |value| value.max(0.01));
+        let fs = fs.map_or(2.0, |value| value.max(0.01));
+        let segments = (360.0 / fa)
+            .min(std::f64::consts::TAU * radius / fs)
+            .max(5.0)
+            .ceil() as usize;
+        Ok(segments.clamp(3, PROFILE_SEGMENTS_MAX))
+    }
+
+    fn with_special_overrides<T>(
+        &mut self,
+        args: &Arguments,
+        f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
+        let mut saved = Vec::with_capacity(args.special.len());
+        for (name, value) in &args.special {
+            saved.push((name.clone(), self.variables.get(name).cloned()));
+            self.variables.insert(name.clone(), value.clone());
+        }
+        let result = f(self);
+        for (name, previous) in saved {
+            match previous {
+                Some(value) => {
+                    self.variables.insert(name, value);
+                }
+                None => {
+                    self.variables.remove(&name);
+                }
+            }
+        }
+        result
     }
 
     fn element_value(&mut self, element: SyntaxElement) -> Result<Value, EvalError> {

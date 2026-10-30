@@ -36,10 +36,16 @@ pub(crate) fn square(size: [f64; 2]) -> Profile {
     }]
 }
 
+#[cfg(test)]
 pub(crate) fn circle(radius: f64) -> Profile {
-    let outer = (0..CIRCLE_SEGMENTS)
+    circle_with_segments(radius, CIRCLE_SEGMENTS)
+}
+
+pub(crate) fn circle_with_segments(radius: f64, segments: usize) -> Profile {
+    let segments = segments.max(3);
+    let outer = (0..segments)
         .map(|index| {
-            let angle = std::f64::consts::TAU * index as f64 / CIRCLE_SEGMENTS as f64;
+            let angle = std::f64::consts::TAU * index as f64 / segments as f64;
             [radius * angle.cos(), radius * angle.sin()]
         })
         .collect();

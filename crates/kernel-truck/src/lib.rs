@@ -88,7 +88,7 @@ impl Kernel for TruckKernel {
         let shape = match primitive {
             Primitive::Cuboid { size } => cuboid(size)?,
             Primitive::Cylinder { radius, height } => cylinder(radius, height)?,
-            Primitive::Sphere { radius } => sphere(radius)?,
+            Primitive::Sphere { radius, segments } => sphere(radius, segments)?,
             Primitive::Polyhedron { points, faces } => polyhedron(&points, &faces)?,
         };
         Ok(self.insert(OwnedShape::Solid(shape)))
@@ -478,7 +478,10 @@ mod tests {
     fn sphere_is_centered_and_round() {
         let mut kernel = TruckKernel::new();
         let sphere = kernel
-            .primitive(Primitive::Sphere { radius: 1.0 })
+            .primitive(Primitive::Sphere {
+                radius: 1.0,
+                segments: None,
+            })
             .expect("sphere");
         let mesh = kernel.tessellate(sphere, 0.01).expect("tessellation");
 
@@ -505,7 +508,10 @@ mod tests {
             })
             .expect("cube");
         let sphere = kernel
-            .primitive(Primitive::Sphere { radius: 1.2 })
+            .primitive(Primitive::Sphere {
+                radius: 1.2,
+                segments: None,
+            })
             .expect("sphere");
         let result = kernel
             .boolean(BooleanOp::Difference, cube, sphere)
