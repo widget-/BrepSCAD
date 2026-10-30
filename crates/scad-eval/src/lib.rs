@@ -8,6 +8,8 @@ mod evaluator;
 mod model;
 mod parameters;
 mod parts;
+#[allow(dead_code)]
+mod profile;
 mod value;
 
 use brepscad_kernel_api::KernelError;

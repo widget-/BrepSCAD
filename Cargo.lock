@@ -221,6 +221,7 @@ dependencies = [
  "brepscad-kernel-api",
  "brepscad-kernel-truck",
  "brepscad-syntax",
+ "clipper2-rust",
  "thiserror 2.0.21",
 ]
 
@@ -409,6 +410,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
 dependencies = [
  "error-code",
+]
+
+[[package]]
+name = "clipper2-rust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "210e9ea90a5f6c731c23bf642383ad7c006d8b24803c5c33afd5aaeae5a33f66"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

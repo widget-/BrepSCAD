@@ -22,6 +22,7 @@ thiserror = "2"
 truck-meshalgo = { version = "0.4", default-features = false, features = ["analyzers", "tessellation"] }
 truck-modeling = "0.6"
 truck-shapeops = { version = "0.4", default-features = false }
+clipper2-rust = "1.2"
 
 brepscad-kernel-api = { path = "crates/kernel-api" }
 brepscad-kernel-truck = { path = "crates/kernel-truck" }

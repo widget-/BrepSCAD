@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 thiserror.workspace = true
+clipper2-rust.workspace = true
 brepscad-kernel-api.workspace = true
 brepscad-syntax.workspace = true
 
