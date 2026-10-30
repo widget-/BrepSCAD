@@ -548,9 +548,10 @@ impl<K: Kernel> Evaluator<'_, K> {
                     return Err(bad_args("rotate_extrude", "expected a 2D child"));
                 }
 
-                let mesh = self.kernel.tessellate(children[0].shape, self.tolerance)?;
-                let (min, max) = mesh_bounds(&mesh)
-                    .ok_or_else(|| bad_args("rotate_extrude", "cannot revolve an empty profile"))?;
+                let (min, max) = self
+                    .kernel
+                    .bounds(children[0].shape, self.tolerance)
+                    .map_err(|_| bad_args("rotate_extrude", "cannot revolve an empty profile"))?;
                 if min[0] < -1.0e-6 {
                     return Err(bad_args("rotate_extrude", "profile must lie at x >= 0"));
                 }
@@ -623,9 +624,10 @@ impl<K: Kernel> Evaluator<'_, K> {
                 for child in &children[1..] {
                     united = self.kernel.boolean(BooleanOp::Union, united, child.shape)?;
                 }
-                let mesh = self.kernel.tessellate(united, self.tolerance)?;
-                let (min, max) = mesh_bounds(&mesh)
-                    .ok_or_else(|| bad_args("resize", "cannot resize empty geometry"))?;
+                let (min, max) = self
+                    .kernel
+                    .bounds(united, self.tolerance)
+                    .map_err(|_| bad_args("resize", "cannot resize empty geometry"))?;
 
                 let mut scale = [1.0; 3];
                 for axis in 0..3 {
@@ -1052,20 +1054,4 @@ fn check_transform(transform: Transform) -> Result<(), EvalError> {
         return Err(EvalError::InvalidTransform("matrix is singular".to_owned()));
     }
     Ok(())
-}
-
-fn mesh_bounds(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
-    if mesh.positions.is_empty() {
-        return None;
-    }
-
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    for position in &mesh.positions {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(position[axis]);
-            max[axis] = max[axis].max(position[axis]);
-        }
-    }
-    Some((min, max))
 }

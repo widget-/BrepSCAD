@@ -98,6 +98,7 @@ scripts/
   - matrix transforms on faces and solids
   - union, difference, intersection on solids
   - tessellation to a neutral triangle mesh
+  - axis-aligned bounds for solids and sketches
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 
@@ -131,9 +132,9 @@ scripts/
 - Singular or non-finite transforms are rejected before reaching the kernel.
   Reflections keep a negative determinant; the Truck adapter flips face
   orientation so mirrored solids stay outward-facing.
-- `resize` fits the tessellated bounds of its children in local space, then
-  applies the accumulated parent transform. A zero dimension is left unchanged;
-  the `auto` parameter is not supported.
+- `resize` fits the kernel bounds of its children in local space, then applies
+  the accumulated parent transform. A zero dimension is left unchanged; the
+  `auto` parameter is not supported.
 - Truck is first because it is pure Rust, Apache-2.0, and needs no C++
   toolchain. OCCT is the likely C++ fallback; SolidCore is a watch item.
 - `sphere` is built as a faceted UV B-rep with shared edges and planar
@@ -225,8 +226,8 @@ ffmpeg's `x11grab`, and cleans up. Requires `Xvfb` and an ffmpeg with
   - `sphere` is a fixed 32×16 facet approximation; no `$fn`, `$fa`, or `$fs`
 - No color or `$fn` handling.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
-  not supported. It computes bounds by tessellating the children, so it is
-  slower than a matrix-only transform.
+  not supported. It asks the kernel for bounds, which are tessellation-derived,
+  so it is slower than a matrix-only transform.
 - Truck booleans try tolerances `0.05`, `0.02`, then `0.01` and keep the first
   success. Some configurations still fail, and a retry can take seconds.
 - Truck booleans can still fail on touching or coincident faces.

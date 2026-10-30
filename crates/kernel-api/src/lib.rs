@@ -153,6 +153,15 @@ pub trait Kernel {
     fn tessellate(&self, _shape: ShapeId, _tolerance: f64) -> Result<Mesh, KernelError> {
         Err(KernelError::Unsupported("tessellate"))
     }
+
+    /// Axis-aligned bounds in the shape's local coordinates.
+    fn bounds(
+        &self,
+        _shape: ShapeId,
+        _tolerance: f64,
+    ) -> Result<([f64; 3], [f64; 3]), KernelError> {
+        Err(KernelError::Unsupported("bounds"))
+    }
 }
 
 /// Version of the kernel-api crate.

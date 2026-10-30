@@ -224,6 +224,27 @@ impl Kernel for TruckKernel {
             .remove_unused_attrs();
         Ok(to_neutral_mesh(&mesh))
     }
+
+    fn bounds(&self, shape: ShapeId, tolerance: f64) -> KernelResult<([f64; 3], [f64; 3])> {
+        let mesh = self.tessellate(shape, tolerance)?;
+        mesh_bounds(&mesh).ok_or_else(|| KernelError::Backend("shape has no geometry".to_owned()))
+    }
+}
+
+fn mesh_bounds(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
+    if mesh.positions.is_empty() {
+        return None;
+    }
+
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for position in &mesh.positions {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(position[axis]);
+            max[axis] = max[axis].max(position[axis]);
+        }
+    }
+    Some((min, max))
 }
 
 fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
@@ -898,6 +919,34 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let error = kernel.sketch_profile(&[]).expect_err("empty profile");
         assert!(matches!(error, KernelError::Backend(message) if message.contains("region")));
+    }
+
+    #[test]
+    fn bounds_report_solid_and_sketch_extents() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 4.0, 6.0],
+            })
+            .expect("cube");
+        let (min, max) = kernel.bounds(cube, 0.01).expect("solid bounds");
+        assert!((min[0] + 1.0).abs() < 1.0e-9, "min = {min:?}");
+        assert!((min[1] + 2.0).abs() < 1.0e-9, "min = {min:?}");
+        assert!((min[2] + 3.0).abs() < 1.0e-9, "min = {min:?}");
+        assert!((max[0] - 1.0).abs() < 1.0e-9, "max = {max:?}");
+        assert!((max[1] - 2.0).abs() < 1.0e-9, "max = {max:?}");
+        assert!((max[2] - 3.0).abs() < 1.0e-9, "max = {max:?}");
+
+        let sketch = kernel
+            .sketch(Sketch::Square { size: [2.0, 4.0] })
+            .expect("square");
+        let (min, max) = kernel.bounds(sketch, 0.01).expect("sketch bounds");
+        assert!((min[0] + 1.0).abs() < 1.0e-9, "min = {min:?}");
+        assert!((min[1] + 2.0).abs() < 1.0e-9, "min = {min:?}");
+        assert!(min[2].abs() < 1.0e-9, "min = {min:?}");
+        assert!((max[0] - 1.0).abs() < 1.0e-9, "max = {max:?}");
+        assert!((max[1] - 2.0).abs() < 1.0e-9, "max = {max:?}");
+        assert!(max[2].abs() < 1.0e-9, "max = {max:?}");
     }
 
     fn bounds(mesh: &Mesh) -> ([f64; 3], [f64; 3]) {
