@@ -6,7 +6,7 @@
 - Branch: `main`
 - HEAD: `4c6d29d refactor: use composed matrix transforms`
 - Working tree: clean before this note was added
-- Test suite: 44 tests passing
+- Test suite: 59 tests passing
 
 ## What this project is
 
@@ -52,7 +52,7 @@ docs/
 
 - Top-level assignments and variable lookup.
 - `cube`, `cylinder`.
-- `translate`, `rotate`, `scale`.
+- `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
 - `difference`, `union`, `intersection` with brace blocks.
 - Nested transforms compose into one matrix before reaching a primitive.
 - Each evaluated top-level shape exposes:
@@ -109,6 +109,14 @@ difference() {
 - B-rep first. The kernel-neutral `Transform` is a column-major 4×4 affine
   matrix; `compose` applies the child first.
 - OpenSCAD rotation order for `rotate([x, y, z])`: X, then Y, then Z.
+- `multmatrix` rows are converted from OpenSCAD's row-major form into the
+  internal column-major matrix.
+- Singular or non-finite transforms are rejected before reaching the kernel.
+  Reflections keep a negative determinant; the Truck adapter flips face
+  orientation so mirrored solids stay outward-facing.
+- `resize` fits the tessellated bounds of its children in local space, then
+  applies the accumulated parent transform. A zero dimension is left unchanged;
+  the `auto` parameter is not supported.
 - Truck is first because it is pure Rust, Apache-2.0, and needs no C++
   toolchain. OCCT is the likely C++ fallback; SolidCore is a watch item.
 - Backend adapters should remain separate crates behind the common trait.
@@ -159,14 +167,12 @@ Exit code `124` means it stayed alive until the timeout and did not panic.
   - no `sphere`, `polyhedron`, extrusions, or 2D primitives
 - Booleans currently require brace blocks; single-child boolean forms are not
   supported.
-- No `multmatrix`, `mirror`, `resize`, color, or `$fn` handling. The matrix API
-  makes `multmatrix`/`mirror` straightforward to add.
-- Non-uniform scale and reflections still need kernel-specific validation;
-  singular matrices are not rejected.
+- No color or `$fn` handling.
+- `resize` supports a positional `newsize` only; `auto` and named arguments are
+  not supported. It computes bounds by tessellating the children, so it is
+  slower than a matrix-only transform.
 - Truck booleans use a fixed tolerance (`0.05`) and can fail on touching or
   coincident faces.
-- No evaluation cache. Each reload re-evaluates and re-tessellates the final
-  shape plus every selectable operand.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight
@@ -180,22 +186,18 @@ Exit code `124` means it stayed alive until the timeout and did not panic.
 
 ## Recommended next steps
 
-1. **Complete the transform set**
-   - `multmatrix`, `mirror`, `resize`.
-   - Validate singular matrices and reflections.
-   - Decide on non-uniform scale policy per kernel.
-2. **Expand the language subset**
+1. **Expand the language subset**
    - Named arguments, expressions, `sphere`, extrusions.
    - Single-child boolean forms.
    - `for` / `if` and module/function definitions later.
-3. **Native intrinsics**
+2. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-4. **Kernel adapters**
+3. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-5. **Selection polish**
+4. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 

@@ -63,7 +63,13 @@ impl Kernel for TruckKernel {
     fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
         let solid = self.shape(shape)?;
         let matrix = matrix4(transform);
-        Ok(self.insert(builder::transformed(solid, matrix)))
+        let mut transformed = builder::transformed(solid, matrix);
+        // A reflection reverses handedness, so the mapped faces need their
+        // orientation restored.
+        if transform.determinant() < 0.0 {
+            transformed.not();
+        }
+        Ok(self.insert(transformed))
     }
 
     fn boolean(&mut self, op: BooleanOp, a: ShapeId, b: ShapeId) -> KernelResult<ShapeId> {
@@ -224,6 +230,37 @@ mod tests {
         assert!((min_z + 2.0).abs() < 1e-6, "min_z = {min_z}");
         assert!((max_z - 2.0).abs() < 1e-6, "max_z = {max_z}");
         assert!((max_radial - 0.5).abs() < 1e-6, "max_radial = {max_radial}");
+    }
+
+    #[test]
+    fn mirrored_solids_keep_outward_orientation() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let mirror = Transform::from_mirror([1.0, 0.0, 0.0]).expect("normal");
+        let mirrored = kernel.transform(cube, mirror).expect("mirror");
+        let mesh = kernel.tessellate(mirrored, 0.01).expect("tessellation");
+
+        let volume = signed_volume(&mesh);
+        assert!(volume > 0.0, "volume = {volume}");
+    }
+
+    fn signed_volume(mesh: &Mesh) -> f64 {
+        mesh.indices
+            .chunks_exact(3)
+            .map(|triangle| {
+                let a = mesh.positions[triangle[0] as usize];
+                let b = mesh.positions[triangle[1] as usize];
+                let c = mesh.positions[triangle[2] as usize];
+                a[0] * (b[1] * c[2] - b[2] * c[1])
+                    + a[1] * (b[2] * c[0] - b[0] * c[2])
+                    + a[2] * (b[0] * c[1] - b[1] * c[0])
+            })
+            .sum::<f64>()
+            / 6.0
     }
 
     #[test]

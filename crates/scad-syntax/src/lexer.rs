@@ -45,6 +45,13 @@ impl<'a> Lexer<'a> {
         self.input[self.pos..].chars().next()
     }
 
+    fn next_is_digit(&self) -> bool {
+        self.input[self.pos + 1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+    }
+
     fn rest(&self) -> &'a str {
         &self.input[self.pos..]
     }
@@ -112,7 +119,10 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
             self.push(SyntaxKind::IDENT, start);
-        } else if c.is_ascii_digit() {
+        } else if c.is_ascii_digit() || (c == '-' && self.next_is_digit()) {
+            if c == '-' {
+                self.advance();
+            }
             self.advance();
             while let Some(c) = self.peek() {
                 if !c.is_ascii_digit() {

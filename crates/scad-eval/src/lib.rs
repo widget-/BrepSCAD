@@ -23,6 +23,8 @@ pub enum EvalError {
     UnsupportedModule(String),
     #[error("bad arguments for {module}: {message}")]
     BadArguments { module: String, message: String },
+    #[error("invalid transform: {0}")]
+    InvalidTransform(String),
     #[error("kernel error: {0}")]
     Kernel(#[from] KernelError),
 }
@@ -86,6 +88,7 @@ pub struct MeshCache {
 }
 
 const MESH_CACHE_LIMIT: usize = 512;
+const SINGULAR_DETERMINANT: f64 = 1.0e-12;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MeshKey {
@@ -156,13 +159,14 @@ impl MeshCache {
 enum Value {
     Number(f64),
     Vector(Vec<f64>),
+    Matrix(Vec<Vec<f64>>),
 }
 
 impl Value {
     fn as_number(&self, module: &str) -> Result<f64, EvalError> {
         match self {
             Self::Number(value) => Ok(*value),
-            Self::Vector(_) => Err(bad_args(module, "expected a number")),
+            Self::Vector(_) | Self::Matrix(_) => Err(bad_args(module, "expected a number")),
         }
     }
 
@@ -170,7 +174,9 @@ impl Value {
         match self {
             Self::Number(value) => Ok([*value; 3]),
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
-            Self::Vector(_) => Err(bad_args(module, "expected a 3-element vector or a scalar")),
+            Self::Vector(_) | Self::Matrix(_) => {
+                Err(bad_args(module, "expected a 3-element vector or a scalar"))
+            }
         }
     }
 
@@ -187,6 +193,22 @@ impl Value {
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
             _ => Err(bad_args(module, "expected a 3-element vector or a scalar")),
         }
+    }
+
+    fn as_matrix(&self, module: &str) -> Result<Transform, EvalError> {
+        let Self::Matrix(rows) = self else {
+            return Err(bad_args(module, "expected a 4x3 or 4x4 matrix"));
+        };
+        if !(rows.len() == 3 || rows.len() == 4) || rows.iter().any(|row| row.len() != 4) {
+            return Err(bad_args(module, "expected a 4x3 or 4x4 matrix"));
+        }
+
+        let mut matrix = [[0.0; 4]; 4];
+        for (row, values) in rows.iter().take(3).enumerate() {
+            matrix[row].copy_from_slice(values);
+        }
+        matrix[3] = [0.0, 0.0, 0.0, 1.0];
+        Ok(Transform::from_rows(matrix))
     }
 }
 
@@ -224,6 +246,7 @@ pub fn evaluate_with_cache<K: Kernel>(
             kernel,
             variables: HashMap::new(),
             assignments: HashMap::new(),
+            tolerance,
         };
 
         for statement in parsed.syntax().children() {
@@ -277,6 +300,7 @@ struct Evaluator<'a, K: Kernel> {
     kernel: &'a mut K,
     variables: HashMap<String, Value>,
     assignments: HashMap<String, SyntaxNode>,
+    tolerance: f64,
 }
 
 impl<K: Kernel> Evaluator<'_, K> {
@@ -359,7 +383,74 @@ impl<K: Kernel> Evaluator<'_, K> {
                     children: Vec::new(),
                 })
             }
-            "translate" | "rotate" | "scale" => {
+            "resize" => {
+                let newsize = single_arg(&args, "resize")?.as_vector3("resize")?;
+                if newsize.iter().any(|value| *value < 0.0) {
+                    return Err(bad_args("resize", "dimensions must be non-negative"));
+                }
+
+                let transform_parameters = node
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .unwrap_or_default();
+
+                let mut children = match block {
+                    Some(block) => self.block(block, Transform::IDENTITY)?,
+                    None => {
+                        let child = node
+                            .children()
+                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                            .ok_or_else(|| bad_args("resize", "expected a child or block"))?;
+                        vec![self.module_call(child, Transform::IDENTITY)?]
+                    }
+                };
+                if children.is_empty() {
+                    return Err(bad_args("resize", "expected at least one child"));
+                }
+
+                let mut united = children[0].shape;
+                for child in &children[1..] {
+                    united = self.kernel.boolean(BooleanOp::Union, united, child.shape)?;
+                }
+                let mesh = self.kernel.tessellate(united, self.tolerance)?;
+                let (min, max) = mesh_bounds(&mesh)
+                    .ok_or_else(|| bad_args("resize", "cannot resize empty geometry"))?;
+
+                let mut scale = [1.0; 3];
+                for axis in 0..3 {
+                    if newsize[axis] == 0.0 {
+                        continue;
+                    }
+                    let extent = max[axis] - min[axis];
+                    if extent <= f64::EPSILON {
+                        return Err(bad_args("resize", "cannot resize a degenerate dimension"));
+                    }
+                    scale[axis] = newsize[axis] / extent;
+                }
+
+                let combined = parent.compose(Transform::from_scale(scale));
+                check_transform(combined)?;
+                for child in &mut children {
+                    self.transform_tree(child, combined)?;
+                }
+
+                let mut result = children[0].shape;
+                for child in &children[1..] {
+                    result = self.kernel.boolean(BooleanOp::Union, result, child.shape)?;
+                }
+
+                Ok(Node {
+                    shape: result,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: Some(transform_parameters),
+                    world: combined,
+                    children,
+                })
+            }
+            "translate" | "rotate" | "scale" | "multmatrix" | "mirror" => {
                 let argument = single_arg(&args, name.as_str())?;
                 let local = match name.as_str() {
                     "translate" => Transform::from_translation(argument.as_vector3("translate")?),
@@ -370,6 +461,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                             y.to_radians(),
                             z.to_radians(),
                         ])
+                    }
+                    "multmatrix" => argument.as_matrix("multmatrix")?,
+                    "mirror" => {
+                        let normal = argument.as_vector3("mirror")?;
+                        Transform::from_mirror(normal).ok_or_else(|| {
+                            bad_args("mirror", "normal must be non-zero and finite")
+                        })?
                     }
                     _ => Transform::from_scale(argument.as_scale("scale")?),
                 };
@@ -458,11 +556,24 @@ impl<K: Kernel> Evaluator<'_, K> {
         shape: ShapeId,
         transform: Transform,
     ) -> Result<ShapeId, EvalError> {
+        check_transform(transform)?;
         if transform.is_identity() {
             Ok(shape)
         } else {
             Ok(self.kernel.transform(shape, transform)?)
         }
+    }
+
+    fn transform_tree(&mut self, node: &mut Node, transform: Transform) -> Result<(), EvalError> {
+        if transform.is_identity() {
+            return Ok(());
+        }
+        node.shape = self.kernel.transform(node.shape, transform)?;
+        node.world = transform.compose(node.world);
+        for child in &mut node.children {
+            self.transform_tree(child, transform)?;
+        }
+        Ok(())
     }
 
     fn arg_list(&mut self, node: SyntaxNode) -> Result<Vec<Value>, EvalError> {
@@ -512,6 +623,7 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn vector(&mut self, node: SyntaxNode) -> Result<Value, EvalError> {
         let mut values = Vec::new();
+        let mut rows = Vec::new();
         for element in node.children_with_tokens() {
             if let Some(token) = element.as_token() {
                 match token.kind() {
@@ -523,13 +635,40 @@ impl<K: Kernel> Evaluator<'_, K> {
                 }
             } else if let Some(child) = element.as_node() {
                 if child.kind() == SyntaxKind::VECTOR {
+                    rows.push(self.number_row(child.clone())?);
+                }
+            }
+        }
+
+        match (values.is_empty(), rows.is_empty()) {
+            (_, true) => Ok(Value::Vector(values)),
+            (true, false) => Ok(Value::Matrix(rows)),
+            (false, false) => Err(EvalError::Parse(
+                "cannot mix scalars and vectors in one vector".to_owned(),
+            )),
+        }
+    }
+
+    fn number_row(&mut self, node: SyntaxNode) -> Result<Vec<f64>, EvalError> {
+        let mut values = Vec::new();
+        for element in node.children_with_tokens() {
+            if let Some(token) = element.as_token() {
+                match token.kind() {
+                    SyntaxKind::NUMBER => values.push(parse_number(token.text())?),
+                    SyntaxKind::IDENT => {
+                        values.push(self.lookup(token.text())?.as_number("matrix")?);
+                    }
+                    _ => {}
+                }
+            } else if let Some(child) = element.as_node() {
+                if child.kind() == SyntaxKind::VECTOR {
                     return Err(EvalError::Parse(
-                        "nested vectors are not supported".to_owned(),
+                        "matrices must be two levels deep".to_owned(),
                     ));
                 }
             }
         }
-        Ok(Value::Vector(values))
+        Ok(values)
     }
 
     fn lookup(&self, name: &str) -> Result<Value, EvalError> {
@@ -655,6 +794,34 @@ fn bad_args(module: &str, message: impl Into<String>) -> EvalError {
         module: module.to_owned(),
         message: message.into(),
     }
+}
+
+fn check_transform(transform: Transform) -> Result<(), EvalError> {
+    if !transform.is_finite() {
+        return Err(EvalError::InvalidTransform(
+            "matrix contains non-finite values".to_owned(),
+        ));
+    }
+    if transform.determinant().abs() < SINGULAR_DETERMINANT {
+        return Err(EvalError::InvalidTransform("matrix is singular".to_owned()));
+    }
+    Ok(())
+}
+
+fn mesh_bounds(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
+    if mesh.positions.is_empty() {
+        return None;
+    }
+
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for position in &mesh.positions {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(position[axis]);
+            max[axis] = max[axis].max(position[axis]);
+        }
+    }
+    Some((min, max))
 }
 
 fn text_range_to_range(range: TextRange) -> Range<usize> {

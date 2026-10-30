@@ -87,6 +87,24 @@ fn round_trips_transform_with_single_child() {
 }
 
 #[test]
+fn parses_negative_number_literals() {
+    let source = "translate([-1, 0, -2.5]) cube([2, 2, 2]);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+    let numbers: Vec<String> = parsed
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| token.kind() == SyntaxKind::NUMBER)
+        .map(|token| token.text().to_owned())
+        .collect();
+    assert!(numbers.iter().any(|number| number == "-1"));
+    assert!(numbers.iter().any(|number| number == "-2.5"));
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),

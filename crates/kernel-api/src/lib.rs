@@ -99,6 +99,51 @@ impl Transform {
             .compose(Self::from_rotation_x(x))
     }
 
+    /// Builds a transform from row-major values, the order OpenSCAD's
+    /// `multmatrix` uses.
+    pub fn from_rows(rows: [[f64; 4]; 4]) -> Self {
+        let mut cols = [[0.0; 4]; 4];
+        for (row, values) in rows.iter().enumerate() {
+            for (column, value) in values.iter().enumerate() {
+                cols[column][row] = *value;
+            }
+        }
+        Self { cols }
+    }
+
+    /// Reflection across the plane through the origin with `normal`.
+    ///
+    /// Returns `None` if the normal is zero or non-finite.
+    pub fn from_mirror([x, y, z]: [f64; 3]) -> Option<Self> {
+        let length_squared = x * x + y * y + z * z;
+        if !length_squared.is_finite() || length_squared == 0.0 {
+            return None;
+        }
+
+        let normal = [x, y, z];
+        let mut transform = Self::IDENTITY;
+        for column in 0..3 {
+            for row in 0..3 {
+                let factor = -2.0 * normal[row] * normal[column] / length_squared;
+                transform.cols[column][row] = if row == column { 1.0 + factor } else { factor };
+            }
+        }
+        Some(transform)
+    }
+
+    /// Determinant of the linear (upper-left 3×3) part.
+    pub fn determinant(&self) -> f64 {
+        let [a, b, c] = [self.cols[0][0], self.cols[1][0], self.cols[2][0]];
+        let [d, e, f] = [self.cols[0][1], self.cols[1][1], self.cols[2][1]];
+        let [g, h, i] = [self.cols[0][2], self.cols[1][2], self.cols[2][2]];
+        a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    }
+
+    /// Whether every entry is finite.
+    pub fn is_finite(&self) -> bool {
+        self.cols.iter().flatten().all(|value| value.is_finite())
+    }
+
     /// Returns `self * child`: the child transform is applied first.
     pub fn compose(self, child: Self) -> Self {
         let mut cols = [[0.0; 4]; 4];
@@ -246,5 +291,43 @@ mod tests {
         assert!(point[0].abs() < 1e-12);
         assert!((point[1] - 1.0).abs() < 1e-12);
         assert!(point[2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn from_rows_uses_open_scad_row_order() {
+        let transform = Transform::from_rows([
+            [1.0, 0.0, 0.0, 5.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+
+        assert_eq!(transform.apply([1.0, 2.0, 3.0]), [6.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn mirror_reflects_across_the_normal_plane() {
+        let transform = Transform::from_mirror([1.0, 0.0, 0.0]).expect("normal");
+        let point = transform.apply([2.0, 1.0, 3.0]);
+
+        assert!((point[0] + 2.0).abs() < 1e-12);
+        assert!((point[1] - 1.0).abs() < 1e-12);
+        assert!((point[2] - 3.0).abs() < 1e-12);
+        assert!((transform.determinant() + 1.0).abs() < 1e-12);
+        assert!(Transform::from_mirror([0.0, 0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn determinant_reports_scale_and_singularity() {
+        let scaled = Transform::from_scale([2.0, 3.0, 4.0]);
+        assert!(scaled.is_finite());
+        assert!((scaled.determinant() - 24.0).abs() < 1e-12);
+
+        let singular = Transform::from_scale([1.0, 0.0, 1.0]);
+        assert!(singular.determinant().abs() < 1e-12);
+
+        let mut not_finite = Transform::IDENTITY;
+        not_finite.cols[0][0] = f64::NAN;
+        assert!(!not_finite.is_finite());
     }
 }
