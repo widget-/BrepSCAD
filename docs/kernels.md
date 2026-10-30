@@ -12,7 +12,7 @@ The UI must not grey out an operation because a doc table says a kernel lacks it
 | Backend                            | Language | Licence                 | Representation          | Current status                                                                                      |
 | ---------------------------------- | -------- | ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------- |
 | **OCCT** (Open CASCADE Technology) | C++      | LGPL-2.1 with exception | B-rep, analytic + NURBS | Mature; full CAD feature set; Rust bindings (`opencascade-rs`, `occt-sys`, `occt-wasm`)             |
-| **SolidCore**                      | Rust     | Apache-2.0              | B-rep, analytic + NURBS | Unit port complete (263/263 units, 391,055/391,055 lines); API 0.0.x; integration still in progress |
+| **SolidCore**                      | Rust     | Apache-2.0              | B-rep, analytic + NURBS | Unit port complete (278/278 units, 402,122/402,122 lines); API 0.0.x; integration still in progress |
 | **Truck** (upstream)               | Rust     | Apache-2.0              | B-rep, NURBS            | Active; ~1.7k stars; booleans, STEP, assembly, meshing; no native fillet                            |
 | **Truck** (`monstertruck` fork)    | Rust     | Verify                  | B-rep, NURBS            | Adds fillet, healing, STEP, assembly; verify provenance and maintenance                             |
 | **Manifold**                       | C++      | Apache-2.0              | Mesh CSG                | **Not a candidate backend.** Optional internal mesh fallback for `hull`/`minkowski`/mesh imports    |
@@ -29,7 +29,7 @@ Legend: **✓** supported; **~** partial / experimental / verify; **✗** not su
 | Cone                                      | ✓    | ✓         | ?                    | ?            | Verify primitive coverage                                                            |
 | Torus                                     | ✓    | ✓         | ?                    | ?            | Verify primitive coverage                                                            |
 | `polyhedron` / explicit vertex-face solid | ✓    | ?         | ?                    | ?            | Build from topology; verify API                                                      |
-| 2D primitives / profiles                  | ✓    | ?         | ~ (`truck-drafting`) | ~            | Not OpenSCAD 2D semantics                                                            |
+| 2D primitives / profiles                  | ✓    | ✗         | ~ (`truck-drafting`) | ~            | SolidCore is 3D solid B-rep only; SolidCraft sketches/profiles are an app layer, not a kernel API |
 | Union                                     | ✓    | ✓         | ✓                    | ✓            |                                                                                      |
 | Difference                                | ✓    | ✓         | ✓ (`and` + `not`)    | ✓            |                                                                                      |
 | Intersection                              | ✓    | ✓         | ?                    | ?            | Verify                                                                               |
@@ -85,9 +85,10 @@ Legend: **✓** supported; **~** partial / experimental / verify; **✗** not su
 ### SolidCore
 
 - Rust port of NVIDIA SMLib (`usd-brep` v1.0.1), Apache-2.0, safe Rust, wasm-buildable.
-- Unit port is complete: **263/263 units, 391,055/391,055 upstream lines, all green**, with difftests against the C++ for topology identity and `1e-9` relative values.
+- Unit port is complete: **278/278 units, 402,122/402,122 upstream lines, all green** (2026-10-30), with difftests against the C++ for topology identity and `1e-9` relative values.
 - Primitives are exercised end to end: **9/9 build, 9/9 pass**.
-- Scope includes NURBS, curves/surfaces, B-rep topology, intersections, booleans, fillets/chamfers, offset/shell, sweeps/skins, primitives, healing/stitching, mass properties and queries.
+- Scope is 3D solid B-rep: NURBS, curves/surfaces, topology, intersections, solid booleans, fillets/chamfers, offset/shell, sweeps/skins, primitives, healing/stitching, mass properties and queries.
+- **No 2D primitives or 2D boolean API.** The boolean units are solid booleans. SolidCraft's sketch/profile regions are implemented above the kernel, not exposed by SolidCore.
 - Out of scope: upstream’s OCCT translators, USD/Hydra integration, Python bindings. Do not assume STEP/IGES; verify any file I/O.
 - Integration is still in progress; the README keeps the API at 0.0.x until usable end to end. The external SSI corpus still has incomplete/wrong-topology cases.
 - Best pure-Rust candidate for fillets/booleans/NURBS, but budget for API churn and integration testing.
