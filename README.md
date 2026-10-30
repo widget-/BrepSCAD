@@ -119,6 +119,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Source editor | ✔ | In-memory basic textbox. |
 | Source tree | ✔ | Groups and selectable leaf primitives. |
 | UI parameter editing | ◐ | Numeric parameters only. |
+| Background evaluation | ✔ | Worker thread; queued requests and stale-result rejection; spinner while running. |
 | Legacy OpenSCAD centering | ✔ | CLI `--legacy-centering` or the viewer checkbox. |
 | Preview-based selection | ✔ | |
 | 2D profile CSG | ✔ | Via `clipper2-rust`. |

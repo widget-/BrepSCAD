@@ -33,6 +33,20 @@ const BOOLEAN_NUDGES: [[f64; 3]; 6] = [
     [-2.0e-5, 0.0, 0.0],
 ];
 
+fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
+    catch_unwind(AssertUnwindSafe(|| match op {
+        BooleanOp::Union => truck_shapeops::or(a, b, tolerance),
+        BooleanOp::Intersection => truck_shapeops::and(a, b, tolerance),
+        BooleanOp::Difference => {
+            let mut inverted = b.clone();
+            inverted.not();
+            truck_shapeops::and(a, &inverted, tolerance)
+        }
+    }))
+    .ok()
+    .flatten()
+}
+
 #[derive(Debug)]
 enum OwnedShape {
     Face(Face),
@@ -203,57 +217,37 @@ impl Kernel for TruckKernel {
         let a = self.solid(a)?.clone();
         let b = self.solid(b)?.clone();
 
+        // Exact geometry first.
         for tolerance in BOOLEAN_TOLERANCES {
-            for shift in BOOLEAN_SHIFTS {
-                let offset = Vector3::new(shift[0], shift[1], shift[2]);
-                let shifted_a = if shift == [0.0, 0.0, 0.0] {
-                    a.clone()
-                } else {
-                    builder::translated(&a, offset)
-                };
-                let shifted_b = if shift == [0.0, 0.0, 0.0] {
-                    b.clone()
-                } else {
-                    builder::translated(&b, offset)
-                };
-
-                let result = catch_unwind(AssertUnwindSafe(|| match op {
-                    BooleanOp::Union => truck_shapeops::or(&shifted_a, &shifted_b, tolerance),
-                    BooleanOp::Intersection => {
-                        truck_shapeops::and(&shifted_a, &shifted_b, tolerance)
-                    }
-                    BooleanOp::Difference => {
-                        let mut inverted = shifted_b.clone();
-                        inverted.not();
-                        truck_shapeops::and(&shifted_a, &inverted, tolerance)
-                    }
-                }));
-
-                if let Ok(Some(mut result)) = result {
-                    if shift != [0.0, 0.0, 0.0] {
-                        result = builder::translated(&result, -offset);
-                    }
-                    return Ok(self.insert(OwnedShape::Solid(result)));
-                }
+            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
+                return Ok(self.insert(OwnedShape::Solid(result)));
             }
         }
 
+        // Degenerate corner cuts often need a tiny tool nudge. Try that before
+        // the more expensive translated-operand fallbacks.
         if op == BooleanOp::Difference {
-            // Last-resort fallback for degenerate corner cuts. The vendored
-            // shapeops patch turns bad generated wires into None; this nudge
-            // gives the retry a numerically distinct tool position.
             for nudge in BOOLEAN_NUDGES {
                 let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
                 let nudged = builder::translated(&b, offset);
                 for tolerance in BOOLEAN_TOLERANCES {
-                    let result = catch_unwind(AssertUnwindSafe(|| {
-                        let mut inverted = nudged.clone();
-                        inverted.not();
-                        truck_shapeops::and(&a, &inverted, tolerance)
-                    }));
-                    if let Ok(Some(result)) = result {
+                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance) {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
+                }
+            }
+        }
+
+        // Geometry-preserving translated-operand retries, as a last resort for
+        // numerical degeneracies that are not corner-cut specific.
+        for &shift in BOOLEAN_SHIFTS.iter().filter(|shift| **shift != [0.0; 3]) {
+            let offset = Vector3::new(shift[0], shift[1], shift[2]);
+            let shifted_a = builder::translated(&a, offset);
+            let shifted_b = builder::translated(&b, offset);
+            for tolerance in BOOLEAN_TOLERANCES {
+                if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
+                    result = builder::translated(&result, -offset);
+                    return Ok(self.insert(OwnedShape::Solid(result)));
                 }
             }
         }

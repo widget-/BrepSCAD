@@ -119,6 +119,8 @@ vendor/
 - eframe/egui UI with an offscreen wgpu render target registered as an egui
   texture.
 - Source editor + Evaluate button (Ctrl+Enter).
+- Evaluation runs on a worker thread; the UI stays responsive with a spinner,
+  queues the latest request, and discards stale results.
 - Orbit camera: drag to orbit, scroll to zoom.
 - CPU ray picking against operand meshes.
 - Shapes panel showing the source-shaped tree of groups and leaf primitives.
@@ -247,10 +249,10 @@ For headless UI snapshots, see
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
   not supported. It asks the kernel for bounds, which are tessellation-derived,
   so it is slower than a matrix-only transform.
-- Truck booleans try tolerances `0.05`, `0.02`, then `0.01`, then a tiny
-  difference-only tool nudge and translated-operand retries. Some configurations
-  still fail. The vendored shapeops patch prevents malformed wires from
-  panicking the application.
+- Truck booleans try exact tolerances `0.05`, `0.02`, then `0.01`, then a tiny
+  difference-only corner nudge, then translated-operand retries. Some
+  configurations still fail. The vendored shapeops patch prevents malformed
+  wires from panicking the application.
 - Truck booleans can still fail on touching or coincident faces.
 - Selection:
   - per leaf primitive, not per nested boolean group

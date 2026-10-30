@@ -1,5 +1,6 @@
 use std::ops::Range;
-use std::time::Instant;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 use brepscad_eval::{
     Evaluation, EvaluationOptions, MeshCache, TreeNode, evaluate_with_cache_options,
@@ -8,7 +9,6 @@ use brepscad_kernel_api::Mesh;
 use brepscad_kernel_truck::TruckKernel;
 use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 use eframe::egui;
-use eframe::wgpu;
 use egui::containers::scroll_area::ScrollSource;
 use glam::Vec2;
 
@@ -27,6 +27,19 @@ struct ParameterDraft {
     line: usize,
 }
 
+struct EvaluationResult {
+    evaluation: Evaluation,
+    error: Option<String>,
+    cache: MeshCache,
+    elapsed: Duration,
+    source: String,
+    legacy_centering: bool,
+}
+
+struct EvaluationJob {
+    receiver: Receiver<EvaluationResult>,
+}
+
 pub(crate) struct ViewerApp {
     source: String,
     evaluation: Evaluation,
@@ -41,6 +54,7 @@ pub(crate) struct ViewerApp {
     parameters: Vec<ParameterDraft>,
     error: Option<String>,
     pending_evaluate: bool,
+    evaluation_job: Option<EvaluationJob>,
     last_eval_ms: f64,
 }
 
@@ -73,30 +87,80 @@ impl ViewerApp {
             parameters: Vec::new(),
             error,
             pending_evaluate: false,
+            evaluation_job: None,
             last_eval_ms: 0.0,
         }
     }
 
-    fn reload(&mut self, device: &wgpu::Device) {
-        let started = Instant::now();
-        let (evaluation, error) =
-            evaluate_source(&self.source, &mut self.mesh_cache, self.legacy_centering);
-
-        if error.is_none() {
-            let mesh = combine_evaluation(&evaluation);
-            let (pick_mesh, pick_parts) = combine_parts(&evaluation);
-            self.camera.fit(&mesh);
-            self.renderer.set_mesh(device, &mesh);
-            self.mesh = mesh;
-            self.pick_mesh = pick_mesh;
-            self.pick_parts = pick_parts;
-            self.evaluation = evaluation;
-            self.selected_part = None;
-            self.parameters.clear();
+    fn start_evaluation(&mut self) {
+        if self.evaluation_job.is_some() {
+            self.pending_evaluate = true;
+            return;
         }
 
-        self.error = error;
-        self.last_eval_ms = started.elapsed().as_secs_f64() * 1000.0;
+        self.pending_evaluate = false;
+        let source = self.source.clone();
+        let legacy_centering = self.legacy_centering;
+        let mut cache = std::mem::take(&mut self.mesh_cache);
+        let (sender, receiver) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let (evaluation, error) = evaluate_source(&source, &mut cache, legacy_centering);
+            let _ = sender.send(EvaluationResult {
+                evaluation,
+                error,
+                cache,
+                elapsed: started.elapsed(),
+                source,
+                legacy_centering,
+            });
+        });
+
+        self.evaluation_job = Some(EvaluationJob { receiver });
+    }
+
+    fn poll_evaluation(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let Some(job) = self.evaluation_job.take() else {
+            return;
+        };
+
+        match job.receiver.try_recv() {
+            Ok(result) => {
+                self.mesh_cache = result.cache;
+                self.last_eval_ms = result.elapsed.as_secs_f64() * 1000.0;
+                let current = result.source == self.source
+                    && result.legacy_centering == self.legacy_centering;
+
+                if current {
+                    if result.error.is_none() {
+                        if let Some(render_state) = frame.wgpu_render_state() {
+                            let mesh = combine_evaluation(&result.evaluation);
+                            let (pick_mesh, pick_parts) = combine_parts(&result.evaluation);
+                            self.camera.fit(&mesh);
+                            self.renderer.set_mesh(&render_state.device, &mesh);
+                            self.mesh = mesh;
+                            self.pick_mesh = pick_mesh;
+                            self.pick_parts = pick_parts;
+                            self.evaluation = result.evaluation;
+                            self.selected_part = None;
+                            self.parameters.clear();
+                        }
+                    }
+                    self.error = result.error;
+                } else {
+                    // The source or placement mode changed while this job ran.
+                    self.pending_evaluate = true;
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.evaluation_job = Some(job);
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.error = Some("evaluation worker stopped".to_owned());
+            }
+        }
     }
 
     fn select_part(&mut self, selection: Option<(usize, usize)>) {
@@ -248,11 +312,9 @@ impl eframe::App for ViewerApp {
             self.pending_evaluate = true;
         }
 
-        if self.pending_evaluate {
-            if let Some(render_state) = frame.wgpu_render_state() {
-                self.reload(&render_state.device);
-            }
-            self.pending_evaluate = false;
+        self.poll_evaluation(ctx, frame);
+        if self.pending_evaluate && self.evaluation_job.is_none() {
+            self.start_evaluation();
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
@@ -270,6 +332,11 @@ impl eframe::App for ViewerApp {
                     "Place cubes and squares at the origin, and cylinder/extrusion bases at z = 0",
                 );
                 ui.label("Ctrl+Enter");
+                if self.evaluation_job.is_some() {
+                    ui.separator();
+                    ui.spinner();
+                    ui.label("Evaluating…");
+                }
                 if self.last_eval_ms > 0.0 {
                     ui.separator();
                     ui.label(format!("{:.0} ms", self.last_eval_ms));
