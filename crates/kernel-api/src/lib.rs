@@ -21,6 +21,15 @@ pub enum BooleanOp {
     Intersection,
 }
 
+/// A neutral affine transform.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Transform {
+    Translate([f64; 3]),
+    /// Euler angles in radians, applied around X, then Y, then Z.
+    Rotate([f64; 3]),
+    Scale([f64; 3]),
+}
+
 /// A neutral triangle mesh produced by tessellation.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Mesh {
@@ -38,6 +47,7 @@ impl Mesh {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
     pub primitives: bool,
+    pub transforms: bool,
     pub booleans: bool,
     pub tessellation: bool,
     pub fillet: bool,
@@ -65,6 +75,14 @@ pub trait Kernel {
         Err(KernelError::Unsupported("primitive"))
     }
 
+    fn transform(
+        &mut self,
+        _shape: ShapeId,
+        _transform: Transform,
+    ) -> Result<ShapeId, KernelError> {
+        Err(KernelError::Unsupported("transform"))
+    }
+
     fn boolean(
         &mut self,
         _op: BooleanOp,
@@ -90,6 +108,7 @@ mod tests {
     fn default_capabilities_are_empty() {
         let caps = Capabilities::default();
         assert!(!caps.primitives);
+        assert!(!caps.transforms);
         assert!(!caps.booleans);
         assert!(!caps.tessellation);
         assert!(!caps.fillet);

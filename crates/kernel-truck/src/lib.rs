@@ -6,7 +6,7 @@
 use truck_meshalgo::prelude::*;
 use truck_modeling::*;
 use visual_openscad_kernel_api::{
-    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId,
+    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Transform,
 };
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
@@ -45,6 +45,7 @@ impl Kernel for TruckKernel {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             primitives: true,
+            transforms: true,
             booleans: true,
             tessellation: true,
             ..Capabilities::default()
@@ -57,6 +58,23 @@ impl Kernel for TruckKernel {
             Primitive::Cylinder { radius, height } => cylinder(radius, height)?,
         };
         Ok(self.insert(shape))
+    }
+
+    fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
+        let solid = self.shape(shape)?;
+        let transformed = match transform {
+            Transform::Translate([x, y, z]) => builder::translated(solid, Vector3::new(x, y, z)),
+            Transform::Rotate([x, y, z]) => {
+                let rotated = builder::rotated(solid, Point3::origin(), Vector3::unit_x(), Rad(x));
+                let rotated =
+                    builder::rotated(&rotated, Point3::origin(), Vector3::unit_y(), Rad(y));
+                builder::rotated(&rotated, Point3::origin(), Vector3::unit_z(), Rad(z))
+            }
+            Transform::Scale([x, y, z]) => {
+                builder::scaled(solid, Point3::origin(), Vector3::new(x, y, z))
+            }
+        };
+        Ok(self.insert(transformed))
     }
 
     fn boolean(&mut self, op: BooleanOp, a: ShapeId, b: ShapeId) -> KernelResult<ShapeId> {
@@ -157,10 +175,32 @@ mod tests {
         let kernel = TruckKernel::new();
         let capabilities = kernel.capabilities();
         assert!(capabilities.primitives);
+        assert!(capabilities.transforms);
         assert!(capabilities.booleans);
         assert!(capabilities.tessellation);
         assert!(!capabilities.fillet);
         assert!(!capabilities.step_io);
+    }
+
+    #[test]
+    fn translates_a_cube() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let moved = kernel
+            .transform(cube, Transform::Translate([1.0, 0.0, 0.0]))
+            .expect("translate");
+        let mesh = kernel.tessellate(moved, 0.1).expect("tessellation");
+
+        let min_x = mesh
+            .positions
+            .iter()
+            .map(|position| position[0])
+            .fold(f64::INFINITY, f64::min);
+        assert!((min_x - 0.0).abs() < 1e-6, "min_x = {min_x}");
     }
 
     #[test]

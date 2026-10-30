@@ -2,7 +2,7 @@
 
 Working title for a B-rep-first visual editor for OpenSCAD-style `.scad` source.
 
-> **Status: scaffold.** Only a hello-world binary and the initial workspace layout exist. Nothing is implemented yet.
+> **Status: prototype.** The source parser, evaluator, Truck kernel, and viewer work for a small OpenSCAD subset.
 
 ## Goals
 
@@ -28,7 +28,7 @@ crates/
   viewer/       egui + wgpu viewer with source editor and orbit camera
 ```
 
-The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, and `difference`. The `viewer` binary renders the evaluated mesh with an egui source editor and a wgpu viewport.
+The first implemented source layer is `scad-syntax`: a lossless CST for assignments, module calls, numbers, identifiers, vectors, comments, and whitespace, with byte-for-byte round-trip and range edits. The first kernel adapter is `kernel-truck`, covering cuboids, cylinders, transforms, booleans, and tessellation. A minimal `scad-eval` connects them for assignments, `cube`, `cylinder`, `translate`, `rotate`, `scale`, and the boolean modules. The `viewer` binary renders the evaluated mesh with an egui source editor and a wgpu viewport.
 
 The planned backend crates (`kernel-occt`, `kernel-solidcore`) and the UI/render crates are not created yet.
 
@@ -81,7 +81,7 @@ The CLI evaluates a `.scad` file through the Truck kernel and prints mesh statis
 cargo run -p visual-openscad -- path/to/model.scad
 ```
 
-The current subset supports top-level assignments, `cube`, `cylinder`, and the `difference` / `union` / `intersection` blocks.
+The current subset supports top-level assignments, `cube`, `cylinder`, `translate` / `rotate` / `scale` with a single child or block, and the `difference` / `union` / `intersection` blocks.
 
 ## Viewer
 

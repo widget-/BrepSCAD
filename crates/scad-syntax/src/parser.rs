@@ -103,6 +103,9 @@ impl<'a> Parser<'a> {
         if self.arg_list() {
             if self.at(SyntaxKind::L_BRACE) {
                 self.block();
+            } else if self.at(SyntaxKind::IDENT) {
+                self.eat_trivia();
+                self.statement();
             } else if !self.expect(SyntaxKind::SEMICOLON) {
                 self.recover_statement();
             }

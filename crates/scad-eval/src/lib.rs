@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 
 use thiserror::Error;
-use visual_openscad_kernel_api::{BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId};
+use visual_openscad_kernel_api::{
+    BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId, Transform,
+};
 use visual_openscad_scad_syntax::{SyntaxKind, SyntaxNode, TextRange, parse};
 
 #[derive(Debug, Error)]
@@ -76,6 +78,21 @@ impl Value {
             Self::Number(value) => Ok([*value; 3]),
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
             Self::Vector(_) => Err(bad_args(module, "expected a 3-element vector or a scalar")),
+        }
+    }
+
+    fn as_vector3(&self, module: &str) -> Result<[f64; 3], EvalError> {
+        match self {
+            Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
+            _ => Err(bad_args(module, "expected a 3-element vector")),
+        }
+    }
+
+    fn as_scale(&self, module: &str) -> Result<[f64; 3], EvalError> {
+        match self {
+            Self::Number(value) => Ok([*value; 3]),
+            Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
+            _ => Err(bad_args(module, "expected a 3-element vector or a scalar")),
         }
     }
 }
@@ -147,6 +164,7 @@ struct Node {
     module: String,
     source_range: Range<usize>,
     parameters: Vec<Parameter>,
+    transform_parameters: Option<Vec<Parameter>>,
     children: Vec<Node>,
 }
 
@@ -206,6 +224,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     module,
                     source_range,
                     parameters,
+                    transform_parameters: None,
                     children: Vec::new(),
                 })
             }
@@ -223,7 +242,58 @@ impl<K: Kernel> Evaluator<'_, K> {
                     module,
                     source_range,
                     parameters,
+                    transform_parameters: None,
                     children: Vec::new(),
+                })
+            }
+            "translate" | "rotate" | "scale" => {
+                let argument = single_arg(&args, name.as_str())?;
+                let transform = match name.as_str() {
+                    "translate" => Transform::Translate(argument.as_vector3("translate")?),
+                    "rotate" => {
+                        let [x, y, z] = argument.as_vector3("rotate")?;
+                        Transform::Rotate([x.to_radians(), y.to_radians(), z.to_radians()])
+                    }
+                    _ => Transform::Scale(argument.as_scale("scale")?),
+                };
+
+                let transform_parameters = node
+                    .children()
+                    .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+                    .map(|arg_list| collect_parameters(&arg_list, &self.assignments))
+                    .unwrap_or_default();
+
+                let mut children = match block {
+                    Some(block) => self.block(block)?,
+                    None => {
+                        let child = node
+                            .children()
+                            .find(|child| child.kind() == SyntaxKind::MODULE_CALL)
+                            .ok_or_else(|| bad_args(name.as_str(), "expected a child or block"))?;
+                        vec![self.module_call(child)?]
+                    }
+                };
+                if children.is_empty() {
+                    return Err(bad_args(name.as_str(), "expected at least one child"));
+                }
+
+                for child in &mut children {
+                    self.transform_node(child, transform)?;
+                }
+
+                let mut shapes = children.iter().map(|child| child.shape);
+                let mut result = shapes.next().expect("checked non-empty");
+                for shape in shapes {
+                    result = self.kernel.boolean(BooleanOp::Union, result, shape)?;
+                }
+
+                Ok(Node {
+                    shape: result,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: Some(transform_parameters),
+                    children,
                 })
             }
             "difference" | "union" | "intersection" => {
@@ -249,6 +319,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     module,
                     source_range,
                     parameters,
+                    transform_parameters: None,
                     children,
                 })
             }
@@ -264,6 +335,14 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
         }
         Ok(nodes)
+    }
+
+    fn transform_node(&mut self, node: &mut Node, transform: Transform) -> Result<(), EvalError> {
+        node.shape = self.kernel.transform(node.shape, transform)?;
+        for child in &mut node.children {
+            self.transform_node(child, transform)?;
+        }
+        Ok(())
     }
 
     fn arg_list(&mut self, node: SyntaxNode) -> Result<Vec<Value>, EvalError> {
@@ -349,7 +428,15 @@ fn collect_parts<K: Kernel>(
     tolerance: f64,
 ) -> Result<Vec<Part>, EvalError> {
     let mut parts = Vec::new();
-    collect_parts_inner(node, root_shape, root_mesh, kernel, tolerance, &mut parts)?;
+    collect_parts_inner(
+        node,
+        root_shape,
+        root_mesh,
+        kernel,
+        tolerance,
+        &BTreeMap::new(),
+        &mut parts,
+    )?;
     Ok(parts)
 }
 
@@ -359,23 +446,40 @@ fn collect_parts_inner<K: Kernel>(
     root_mesh: &Mesh,
     kernel: &mut K,
     tolerance: f64,
+    inherited: &BTreeMap<usize, Parameter>,
     parts: &mut Vec<Part>,
 ) -> Result<(), EvalError> {
+    let mut scope = inherited.clone();
+    if let Some(transform_parameters) = &node.transform_parameters {
+        for parameter in transform_parameters {
+            scope
+                .entry(parameter.range.start)
+                .or_insert_with(|| parameter.clone());
+        }
+    }
+
     if node.children.is_empty() {
         let mesh = if node.shape == root_shape {
             root_mesh.clone()
         } else {
             kernel.tessellate(node.shape, tolerance)?
         };
+        for parameter in &node.parameters {
+            scope
+                .entry(parameter.range.start)
+                .or_insert_with(|| parameter.clone());
+        }
         parts.push(Part {
             module: node.module.clone(),
             source_range: node.source_range.clone(),
-            parameters: node.parameters.clone(),
+            parameters: scope.into_values().collect(),
             mesh,
         });
     } else {
         for child in &node.children {
-            collect_parts_inner(child, root_shape, root_mesh, kernel, tolerance, parts)?;
+            collect_parts_inner(
+                child, root_shape, root_mesh, kernel, tolerance, &scope, parts,
+            )?;
         }
     }
     Ok(())

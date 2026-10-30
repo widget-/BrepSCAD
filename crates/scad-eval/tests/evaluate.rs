@@ -76,6 +76,71 @@ fn parameter_ranges_edit_the_expected_literal() {
 }
 
 #[test]
+fn evaluates_translated_cube_and_exposes_transform_parameters() {
+    let source = "translate([1, 0, 0]) cube([2, 2, 2]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    let min_x = shape
+        .mesh
+        .positions
+        .iter()
+        .map(|position| position[0])
+        .fold(f64::INFINITY, f64::min);
+    assert!((min_x - 0.0).abs() < 1e-6, "min_x = {min_x}");
+
+    let part = &shape.parts[0];
+    assert_eq!(part.module, "cube");
+    assert!(
+        part.parameters
+            .iter()
+            .any(|parameter| parameter.value == 1.0)
+    );
+    assert!(
+        part.parameters
+            .iter()
+            .any(|parameter| parameter.value == 2.0)
+    );
+    assert!(source[part.source_range.clone()].starts_with("cube"));
+}
+
+#[test]
+fn evaluates_nested_transforms() {
+    let source = "translate([1, 0, 0]) rotate([0, 0, 90]) cube([2, 1, 1]);\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    assert!(shape.mesh.triangle_count() > 0);
+    assert!(
+        shape.parts[0]
+            .parameters
+            .iter()
+            .any(|parameter| parameter.value == 90.0)
+    );
+}
+
+#[test]
+fn transforms_each_child_in_a_block() {
+    let source = "translate([1, 0, 0]) { cube(1); translate([2, 0, 0]) cube(1); }\n";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    let shape = &evaluation.shapes[0];
+
+    assert_eq!(shape.parts.len(), 2);
+    assert!(shape.mesh.triangle_count() > 0);
+    for part in &shape.parts {
+        assert!(
+            part.parameters
+                .iter()
+                .any(|parameter| parameter.value == 1.0)
+        );
+        assert!(!part.mesh.positions.is_empty());
+    }
+}
+
+#[test]
 fn reports_unknown_identifiers() {
     let mut kernel = TruckKernel::new();
     let error = evaluate_to_meshes("cube(size);", &mut kernel, 0.01).expect_err("unknown size");

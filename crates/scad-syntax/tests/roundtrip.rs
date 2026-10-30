@@ -78,6 +78,15 @@ fn round_trips_boolean_block() {
 }
 
 #[test]
+fn round_trips_transform_with_single_child() {
+    let source = "translate([1, 0, 0]) cube([2, 2, 2]);\n";
+    let parsed = parse(source);
+
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    assert_eq!(parsed.text(), source);
+}
+
+#[test]
 fn rejects_out_of_bounds_edits() {
     let edit = TextEdit::new(
         TextRange::new(TextSize::from(100u32), TextSize::from(101u32)),
