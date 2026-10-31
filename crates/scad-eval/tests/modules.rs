@@ -348,3 +348,17 @@ fn children_inside_a_call_site_use_the_callers_children() {
     assert_eq!(evaluation.shapes.len(), 1);
     assert_eq!(extents(&evaluation.shapes[0].mesh), [2.0, 2.0, 2.0]);
 }
+
+#[test]
+fn children_see_special_variables_set_in_the_module_body() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "module wrapper() { $color = \"red\"; children(); }\nmodule child() { cube($color == \"red\" ? 1 : 2); }\nwrapper() child();",
+        &mut kernel,
+        0.01,
+    )
+    .expect("dynamic special");
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    assert_eq!(extents(&evaluation.shapes[0].mesh), [1.0, 1.0, 1.0]);
+}

@@ -693,15 +693,14 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
         };
 
+        let body_env = self.current_env();
         let frame = self
             .children_stack
             .pop()
             .expect("children frame checked above");
-        let mut env = caller_env;
+        let env = Env::child(caller_env, body_env);
         if !special.is_empty() {
-            let child = Env::child(env.clone(), env.clone());
-            child.variables.borrow_mut().extend(special);
-            env = child;
+            env.variables.borrow_mut().extend(special);
         }
         let saved = std::mem::replace(&mut self.scopes, vec![env]);
         let result = (|| {

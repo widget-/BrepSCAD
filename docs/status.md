@@ -129,8 +129,9 @@ vendor/
   variables resolve through the dynamic parent chain, matching OpenSCAD.
   Module and loop scopes shadow and restore their enclosing bindings.
 - `children()` renders all call-site children; `children(n)` selects one index
-  and `children([...])` selects a range or list of indices. Children are
-  evaluated in the caller's scope at the transform where `children()` appears.
+  and `children([...])` selects a range or list of indices. Children resolve
+  normal variables in the caller's scope but `$` variables through the module
+  body's dynamic scope, so values such as `$parent_geom` are visible.
   `$children` holds the child count.
 - `for` loops over ranges, vectors, strings, scalars, and `undef`, with
   multiple bindings and block or single-statement bodies. `undef` yields no
