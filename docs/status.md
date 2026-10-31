@@ -80,9 +80,9 @@ vendor/
   Conditional expressions (`? :`) evaluate only the selected branch.
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
   `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
-  `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `is_num`,
-  `is_bool`, `is_list`, `is_string`, `is_undef`, `version`, and
-  `version_num`.
+  `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `lookup`,
+  `search`, `rands`, `is_num`, `is_bool`, `is_list`, `is_string`, `is_undef`,
+  `version`, and `version_num`.
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
@@ -99,15 +99,17 @@ vendor/
   definitions. `use` imports only module and function definitions. Paths resolve
   relative to the including file; cycles and read/parse failures are reported
   with the file path.
-- Postfix indexing reads vector elements, matrix rows, and string characters:
-  `v[2]`, `m[1][0]`, `"abc"[1]`; dot notation reads `.x`, `.y`, and `.z`, and
-  unknown members are `undef`.
+- Lists are heterogeneous and arbitrarily nested: numbers, strings, booleans,
+  lists, and `undef` can be mixed. They are the only collection type; matrices
+  are lists of lists.
+- Postfix indexing reads list elements, nested rows, and string characters:
+  `v[2]`, `m[1][0]`, `"abc"[1]`; invalid indexes and unknown dot members are
+  `undef`. Dot notation reads `.x`, `.y`, and `.z`.
 - `let (a = ..., b = ...) expr` binds sequential locals for one expression;
   `let (...) statement` does the same for a module body.
 - List comprehensions support multiple bindings, nesting, `if` filters with
   optional `else`, `let`, `each`, and C-style `for (init; condition; next)`.
-  Nested `for` comprehensions flatten, while a vector-valued body becomes a
-  matrix row.
+  Nested `for` comprehensions flatten.
 - Module and loop scopes shadow caller variables and restore them on exit.
   Module and function bodies currently read caller variables (dynamic scoping).
   OpenSCAD resolves normal variables lexically at the definition site, so this
@@ -138,9 +140,10 @@ vendor/
   `delta` uses miter joins.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
-- Arithmetic on numbers and vectors: `+`, `-`, `*`, `/`, `%`, `^`, unary signs,
-  and grouping. Division or modulo by zero is an expression error. `undef`
-  propagates through arithmetic.
+- Arithmetic on numbers and lists: `+`, `-`, `*`, `/`, `%`, `^`, unary signs,
+  and grouping. List operations are elementwise and recursive; mixed
+  list/scalar arithmetic is `undef`, matching OpenSCAD. Division or modulo by
+  zero is an expression error. `undef` propagates through arithmetic.
 - Nested transforms compose into one matrix before reaching a primitive.
 - Each evaluated top-level shape exposes:
   - its final mesh
@@ -322,19 +325,20 @@ For headless UI snapshots, see
 ## Known limitations
 
 - Parser/evaluator subset is small:
-  - built-in functions omit the random, `search`, and `lookup` families
-  - vectors remain numeric-only; heterogeneous lists and strings or `undef`
-    inside vectors are not supported
-  - `undef` cannot appear inside a vector literal
   - included-file source ranges are not yet mapped back to an editor file
   - angle-bracket include paths use the same relative lookup; there is no
     library search path
   - functions are not first-class values; function literals are not parsed
   - unknown variables abort evaluation instead of yielding `undef`
+  - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
     supported (string character indexing is)
   - `children([...])` accepts a range or list of indices, but nested selection
     and other child expressions are not supported
+  - `lookup` requires numeric keys; `search` handles the common string,
+    number, and list-of-targets forms but not the full OpenSCAD matching API
+  - `rands` uses a fixed default seed when none is supplied, so it is
+    deterministic and does not match OpenSCAD's time-seeded output
   - module bodies return their shapes directly, so a module call does not add a
     group node of its own to the source-shaped tree
   - `#`, `%`, and `!` parse and evaluate, but do not highlight, ghost, or isolate
@@ -377,41 +381,35 @@ For headless UI snapshots, see
 
 ## Recommended next steps
 
-A corpus run over BOSL2 and MCAD (109 files) now gets past the parser for 95
-files; the remaining first parse errors are primarily function literals, with a
-few `for`/`let` edge forms. No library file evaluates end-to-end yet because
-those same libraries use heterogeneous lists, `lookup`/`search`, and scope
-semantics that are not implemented.
+A corpus run over BOSL2 and MCAD (109 files) gets past the parser for 95 files;
+the remaining first parse errors are primarily function literals, with a few
+`for`/`let` edge forms. No library file evaluates end-to-end yet; the next
+blockers are scope semantics, function literals, and library search paths.
 
-1. **Collection value model**
-   - Replace numeric `Vector`/`Matrix` with heterogeneous nested lists.
-   - Allow strings, booleans, `undef`, and deeper nesting inside lists.
-   - Generalise arithmetic, indexing, truthiness, and formatting.
-   - Then add `lookup`, `search`, and `rands`.
-2. **Scope and assignment semantics**
+1. **Scope and assignment semantics**
    - Hoist assignments and use OpenSCAD's last-assignment-wins rule.
    - Make unassigned identifiers yield `undef` instead of aborting.
    - Resolve normal variables lexically at the definition site; keep `$`
      variables dynamically scoped.
-3. **Language finish**
+2. **Language finish**
    - Function literals and first-class functions.
    - Library search paths for angle-bracket includes.
    - Remaining parser edge forms from the corpus.
-4. **Finish the 2D/extrusion layer**
+3. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` twist, scale, and slices.
    - `rotate_extrude` negative-side profiles.
-5. **Native intrinsics**
+4. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-6. **Kernel adapters**
+5. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-7. **Product surface**
+6. **Product surface**
    - Recent-file handling.
    - Export, undo/redo, and session persistence.
-8. **Selection polish**
+7. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 

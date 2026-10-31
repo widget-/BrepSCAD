@@ -61,19 +61,17 @@ fn strings_compare_by_value() {
 }
 
 #[test]
-fn strings_cannot_be_used_as_numbers() {
-    assert!(matches!(
-        source_error("cube(1 + \"a\");"),
-        EvalError::Expression(_)
-    ));
+fn non_numeric_operands_are_undef() {
+    let size = cube_extents("cube(is_undef(1 + \"a\") ? 2 : 1);");
+
+    assert_eq!(size, [2.0; 3]);
 }
 
 #[test]
-fn vectors_reject_strings() {
-    assert!(matches!(
-        source_error("v = [\"a\"];\ncube(1);"),
-        EvalError::Expression(_)
-    ));
+fn lists_accept_strings() {
+    let size = cube_extents("v = [\"a\", \"b\"];\ncube([len(v), len(v[0]), 1]);");
+
+    assert_eq!(size, [2.0, 1.0, 1.0]);
 }
 
 #[test]

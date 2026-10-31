@@ -477,16 +477,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             _ => return Ok(Value::Undef),
         };
         match base {
-            Value::Vector(values) => Ok(values
-                .get(index)
-                .copied()
-                .map(Value::Number)
-                .unwrap_or(Value::Undef)),
-            Value::Matrix(rows) => Ok(rows
-                .get(index)
-                .cloned()
-                .map(Value::Vector)
-                .unwrap_or(Value::Undef)),
+            Value::List(values) => Ok(values.get(index).cloned().unwrap_or(Value::Undef)),
             _ => Ok(Value::Undef),
         }
     }
@@ -631,10 +622,10 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .map(|statement| vec![statement])
                     .ok_or_else(|| bad_args("children", format!("no child at index {index}")))?
             }
-            Some(Value::Vector(indices)) => {
+            Some(Value::List(indices)) => {
                 let mut selected = Vec::new();
-                for index in indices {
-                    let index = child_index(*index)?;
+                for value in indices {
+                    let index = child_index(value.as_number("children")?)?;
                     let statement = statements.get(index).cloned().ok_or_else(|| {
                         bad_args("children", format!("no child at index {index}"))
                     })?;
@@ -1959,32 +1950,41 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .ok_or_else(|| bad_args(name, "expected at least one number"))
             }
             "norm" => {
-                let Value::Vector(values) = single_value(name, args)? else {
+                let Value::List(values) = single_value(name, args)? else {
                     return Err(bad_args(name, "expected a vector"));
                 };
-                Ok(Value::Number(
-                    values.iter().map(|value| value * value).sum::<f64>().sqrt(),
-                ))
+                let mut sum = 0.0;
+                for value in values {
+                    let value = value.as_number(name)?;
+                    sum += value * value;
+                }
+                Ok(Value::Number(sum.sqrt()))
             }
             "cross" => {
                 let [left, right] = two_values(name, args)?;
-                let (Value::Vector(left), Value::Vector(right)) = (left, right) else {
-                    return Err(bad_args(name, "expected two vectors"));
+                let numbers = |value: &Value| -> Result<[f64; 3], EvalError> {
+                    let Value::List(values) = value else {
+                        return Err(bad_args(name, "expected two vectors"));
+                    };
+                    match values.as_slice() {
+                        [x, y, z] => {
+                            Ok([x.as_number(name)?, y.as_number(name)?, z.as_number(name)?])
+                        }
+                        _ => Err(bad_args(name, "expected two 3-element vectors")),
+                    }
                 };
-                if left.len() != 3 || right.len() != 3 {
-                    return Err(bad_args(name, "expected two 3-element vectors"));
-                }
-                Ok(Value::Vector(vec![
-                    left[1] * right[2] - left[2] * right[1],
-                    left[2] * right[0] - left[0] * right[2],
-                    left[0] * right[1] - left[1] * right[0],
+                let left = numbers(left)?;
+                let right = numbers(right)?;
+                Ok(Value::List(vec![
+                    Value::Number(left[1] * right[2] - left[2] * right[1]),
+                    Value::Number(left[2] * right[0] - left[0] * right[2]),
+                    Value::Number(left[0] * right[1] - left[1] * right[0]),
                 ]))
             }
             "len" => match single_value(name, args)? {
-                Value::Vector(values) => Ok(Value::Number(values.len() as f64)),
-                Value::Matrix(rows) => Ok(Value::Number(rows.len() as f64)),
+                Value::List(values) => Ok(Value::Number(values.len() as f64)),
                 Value::String(text) => Ok(Value::Number(text.chars().count() as f64)),
-                _ => Err(bad_args(name, "expected a vector, matrix, or string")),
+                _ => Err(bad_args(name, "expected a vector or string")),
             },
             "str" => {
                 let mut text = String::new();
@@ -2012,13 +2012,34 @@ impl<K: Kernel> Evaluator<'_, K> {
             "concat" => {
                 let mut values = Vec::new();
                 for value in &args.positional {
-                    let Value::Vector(items) = value else {
-                        return Err(bad_args(name, "expected vectors"));
-                    };
-                    values.extend(items);
+                    match value {
+                        Value::List(items) => values.extend(items.iter().cloned()),
+                        value => values.push(value.clone()),
+                    }
                 }
-                Ok(Value::Vector(values))
+                Ok(Value::List(values))
             }
+            "lookup" => {
+                let [key, table] = two_values(name, args)?;
+                let key = key.as_number(name)?;
+                let Value::List(rows) = table else {
+                    return Err(bad_args(name, "expected a table of key/value rows"));
+                };
+                for row in rows {
+                    let Value::List(values) = row else {
+                        return Err(bad_args(name, "expected a table of key/value rows"));
+                    };
+                    let [stored, value, ..] = values.as_slice() else {
+                        return Err(bad_args(name, "expected a table of key/value rows"));
+                    };
+                    if stored.as_number(name)? == key {
+                        return Ok(value.clone());
+                    }
+                }
+                Ok(Value::Undef)
+            }
+            "search" => search_value(name, args),
+            "rands" => rands_value(name, args),
             "is_num" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
                 Value::Number(_)
@@ -2029,7 +2050,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             ))),
             "is_list" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
-                Value::Vector(_) | Value::Matrix(_)
+                Value::List(_)
             ))),
             "is_string" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
@@ -2041,7 +2062,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             ))),
             "version" => {
                 args.ensure_empty(name)?;
-                Ok(Value::Vector(vec![2021.0, 1.0]))
+                Ok(Value::List(vec![Value::Number(2021.0), Value::Number(1.0)]))
             }
             "version_num" => {
                 args.ensure_empty(name)?;
@@ -2113,38 +2134,29 @@ impl<K: Kernel> Evaluator<'_, K> {
         let index = self.element_value(
             index.ok_or_else(|| EvalError::Expression("missing index".to_owned()))?,
         )?;
-        let index = index.as_number("index")?;
+        let Value::Number(index) = index else {
+            return Ok(Value::Undef);
+        };
         if index < 0.0 || index.fract() != 0.0 {
-            return Err(EvalError::Expression(
-                "index must be a non-negative integer".to_owned(),
-            ));
+            return Ok(Value::Undef);
         }
         let index = index as usize;
 
         match base {
-            Value::Vector(values) => values
-                .get(index)
-                .copied()
-                .map(Value::Number)
-                .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
-            Value::Matrix(rows) => rows
-                .get(index)
-                .cloned()
-                .map(Value::Vector)
-                .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
-            Value::String(text) => text
+            Value::List(values) => Ok(values.get(index).cloned().unwrap_or(Value::Undef)),
+            Value::String(text) => Ok(text
                 .chars()
                 .nth(index)
                 .map(|character| Value::String(character.to_string()))
-                .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
-            _ => Err(EvalError::Expression(
-                "only vectors, matrices, and strings can be indexed".to_owned(),
-            )),
+                .unwrap_or(Value::Undef)),
+            _ => Ok(Value::Undef),
         }
     }
 
     fn sequence_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
-        values_to_value(self.comprehension_values(&NodeOrToken::Node(node.clone()))?)
+        Ok(Value::List(
+            self.comprehension_values(&NodeOrToken::Node(node.clone()))?,
+        ))
     }
 
     fn c_for_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
@@ -2214,7 +2226,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             Ok(())
         })?;
-        values_to_value(values)
+        Ok(Value::List(values))
     }
 
     fn c_for_assignment(&mut self, assignment: &SyntaxNode) -> Result<(), EvalError> {
@@ -2492,8 +2504,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             return self.range_value(&range);
         }
 
-        let mut numbers = Vec::new();
-        let mut rows = Vec::new();
+        let mut values = Vec::new();
         for element in node.children_with_tokens() {
             match element.kind() {
                 SyntaxKind::L_BRACK | SyntaxKind::R_BRACK | SyntaxKind::COMMA => {}
@@ -2507,26 +2518,15 @@ impl<K: Kernel> Evaluator<'_, K> {
                                 | SyntaxKind::EACH_EXPR
                                 | SyntaxKind::C_FOR_EXPR
                         ) {
-                            for value in self.comprehension_values(&element)? {
-                                push_sequence_value(value, &mut numbers, &mut rows)?;
-                            }
+                            values.extend(self.comprehension_values(&element)?);
                             continue;
                         }
                     }
-                    push_sequence_value(self.element_value(element)?, &mut numbers, &mut rows)?;
+                    values.push(self.element_value(element)?);
                 }
             }
         }
-
-        if rows.is_empty() {
-            Ok(Value::Vector(numbers))
-        } else if numbers.is_empty() {
-            Ok(Value::Matrix(rows))
-        } else {
-            Err(EvalError::Expression(
-                "cannot mix scalars and vectors in one vector".to_owned(),
-            ))
-        }
+        Ok(Value::List(values))
     }
 
     fn range_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
@@ -2572,7 +2572,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 value += step;
             }
         }
-        Ok(Value::Vector(values))
+        Ok(Value::List(values.into_iter().map(Value::Number).collect()))
     }
 
     fn lookup(&self, name: &str) -> Result<Value, EvalError> {
@@ -2602,8 +2602,11 @@ fn check_transform(transform: Transform) -> Result<(), EvalError> {
 
 fn loop_values(name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
     match value {
-        Value::Vector(values) => Ok(values.into_iter().map(Value::Number).collect()),
-        Value::Matrix(rows) => Ok(rows.into_iter().map(Value::Vector).collect()),
+        Value::List(values) => Ok(values),
+        Value::String(text) => Ok(text
+            .chars()
+            .map(|character| Value::String(character.to_string()))
+            .collect()),
         _ => Err(bad_args(
             "for",
             format!("loop variable {name} must be a vector or range"),
@@ -2620,8 +2623,7 @@ fn child_index(value: f64) -> Result<usize, EvalError> {
 
 fn each_values(value: Value) -> Vec<Value> {
     match value {
-        Value::Vector(values) => values.into_iter().map(Value::Number).collect(),
-        Value::Matrix(rows) => rows.into_iter().map(Value::Vector).collect(),
+        Value::List(values) => values,
         Value::String(text) => text
             .chars()
             .map(|character| Value::String(character.to_string()))
@@ -2775,24 +2777,11 @@ fn format_value(value: &Value) -> String {
         Value::Boolean(value) => value.to_string(),
         Value::String(value) => value.clone(),
         Value::Undef => "undef".to_owned(),
-        Value::Vector(values) => format!(
+        Value::List(values) => format!(
             "[{}]",
             values
                 .iter()
-                .map(|value| format_number(*value))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Value::Matrix(rows) => format!(
-            "[{}]",
-            rows.iter()
-                .map(|row| format!(
-                    "[{}]",
-                    row.iter()
-                        .map(|value| format_number(*value))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
+                .map(format_echo_value)
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -2808,24 +2797,11 @@ fn format_echo_value(value: &Value) -> String {
         Value::Number(value) => format_number(*value),
         Value::Boolean(value) => value.to_string(),
         Value::Undef => "undef".to_owned(),
-        Value::Vector(values) => format!(
+        Value::List(values) => format!(
             "[{}]",
             values
                 .iter()
-                .map(|value| format_echo_value(&Value::Number(*value)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Value::Matrix(rows) => format!(
-            "[{}]",
-            rows.iter()
-                .map(|row| format!(
-                    "[{}]",
-                    row.iter()
-                        .map(|value| format_echo_value(&Value::Number(*value)))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
+                .map(format_echo_value)
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -2873,55 +2849,6 @@ fn else_body(node: &SyntaxNode) -> Option<SyntaxElement> {
         .nth(1)
 }
 
-fn push_sequence_value(
-    value: Value,
-    numbers: &mut Vec<f64>,
-    rows: &mut Vec<Vec<f64>>,
-) -> Result<(), EvalError> {
-    match value {
-        Value::Number(value) => numbers.push(value),
-        Value::Vector(values) => rows.push(values),
-        Value::String(_) => {
-            return Err(EvalError::Expression(
-                "vectors cannot contain strings".to_owned(),
-            ));
-        }
-        Value::Boolean(_) => {
-            return Err(EvalError::Expression(
-                "vectors cannot contain booleans".to_owned(),
-            ));
-        }
-        Value::Matrix(_) => {
-            return Err(EvalError::Expression(
-                "vectors support at most two levels".to_owned(),
-            ));
-        }
-        Value::Undef => {
-            return Err(EvalError::Expression(
-                "vectors cannot contain undef".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn values_to_value(values: Vec<Value>) -> Result<Value, EvalError> {
-    let mut numbers = Vec::new();
-    let mut rows = Vec::new();
-    for value in values {
-        push_sequence_value(value, &mut numbers, &mut rows)?;
-    }
-    if rows.is_empty() {
-        Ok(Value::Vector(numbers))
-    } else if numbers.is_empty() {
-        Ok(Value::Matrix(rows))
-    } else {
-        Err(EvalError::Expression(
-            "cannot mix scalars and vectors in one vector".to_owned(),
-        ))
-    }
-}
-
 fn single_value<'a>(name: &str, args: &'a Arguments) -> Result<&'a Value, EvalError> {
     if args.positional.len() == 1 {
         Ok(&args.positional[0])
@@ -2947,13 +2874,169 @@ fn two_numbers(name: &str, args: &Arguments) -> Result<[f64; 2], EvalError> {
 }
 
 fn number_list(name: &str, args: &Arguments) -> Result<Vec<f64>, EvalError> {
-    if let [Value::Vector(values)] = args.positional.as_slice() {
-        return Ok(values.clone());
+    if let [Value::List(values)] = args.positional.as_slice() {
+        return values.iter().map(|value| value.as_number(name)).collect();
     }
     args.positional
         .iter()
         .map(|value| value.as_number(name))
         .collect()
+}
+
+fn search_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
+    let (target, list) = match args.positional.as_slice() {
+        [target, list, ..] => (target, list),
+        _ => return Err(bad_args(name, "expected a match and a list")),
+    };
+    let num_returns = args
+        .positional
+        .get(2)
+        .map(|value| value.as_number(name))
+        .transpose()?
+        .unwrap_or(1.0);
+    let num_returns = if num_returns <= 0.0 {
+        usize::MAX
+    } else {
+        num_returns as usize
+    };
+    let index_col = args
+        .positional
+        .get(3)
+        .map(|value| value.as_number(name))
+        .transpose()?
+        .unwrap_or(0.0);
+    if index_col < 0.0 || index_col.fract() != 0.0 {
+        return Err(bad_args(
+            name,
+            "index column must be a non-negative integer",
+        ));
+    }
+    let index_col = index_col as usize;
+
+    let matches = match target {
+        Value::List(values) => values.iter().collect::<Vec<_>>(),
+        target => vec![target],
+    };
+    let multiple = matches!(target, Value::List(_));
+
+    let mut results = Vec::new();
+    for target in matches {
+        let mut indices = Vec::new();
+        match list {
+            Value::String(text) => {
+                if let Value::String(needle) = target {
+                    let needle = needle.chars().collect::<Vec<_>>();
+                    if needle.len() == 1 {
+                        for (index, character) in text.chars().enumerate() {
+                            if character == needle[0] {
+                                indices.push(Value::Number(index as f64));
+                                if indices.len() >= num_returns {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Value::List(values) => {
+                for (index, item) in values.iter().enumerate() {
+                    let candidate = match item {
+                        Value::List(row) => row.get(index_col).unwrap_or(&Value::Undef),
+                        item => item,
+                    };
+                    if candidate == target {
+                        indices.push(Value::Number(index as f64));
+                        if indices.len() >= num_returns {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => return Err(bad_args(name, "expected a vector or string")),
+        }
+        results.push(Value::List(indices));
+    }
+
+    if multiple {
+        Ok(Value::List(results))
+    } else {
+        Ok(results
+            .into_iter()
+            .next()
+            .unwrap_or(Value::List(Vec::new())))
+    }
+}
+
+fn rands_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
+    let (minimum, maximum, count) = match args.positional.as_slice() {
+        [minimum, maximum, count] => (minimum, maximum, count),
+        [minimum, maximum, count, _seed] => (minimum, maximum, count),
+        _ => {
+            return Err(bad_args(name, "expected minimum, maximum, and count"));
+        }
+    };
+    let minimum = random_bounds(name, minimum)?;
+    let maximum = random_bounds(name, maximum)?;
+    if minimum.len() != maximum.len() {
+        return Err(bad_args(
+            name,
+            "minimum and maximum must have equal lengths",
+        ));
+    }
+    let count = count.as_number(name)?;
+    if count < 0.0 || count.fract() != 0.0 {
+        return Err(bad_args(name, "count must be a non-negative integer"));
+    }
+    let count = count as usize;
+    let seed = args
+        .positional
+        .get(3)
+        .map(|value| value.as_number(name))
+        .transpose()?
+        .unwrap_or(0.0);
+
+    let mut random = Random(seed.to_bits() ^ 0x9E37_79B9_7F4A_7C15);
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        if minimum.len() == 1 {
+            values.push(Value::Number(random.between(minimum[0], maximum[0])));
+        } else {
+            values.push(Value::List(
+                minimum
+                    .iter()
+                    .zip(&maximum)
+                    .map(|(minimum, maximum)| Value::Number(random.between(*minimum, *maximum)))
+                    .collect(),
+            ));
+        }
+    }
+    Ok(Value::List(values))
+}
+
+fn random_bounds(name: &str, value: &Value) -> Result<Vec<f64>, EvalError> {
+    match value {
+        Value::Number(value) => Ok(vec![*value]),
+        Value::List(values) => values.iter().map(|value| value.as_number(name)).collect(),
+        _ => Err(bad_args(name, "expected a number or a vector of numbers")),
+    }
+}
+
+struct Random(u64);
+
+impl Random {
+    fn between(&mut self, minimum: f64, maximum: f64) -> f64 {
+        minimum + (maximum - minimum) * self.next_f64()
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        let mut value = self.0;
+        value ^= value >> 12;
+        value ^= value << 25;
+        value ^= value >> 27;
+        self.0 = value;
+        let bits = value.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        (bits >> 11) as f64 / (1u64 << 53) as f64
+    }
 }
 
 fn module_name(node: &SyntaxNode) -> Option<String> {

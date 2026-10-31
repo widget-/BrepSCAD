@@ -44,18 +44,17 @@ fn indexes_comprehension_results() {
 }
 
 #[test]
-fn rejects_bad_indexes() {
-    for source in [
-        "v = [1, 2];\ncube(v[5]);",
-        "v = [1, 2];\ncube(v[1.5]);",
-        "v = [1, 2];\ncube(v[-1]);",
-        "cube(1[0]);",
-    ] {
-        assert!(
-            matches!(source_error(source), EvalError::Expression(_)),
-            "source = {source}"
-        );
-    }
+fn invalid_indexes_are_undef() {
+    let size = cube_extents(
+        "v = [1, 2];\n\
+         cube([\n\
+             is_undef(v[5]) && is_undef(v[1.5]) && is_undef(v[-1]) && is_undef(1[0]) ? 1 : 2,\n\
+             1,\n\
+             1\n\
+         ]);",
+    );
+
+    assert_eq!(size, [1.0; 3]);
 }
 
 #[test]
@@ -201,9 +200,11 @@ fn let_bindings_must_be_named() {
 }
 
 #[test]
-fn comprehensions_reject_booleans() {
-    assert!(matches!(
-        source_error("v = [for (i = [0:1]) true];\ncube(1);"),
-        EvalError::Expression(_)
-    ));
+fn comprehensions_accept_booleans() {
+    let size = cube_extents(
+        "v = [for (i = [0:1]) true];\n\
+         cube([len(v), is_bool(v[0]) ? 1 : 2, 1]);",
+    );
+
+    assert_eq!(size, [2.0, 1.0, 1.0]);
 }

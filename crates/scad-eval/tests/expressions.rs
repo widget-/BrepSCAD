@@ -17,7 +17,7 @@ fn evaluates_arithmetic_in_arguments() {
 
 #[test]
 fn evaluates_arithmetic_in_assignments_and_vectors() {
-    let source = "size = [1 + 1, (2 + 2), 6 / 2];\ntranslate([2 - 1, 0, 0] * 2) cube(size);\n";
+    let source = "size = [1 + 1, (2 + 2), 6 / 2];\ntranslate([(2 - 1) * 2, 0, 0]) cube(size);\n";
     let mut kernel = TruckKernel::new();
     let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
 

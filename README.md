@@ -93,11 +93,11 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | Arithmetic including `^`, comparisons, logic, ranges, ternary `? :`, `let`, indexing, dot notation, string indexing, `each`, `undef`, and strings. |
+| Expressions | ✔ | Arithmetic including `^`, comparisons, logic, ranges, ternary `? :`, `let`, indexing, dot notation, string indexing, `each`, `undef`, heterogeneous nested lists, and strings. |
 | Comments and whitespace | ✔ | |
 | `module` declarations | ✔ | Parameters with defaults; `children()`, `children(n)`, and `children([...])`; recursive and nested modules. |
 | `function` declarations | ✔ | Positional/named parameters with defaults, recursion, and dynamic scope. |
-| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `is_undef`, `version`, and `version_num`. No random, `search`, or `lookup` functions. |
+| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `lookup`, `search`, `rands`, `is_undef`, `version`, and `version_num`. |
 | `for` / `if` | ✔ | Includes C-style `for (init; condition; next)` list comprehensions and `each`. |
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` parse and render normally, without highlight/background/root-only display. |
