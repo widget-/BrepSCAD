@@ -74,6 +74,8 @@ pub enum SyntaxKind {
     EACH_EXPR,
     DOT_EXPR,
     C_FOR_EXPR,
+    FUNCTION_LITERAL,
+    INVOKE_EXPR,
     __LAST,
 }
 
@@ -164,6 +166,8 @@ impl Language for ScadLanguage {
             66 => SyntaxKind::EACH_EXPR,
             67 => SyntaxKind::DOT_EXPR,
             68 => SyntaxKind::C_FOR_EXPR,
+            69 => SyntaxKind::FUNCTION_LITERAL,
+            70 => SyntaxKind::INVOKE_EXPR,
             _ => SyntaxKind::ERROR,
         }
     }

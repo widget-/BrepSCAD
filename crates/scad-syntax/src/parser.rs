@@ -518,6 +518,14 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.bump();
                 self.finish();
+            } else if self.at(SyntaxKind::L_PAREN) {
+                self.builder
+                    .start_node_at(checkpoint, SyntaxKind::INVOKE_EXPR.into());
+                if !self.arg_list() {
+                    self.finish();
+                    return false;
+                }
+                self.finish();
             } else {
                 break;
             }
@@ -538,6 +546,7 @@ impl<'a> Parser<'a> {
                     self.prefixed_expr(SyntaxKind::ASSERT_EXPR)
                 }
                 "each" if self.peek_starts_expression(1) => self.each_expr(),
+                "function" if self.peek(1) == SyntaxKind::L_PAREN => self.function_literal(),
                 _ if self.peek(1) == SyntaxKind::L_PAREN => self.call_expr(),
                 _ => {
                     self.bump();
@@ -565,6 +574,17 @@ impl<'a> Parser<'a> {
         self.start(SyntaxKind::EACH_EXPR);
         self.bump();
         if !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
+    }
+
+    fn function_literal(&mut self) -> bool {
+        self.start(SyntaxKind::FUNCTION_LITERAL);
+        self.bump();
+        if !self.param_list() || !self.expression() {
             self.finish();
             return false;
         }

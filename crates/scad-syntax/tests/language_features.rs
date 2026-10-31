@@ -114,6 +114,18 @@ fn round_trips_number_forms() {
 }
 
 #[test]
+fn round_trips_function_literals_and_calls() {
+    let parsed = roundtrip(
+        "f = function(x, y = 2) x + y;\n\
+         g = function(x) function(y) x + y;\n\
+         z = f(1)(2);\n",
+    );
+
+    assert_eq!(count_nodes(&parsed, SyntaxKind::FUNCTION_LITERAL), 3);
+    assert_eq!(count_nodes(&parsed, SyntaxKind::INVOKE_EXPR), 1);
+}
+
+#[test]
 fn numeric_prefix_without_exponent_stays_an_identifier() {
     let parsed = roundtrip("x = 3e;\ny = 3e2;\n");
     let identifiers = tokens(&parsed, SyntaxKind::IDENT);

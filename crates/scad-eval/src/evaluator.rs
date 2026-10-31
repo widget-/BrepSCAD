@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
@@ -11,7 +12,7 @@ use crate::model::{EvaluatedShape, Evaluation, Parameter};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
 use crate::parts::{Dimension, Node, collect_parts};
 use crate::profile;
-use crate::value::{Value, binary_value, unary_value};
+use crate::value::{FunctionValue, Value, binary_value, unary_value};
 use crate::{EvalError, bad_args};
 
 const SINGULAR_DETERMINANT: f64 = 1.0e-12;
@@ -1837,6 +1838,8 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::C_FOR_EXPR => self.c_for_value(node),
             SyntaxKind::LET_EXPR => self.let_value(node),
             SyntaxKind::ECHO_EXPR | SyntaxKind::ASSERT_EXPR => self.prefixed_value(node),
+            SyntaxKind::FUNCTION_LITERAL => self.function_literal_value(node),
+            SyntaxKind::INVOKE_EXPR => self.invoke_value(node),
             SyntaxKind::DOT_EXPR => self.dot_value(node),
             kind => Err(EvalError::Expression(format!(
                 "unexpected node in expression: {kind:?}"
@@ -1856,7 +1859,120 @@ impl<K: Kernel> Evaluator<'_, K> {
         };
         match self.lookup_function(&name) {
             Some(declaration) => self.user_function_call(&name, &declaration, args),
-            None => self.builtin_function(&name, &args),
+            None => match self.lookup_optional(&name) {
+                Some(Value::Function(function)) => self.call_function_value(&function, args),
+                _ => self.builtin_function(&name, &args),
+            },
+        }
+    }
+
+    fn function_literal_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let param_list = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
+            .ok_or_else(|| EvalError::Expression("function literal needs parameters".to_owned()))?;
+        let parameters = declaration_parameters(&param_list);
+        let body = function_literal_body(node)?;
+        let source = node.text().to_string().trim().to_owned();
+        let (variables, functions) = self.capture_scope();
+        Ok(Value::Function(Rc::new(FunctionValue {
+            parameters,
+            body,
+            source,
+            variables,
+            functions,
+        })))
+    }
+
+    fn capture_scope(&self) -> (HashMap<String, Value>, HashMap<String, SyntaxNode>) {
+        let mut variables = HashMap::new();
+        let mut functions = HashMap::new();
+        for scope in &self.scopes {
+            variables.extend(scope.variables.clone());
+            functions.extend(scope.functions.clone());
+        }
+        (variables, functions)
+    }
+
+    fn call_function_value(
+        &mut self,
+        function: &FunctionValue,
+        args: Arguments,
+    ) -> Result<Value, EvalError> {
+        for named in args.named.keys() {
+            if !function.parameters.iter().any(|(param, _)| param == named) {
+                return Err(bad_args(
+                    "function",
+                    format!("unsupported named argument {named}"),
+                ));
+            }
+        }
+        if args.positional.len() > function.parameters.len() {
+            return Err(bad_args("function", "too many arguments"));
+        }
+
+        let mut bindings = HashMap::new();
+        for (index, value) in args.positional.iter().enumerate() {
+            bindings.insert(function.parameters[index].0.clone(), value.clone());
+        }
+        for (param, value) in &args.named {
+            bindings.insert(param.clone(), value.clone());
+        }
+
+        let mut scope = Scope {
+            variables: function.variables.clone(),
+            functions: function.functions.clone(),
+            ..Scope::default()
+        };
+        for (name, value) in &args.special {
+            scope.variables.insert(name.clone(), value.clone());
+        }
+
+        self.with_scope(scope, |evaluator| {
+            for (param, default) in &function.parameters {
+                let value = match bindings.get(param) {
+                    Some(value) => value.clone(),
+                    None => match default {
+                        Some(expression) => evaluator.element_value(expression.clone())?,
+                        None => Value::Undef,
+                    },
+                };
+                evaluator
+                    .scopes
+                    .last_mut()
+                    .expect("function value scope")
+                    .variables
+                    .insert(param.clone(), value);
+            }
+            evaluator.element_value(function.body.clone())
+        })
+    }
+
+    fn invoke_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut callee = None;
+        let mut arg_list = None;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::ARG_LIST => {
+                    if let NodeOrToken::Node(child) = element {
+                        arg_list = Some(child);
+                    }
+                }
+                kind if kind.is_trivia() => {}
+                _ if callee.is_none() => callee = Some(element),
+                _ => {}
+            }
+        }
+        let callee = self.element_value(
+            callee.ok_or_else(|| EvalError::Expression("missing called value".to_owned()))?,
+        )?;
+        let args = match arg_list {
+            Some(arg_list) => self.arg_list(arg_list)?,
+            None => Arguments::default(),
+        };
+        match callee {
+            Value::Function(function) => self.call_function_value(&function, args),
+            _ => Err(bad_args("function", "value is not callable")),
         }
     }
 
@@ -2083,6 +2199,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             "is_undef" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
                 Value::Undef
+            ))),
+            "is_function" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::Function(_)
             ))),
             "version" => {
                 args.ensure_empty(name)?;
@@ -2707,6 +2827,23 @@ fn function_expression(node: &SyntaxNode) -> Option<SyntaxElement> {
     None
 }
 
+fn function_literal_body(node: &SyntaxNode) -> Result<SyntaxElement, EvalError> {
+    let mut after_params = false;
+    for element in node.children_with_tokens() {
+        if element.kind() == SyntaxKind::PARAM_LIST {
+            after_params = true;
+            continue;
+        }
+        if !after_params || element.kind().is_trivia() {
+            continue;
+        }
+        return Ok(element);
+    }
+    Err(EvalError::Expression(
+        "missing function literal body".to_owned(),
+    ))
+}
+
 fn parse_error(path: &Path, parsed: &brepscad_syntax::Parse) -> EvalError {
     let messages = parsed
         .errors()
@@ -2803,7 +2940,6 @@ fn format_value(value: &Value) -> String {
         Value::Number(value) => format_number(*value),
         Value::Boolean(value) => value.to_string(),
         Value::String(value) => value.clone(),
-        Value::Undef => "undef".to_owned(),
         Value::List(values) => format!(
             "[{}]",
             values
@@ -2812,6 +2948,8 @@ fn format_value(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Value::Function(function) => function.source.clone(),
+        Value::Undef => "undef".to_owned(),
     }
 }
 
@@ -2832,6 +2970,7 @@ fn format_echo_value(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Value::Function(function) => function.source.clone(),
     }
 }
 

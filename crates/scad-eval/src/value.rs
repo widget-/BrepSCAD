@@ -1,9 +1,21 @@
 //! Expression values and arithmetic.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use brepscad_kernel_api::Transform;
-use brepscad_syntax::SyntaxKind;
+use brepscad_syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use crate::{EvalError, bad_args};
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FunctionValue {
+    pub(crate) parameters: Vec<(String, Option<SyntaxElement>)>,
+    pub(crate) body: SyntaxElement,
+    pub(crate) source: String,
+    pub(crate) variables: HashMap<String, Value>,
+    pub(crate) functions: HashMap<String, SyntaxNode>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
@@ -11,6 +23,7 @@ pub(crate) enum Value {
     Boolean(bool),
     String(String),
     List(Vec<Value>),
+    Function(Rc<FunctionValue>),
     Undef,
 }
 
@@ -18,9 +31,11 @@ impl Value {
     pub(crate) fn as_number(&self, module: &str) -> Result<f64, EvalError> {
         match self {
             Self::Number(value) => Ok(*value),
-            Self::Boolean(_) | Self::String(_) | Self::List(_) | Self::Undef => {
-                Err(bad_args(module, "expected a number"))
-            }
+            Self::Boolean(_)
+            | Self::String(_)
+            | Self::List(_)
+            | Self::Function(_)
+            | Self::Undef => Err(bad_args(module, "expected a number")),
         }
     }
 
@@ -30,6 +45,7 @@ impl Value {
             Self::Number(value) => Ok(*value != 0.0),
             Self::String(value) => Ok(!value.is_empty()),
             Self::List(values) => Ok(!values.is_empty()),
+            Self::Function(_) => Ok(true),
             Self::Undef => Ok(false),
         }
     }

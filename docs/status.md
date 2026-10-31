@@ -77,12 +77,15 @@ vendor/
   name, defaults can reference earlier parameters, and calls can recurse.
 - User functions: same declaration and binding rules, with expression bodies.
   Functions can recurse, call other functions, and read caller variables.
-  Conditional expressions (`? :`) evaluate only the selected branch.
+  Function literals (`function(x) ...`) are first-class values: they capture
+  their defining scope, can be passed, returned, stored in lists, and invoked
+  with `f(...)` or chained calls such as `f(2)(3)`. `is_function` recognizes
+  them. Conditional expressions (`? :`) evaluate only the selected branch.
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
   `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
   `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `lookup`,
   `search`, `rands`, `is_num`, `is_bool`, `is_list`, `is_string`, `is_undef`,
-  `version`, and `version_num`.
+  `is_function`, `version`, and `version_num`.
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
@@ -329,7 +332,8 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - included-file source ranges are not yet mapped back to an editor file
-  - functions are not first-class values; function literals are not parsed
+  - function literals capture variables at creation; later sequential
+    reassignment is not reflected until assignment hoisting is implemented
   - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
     supported (string character indexing is)
@@ -381,10 +385,9 @@ For headless UI snapshots, see
 
 ## Recommended next steps
 
-A corpus run over BOSL2 and MCAD (109 files) gets past the parser for 95 files;
-the remaining first parse errors are primarily function literals. Full
-evaluation now succeeds on 73 files (all pure definitions), with 13 language
-errors, 2 unsupported geometry modules, and 7 other evaluation errors. Most of
+A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
+evaluation succeeds on 85 files (all pure definitions), with 14 language
+errors, 2 unsupported geometry modules, and 8 other evaluation errors. Most of
 the language errors are declaration-order failures inside `include`d BOSL2
 files, so the next semantic step is assignment/declaration hoisting and lexical
 scope.
@@ -395,10 +398,11 @@ scope.
    - Resolve normal variables lexically at the definition site; keep `$`
      variables dynamically scoped.
    - Unknown variables and missing arguments already evaluate to `undef`.
-2. **Language finish**
-   - Function literals and first-class functions.
-   - Library search paths for angle-bracket includes.
-   - Remaining parser edge forms from the corpus.
+2. **Remaining corpus evaluation gaps**
+   - Add missing built-ins such as `acosh` and the other hyperbolic functions.
+   - Support per-primitive `center` on `cube` and `cylinder`.
+   - Decide how to represent empty boolean/union results.
+   - Resolve the remaining BOSL2/MCAD module argument mismatches.
 3. **Keep the pinned corpus green**
    - Run `scripts/fetch-scad-corpus.sh` and then
      `scripts/check-scad-corpus.sh .corpus` after language changes.
