@@ -10,3 +10,4 @@ publish = false
 anyhow.workspace = true
 brepscad-kernel-truck.workspace = true
 brepscad-eval.workspace = true
+brepscad-syntax.workspace = true

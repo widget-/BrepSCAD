@@ -221,6 +221,7 @@ dependencies = [
  "anyhow",
  "brepscad-eval",
  "brepscad-kernel-truck",
+ "brepscad-syntax",
 ]
 
 [[package]]

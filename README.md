@@ -69,9 +69,16 @@ of top-level meshes and the triangle/vertex counts for each mesh:
 # Evaluate a source file.
 cargo run -p brepscad -- path/to/model.scad
 
+# Parse without evaluating geometry, for syntax checks and corpus runs.
+cargo run -p brepscad -- --parse-only path/to/model.scad
+
 # Use OpenSCAD's origin-at-corner/base-at-zero placement.
 cargo run -p brepscad -- --legacy-centering path/to/model.scad
 ```
+
+`--parse-only` prints `parse ok` or exits with the parser diagnostics. It is
+used by the pinned corpus check described in
+[`docs/development.md`](docs/development.md#scad-corpus-check).
 
 When a file path is given, `include` and `use` paths resolve relative to that
 file. The built-in sample is evaluated from memory and cannot include files.
