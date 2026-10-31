@@ -335,3 +335,16 @@ fn out_of_range_children_index_is_an_error() {
 
     assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "children"));
 }
+#[test]
+fn children_inside_a_call_site_use_the_callers_children() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "module inner() { children(); }\nmodule outer() { inner() children(); }\nouter() cube(2);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("nested children");
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    assert_eq!(extents(&evaluation.shapes[0].mesh), [2.0, 2.0, 2.0]);
+}

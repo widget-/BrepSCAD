@@ -107,6 +107,20 @@ fn use_imports_definitions_without_geometry() {
 }
 
 #[test]
+fn use_resolves_names_in_the_used_file_scope() {
+    let dir = TempDir::new();
+    dir.write("lib.scad", "module box() { cube(2); }\n");
+    let main = dir.write(
+        "main.scad",
+        "module cube(size) { sphere(r = size); }\nuse \"lib.scad\";\nbox();\n",
+    );
+
+    // `box()` must call the built-in cube from its own file scope, not the
+    // caller's module cube (which would produce a sphere with diameter 4).
+    assert_eq!(evaluate_file_extents(&main), [2.0; 3]);
+}
+
+#[test]
 fn use_does_not_import_variables() {
     let dir = TempDir::new();
     dir.write("lib.scad", "size = 9;\nmodule box() { cube(size); }\n");

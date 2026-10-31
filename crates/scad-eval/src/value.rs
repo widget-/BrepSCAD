@@ -229,9 +229,42 @@ fn number_op(op: SyntaxKind, left: f64, right: f64) -> Result<f64, EvalError> {
     }
 }
 
-fn arithmetic(op: SyntaxKind, left: Value, right: Value) -> Result<Value, EvalError> {
+fn numeric_list(value: &Value) -> Option<Vec<f64>> {
+    let Value::List(values) = value else {
+        return None;
+    };
+    values
+        .iter()
+        .map(|value| match value {
+            Value::Number(value) => Some(*value),
+            _ => None,
+        })
+        .collect()
+}
+
+fn numeric_matrix(value: &Value) -> Option<Vec<Vec<f64>>> {
+    let Value::List(rows) = value else {
+        return None;
+    };
+    rows.iter().map(numeric_list).collect()
+}
+
+fn scale_list(value: Value, scalar: f64, op: SyntaxKind) -> Result<Value, EvalError> {
+    match value {
+        Value::Number(value) => Ok(Value::Number(number_op(op, value, scalar)?)),
+        Value::List(values) => Ok(Value::List(
+            values
+                .into_iter()
+                .map(|value| scale_list(value, scalar, op))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Value::Undef => Ok(Value::Undef),
+        _ => Ok(Value::Undef),
+    }
+}
+
+fn elementwise(op: SyntaxKind, left: Value, right: Value) -> Result<Value, EvalError> {
     match (left, right) {
-        (Value::Undef, _) | (_, Value::Undef) => Ok(Value::Undef),
         (Value::Number(left), Value::Number(right)) => {
             Ok(Value::Number(number_op(op, left, right)?))
         }
@@ -239,11 +272,108 @@ fn arithmetic(op: SyntaxKind, left: Value, right: Value) -> Result<Value, EvalEr
             let values = left
                 .into_iter()
                 .zip(right)
-                .map(|(left, right)| arithmetic(op, left, right))
+                .map(|(left, right)| elementwise(op, left, right))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Value::List(values))
         }
-        // OpenSCAD treats mixed vector/scalar arithmetic as undefined.
+        _ => Ok(Value::Undef),
+    }
+}
+
+fn dot(left: &[f64], right: &[f64]) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    Some(left.iter().zip(right).map(|(a, b)| a * b).sum())
+}
+
+fn multiply(left: Value, right: Value) -> Result<Value, EvalError> {
+    if let (Some(left), Some(right)) = (numeric_list(&left), numeric_list(&right)) {
+        return Ok(dot(&left, &right)
+            .map(Value::Number)
+            .unwrap_or(Value::Undef));
+    }
+
+    if let (Some(matrix), Some(vector)) = (numeric_matrix(&left), numeric_list(&right)) {
+        let mut result = Vec::with_capacity(matrix.len());
+        for row in &matrix {
+            let Some(value) = dot(row, &vector) else {
+                return Ok(Value::Undef);
+            };
+            result.push(Value::Number(value));
+        }
+        return Ok(Value::List(result));
+    }
+
+    if let (Some(vector), Some(matrix)) = (numeric_list(&left), numeric_matrix(&right)) {
+        let Some(width) = matrix.first().map(Vec::len) else {
+            return Ok(Value::Undef);
+        };
+        if matrix.iter().any(|row| row.len() != width) {
+            return Ok(Value::Undef);
+        }
+        let mut result = Vec::with_capacity(width);
+        for column in 0..width {
+            let mut total = 0.0;
+            for (row, value) in matrix.iter().zip(&vector) {
+                total += row[column] * value;
+            }
+            result.push(Value::Number(total));
+        }
+        return Ok(Value::List(result));
+    }
+
+    if let (Some(left), Some(right)) = (numeric_matrix(&left), numeric_matrix(&right)) {
+        let Some(width) = right.first().map(Vec::len) else {
+            return Ok(Value::Undef);
+        };
+        if right.iter().any(|row| row.len() != width) {
+            return Ok(Value::Undef);
+        }
+        let mut result = Vec::with_capacity(left.len());
+        for row in &left {
+            if row.len() != right.len() {
+                return Ok(Value::Undef);
+            }
+            let mut values = vec![0.0; width];
+            for (index, value) in row.iter().enumerate() {
+                for (total, cell) in values.iter_mut().zip(&right[index]) {
+                    *total += value * cell;
+                }
+            }
+            result.push(Value::List(values.into_iter().map(Value::Number).collect()));
+        }
+        return Ok(Value::List(result));
+    }
+
+    Ok(Value::Undef)
+}
+
+fn arithmetic(op: SyntaxKind, left: Value, right: Value) -> Result<Value, EvalError> {
+    if matches!(left, Value::Undef) || matches!(right, Value::Undef) {
+        return Ok(Value::Undef);
+    }
+
+    match op {
+        SyntaxKind::PLUS | SyntaxKind::MINUS => elementwise(op, left, right),
+        SyntaxKind::STAR => match (left, right) {
+            (Value::Number(left), Value::Number(right)) => Ok(Value::Number(left * right)),
+            (Value::Number(scalar), value) => scale_list(value, scalar, SyntaxKind::STAR),
+            (value, Value::Number(scalar)) => scale_list(value, scalar, SyntaxKind::STAR),
+            (left @ Value::List(_), right @ Value::List(_)) => multiply(left, right),
+            _ => Ok(Value::Undef),
+        },
+        SyntaxKind::SLASH | SyntaxKind::PERCENT => match (left, right) {
+            (Value::Number(left), Value::Number(right)) => {
+                Ok(Value::Number(number_op(op, left, right)?))
+            }
+            (value @ Value::List(_), Value::Number(scalar)) => scale_list(value, scalar, op),
+            _ => Ok(Value::Undef),
+        },
+        SyntaxKind::CARET => match (left, right) {
+            (Value::Number(left), Value::Number(right)) => Ok(Value::Number(left.powf(right))),
+            _ => Ok(Value::Undef),
+        },
         _ => Ok(Value::Undef),
     }
 }

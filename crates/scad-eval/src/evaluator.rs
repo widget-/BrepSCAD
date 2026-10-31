@@ -255,6 +255,7 @@ fn evaluate_with_context<K: Kernel>(
         include_stack,
         messages: Vec::new(),
         call_depth: 0,
+        call_stack: Vec::new(),
     };
     let roots = evaluator.evaluate_source_tree(&parsed.syntax(), Transform::IDENTITY)?;
     let messages = std::mem::take(&mut evaluator.messages);
@@ -317,6 +318,7 @@ struct Evaluator<'a, K: Kernel> {
     include_stack: Vec<PathBuf>,
     messages: Vec<String>,
     call_depth: usize,
+    call_stack: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -427,7 +429,7 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn assert_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
         let args = self.arg_list_for(&node)?;
-        check_assertion(&args)?;
+        check_assertion(&args).map_err(|error| self.assertion_error(&node, error))?;
         self.call_children(node, parent)
     }
 
@@ -461,7 +463,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         if node.kind() == SyntaxKind::ECHO_EXPR {
             self.messages.push(echo_message(&args));
         } else {
-            check_assertion(&args)?;
+            check_assertion(&args).map_err(|error| self.assertion_error(node, error))?;
         }
 
         let mut body = None;
@@ -531,7 +533,6 @@ impl<K: Kernel> Evaluator<'_, K> {
             .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
             .map(|list| declaration_parameters(&list))
             .unwrap_or_default();
-
         for named in args.named.keys() {
             if !parameters.iter().any(|(param, _)| param == named) {
                 return Err(bad_args(
@@ -562,7 +563,8 @@ impl<K: Kernel> Evaluator<'_, K> {
         let special = args.special.clone();
         let call_env = Env::child(declaration.env.clone(), caller_env.clone());
 
-        let mut nodes = self.with_env(call_env.clone(), |evaluator| {
+        self.call_stack.push(name.to_owned());
+        let result = self.with_env(call_env.clone(), |evaluator| {
             {
                 let mut variables = call_env.variables.borrow_mut();
                 for (name, value) in &special {
@@ -584,7 +586,6 @@ impl<K: Kernel> Evaluator<'_, K> {
                 };
                 call_env.variables.borrow_mut().insert(param.clone(), value);
             }
-
             evaluator.children_stack.push(ChildrenFrame {
                 statements,
                 caller_env,
@@ -602,7 +603,9 @@ impl<K: Kernel> Evaluator<'_, K> {
             let result = body.and_then(|body| evaluator.module_body(body, parent));
             evaluator.children_stack.pop();
             result
-        })?;
+        });
+        self.call_stack.pop();
+        let mut nodes = result?;
 
         for node in &mut nodes {
             merge_parameters(node, &caller_parameters);
@@ -665,9 +668,13 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
         };
 
-        let mut env = caller_env.clone();
+        let frame = self
+            .children_stack
+            .pop()
+            .expect("children frame checked above");
+        let mut env = caller_env;
         if !special.is_empty() {
-            let child = Env::child(caller_env.clone(), caller_env.clone());
+            let child = Env::child(env.clone(), env.clone());
             child.variables.borrow_mut().extend(special);
             env = child;
         }
@@ -680,6 +687,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             Ok(nodes)
         })();
         self.scopes = saved;
+        self.children_stack.push(frame);
         result
     }
 
@@ -701,9 +709,10 @@ impl<K: Kernel> Evaluator<'_, K> {
         f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
     ) -> Result<T, EvalError> {
         if self.call_depth >= MAX_CALL_DEPTH {
-            return Err(EvalError::Expression(
-                "maximum call depth exceeded".to_owned(),
-            ));
+            return Err(EvalError::Expression(format!(
+                "maximum call depth exceeded at {}",
+                self.call_stack.join(" > ")
+            )));
         }
         self.call_depth += 1;
         self.scopes.push(env);
@@ -790,7 +799,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         self.apply_assignments(root)?;
         let mut nodes = Vec::new();
         for statement in root.children() {
-            if statement.kind() == SyntaxKind::ASSIGNMENT {
+            if matches!(statement.kind(), SyntaxKind::ASSIGNMENT | SyntaxKind::USE) {
                 continue;
             }
             nodes.extend(self.statement(statement, parent)?);
@@ -818,7 +827,7 @@ impl<K: Kernel> Evaluator<'_, K> {
 
         self.with_source_file(path, |evaluator| {
             if use_only {
-                evaluator.register_declarations_deep(&root)?;
+                evaluator.use_declarations(&root)?;
                 Ok(Vec::new())
             } else {
                 evaluator.evaluate_source_tree(&root, parent)
@@ -832,6 +841,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             if !matches!(statement.kind(), SyntaxKind::INCLUDE | SyntaxKind::USE) {
                 continue;
             }
+            let use_only = statement.kind() == SyntaxKind::USE;
             let (request, angle) = include_path(&statement)
                 .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
             let path = self.resolve_source(&request, angle)?;
@@ -844,9 +854,34 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             let child = parsed.syntax();
             self.with_source_file(path, |evaluator| {
-                evaluator.register_declarations_deep(&child)
+                if use_only {
+                    evaluator.use_declarations(&child)
+                } else {
+                    evaluator.register_declarations_deep(&child)
+                }
             })?;
         }
+        Ok(())
+    }
+
+    fn use_declarations(&mut self, root: &SyntaxNode) -> Result<(), EvalError> {
+        let used = Env::root();
+        self.with_env(used.clone(), |evaluator| {
+            evaluator.register_declarations_deep(root)
+        })?;
+        let current = self.current_env();
+        current.modules.borrow_mut().extend(
+            used.modules
+                .borrow()
+                .iter()
+                .map(|(name, declaration)| (name.clone(), declaration.clone())),
+        );
+        current.functions.borrow_mut().extend(
+            used.functions
+                .borrow()
+                .iter()
+                .map(|(name, declaration)| (name.clone(), declaration.clone())),
+        );
         Ok(())
     }
 
@@ -1957,13 +1992,16 @@ impl<K: Kernel> Evaluator<'_, K> {
             Some(arg_list) => self.arg_list(arg_list)?,
             None => Arguments::default(),
         };
-        match self.lookup_function(&name) {
+        self.call_stack.push(name.clone());
+        let result = match self.lookup_function(&name) {
             Some(declaration) => self.user_function_call(&name, &declaration, args),
             None => match self.lookup_optional(&name) {
                 Some(Value::Function(function)) => self.call_function_value(&function, args),
                 _ => self.builtin_function(&name, &args),
             },
-        }
+        };
+        self.call_stack.pop();
+        result
     }
 
     fn function_literal_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
@@ -2065,7 +2103,6 @@ impl<K: Kernel> Evaluator<'_, K> {
             .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
             .map(|list| declaration_parameters(&list))
             .unwrap_or_default();
-
         for named in args.named.keys() {
             if !parameters.iter().any(|(param, _)| param == named) {
                 return Err(bad_args(
@@ -2747,13 +2784,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 kind if kind.is_trivia() => {}
                 _ => {
                     if let NodeOrToken::Node(child) = &element {
-                        if matches!(
-                            child.kind(),
-                            SyntaxKind::FOR_EXPR
-                                | SyntaxKind::IF_EXPR
-                                | SyntaxKind::EACH_EXPR
-                                | SyntaxKind::C_FOR_EXPR
-                        ) {
+                        if is_comprehension(child) {
                             values.extend(self.comprehension_values(&element)?);
                             continue;
                         }
@@ -2890,6 +2921,21 @@ fn echo_message(args: &Arguments) -> String {
         }
     }
     format!("ECHO: {}", parts.join(", "))
+}
+
+impl<K: Kernel> Evaluator<'_, K> {
+    fn assertion_error(&self, node: &SyntaxNode, error: EvalError) -> EvalError {
+        match error {
+            EvalError::Assertion(message) => {
+                let stack = self.call_stack.join(" > ");
+                EvalError::Assertion(format!(
+                    "{message} [{}] (at {stack})",
+                    node.text().to_string().trim()
+                ))
+            }
+            error => error,
+        }
+    }
 }
 
 fn check_assertion(args: &Arguments) -> Result<(), EvalError> {
@@ -3081,6 +3127,20 @@ fn format_number(value: f64) -> String {
     }
 }
 
+fn is_comprehension(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::FOR_EXPR
+        | SyntaxKind::IF_EXPR
+        | SyntaxKind::EACH_EXPR
+        | SyntaxKind::C_FOR_EXPR => true,
+        SyntaxKind::LET_EXPR => comprehension_body(node)
+            .ok()
+            .and_then(|body| body.into_node())
+            .is_some_and(|body| is_comprehension(&body)),
+        _ => false,
+    }
+}
+
 fn comprehension_arguments(node: &SyntaxNode) -> Result<SyntaxNode, EvalError> {
     node.children()
         .find(|child| child.kind() == SyntaxKind::ARG_LIST)
@@ -3165,20 +3225,28 @@ fn search_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
     } else {
         num_returns as usize
     };
-    let index_col = search_number(
-        name,
-        args.named
-            .get("index_col_num")
-            .or_else(|| args.positional.get(3)),
-        0.0,
-    )?;
-    if index_col < 0.0 || index_col.fract() != 0.0 {
-        return Err(bad_args(
-            name,
-            "index column must be a non-negative integer",
-        ));
+    let index_col = if let Some(value) = args.named.get("index_col_num") {
+        match value {
+            Value::Undef => None,
+            value => Some(value.as_number(name)?),
+        }
+    } else if let Some(value) = args.positional.get(3) {
+        match value {
+            Value::Undef => None,
+            value => Some(value.as_number(name)?),
+        }
+    } else {
+        Some(0.0)
+    };
+    if let Some(index_col) = index_col {
+        if index_col < 0.0 || index_col.fract() != 0.0 {
+            return Err(bad_args(
+                name,
+                "index column must be a non-negative integer",
+            ));
+        }
     }
-    let index_col = index_col as usize;
+    let index_col = index_col.map(|value| value as usize);
 
     let matches = match target {
         Value::List(values) => values.iter().collect::<Vec<_>>(),
@@ -3207,9 +3275,11 @@ fn search_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
             }
             Value::List(values) => {
                 for (index, item) in values.iter().enumerate() {
-                    let candidate = match item {
-                        Value::List(row) => row.get(index_col).unwrap_or(&Value::Undef),
-                        item => item,
+                    let candidate = match (item, index_col) {
+                        (Value::List(row), Some(index_col)) => {
+                            row.get(index_col).unwrap_or(&Value::Undef)
+                        }
+                        (item, _) => item,
                     };
                     if candidate == target {
                         indices.push(Value::Number(index as f64));

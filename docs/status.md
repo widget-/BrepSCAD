@@ -103,10 +103,11 @@ vendor/
   their highlight, background, and root-only presentation semantics are not yet
   implemented.
 - `include` evaluates another source file in place, sharing assignments and
-  definitions. `use` imports only module and function definitions. Quoted paths
-  resolve relative to the including file; angle-bracket paths also search
-  `OPENSCADPATH` and `--library-path` directories. Cycles and read/parse
-  failures are reported with the file path.
+  definitions. `use` imports only module and function definitions from the used
+  file's own hidden scope, so used library code does not see caller variables or
+  overrides. Quoted paths resolve relative to the including file; angle-bracket
+  paths also search `OPENSCADPATH` and `--library-path` directories. Cycles and
+  read/parse failures are reported with the file path.
 - Lists are heterogeneous and arbitrarily nested: numbers, strings, booleans,
   lists, and `undef` can be mixed. They are the only collection type; matrices
   are lists of lists.
@@ -157,9 +158,11 @@ vendor/
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
 - Arithmetic on numbers and lists: `+`, `-`, `*`, `/`, `%`, `^`, unary signs,
-  and grouping. List operations are elementwise and recursive; mixed
-  list/scalar arithmetic is `undef`, matching OpenSCAD. Division or modulo by
-  zero is an expression error. `undef` propagates through arithmetic.
+  and grouping. `+`/`-` are elementwise and recursive; `*` follows OpenSCAD's
+  vector dot product and vector/matrix multiplication rules; scalar
+  multiplication and division scale lists recursively. Other mixed list/scalar
+  operations are `undef`, matching OpenSCAD. Division or modulo by zero follows
+  IEEE `inf`/`nan` behavior. `undef` propagates through arithmetic.
 - Nested transforms compose into one matrix before reaching a primitive.
 - Each evaluated top-level shape exposes:
   - its final mesh
@@ -239,9 +242,9 @@ vendor/
   booleans above the call union them when one result is required.
 - `include` is textual: the included file's assignments, definitions, and
   top-level geometry are evaluated in the including scope at the include
-  location. `use` imports declarations only, matching OpenSCAD. Both resolve
-  relative to the current source file and are tracked by canonical path for
-  cycle detection.
+  location. `use` imports declarations from a hidden file scope, matching
+  OpenSCAD. Both resolve relative to the current source file and are tracked by
+  canonical path for cycle detection.
 - Included-file source ranges stay relative to their own files. The editor does
   not yet map those ranges back to a file tab or highlight them.
 - B-rep first. The kernel-neutral `Transform` is a column-major 4×4 affine
@@ -341,9 +344,6 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - included-file source ranges are not yet mapped back to an editor file
-  - `use` imports declarations into the caller's environment rather than giving
-    the used file its own hidden file scope, so used library modules can see
-    caller variables
   - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
     supported (string character indexing is)
@@ -405,14 +405,14 @@ previous pass are fixed; the remaining failures are mostly library-context,
 kernel, and deeper BOSL2 math/semantics issues.
 
 “ok” here only means the file evaluated without an error; nearly all are pure
-library files with no top-level geometry. It does not mean BOSL2’s module
-surface works. BOSL2 shadows built-ins such as `cube` and `cylinder`, and
-`include <BOSL2/std.scad>; cube(10);` currently trips a BOSL2 assertion.
+library files with no top-level geometry. BOSL2’s module surface is now partly
+usable: `std.scad` loads, and `cube`/`cuboid` render through it. `cylinder` and
+rounded `cuboid` still hit evaluator or geometry gaps, so the file-level total
+is not full BOSL2 support.
 
 1. **Remaining library and kernel gaps**
-   - Investigate the BOSL2 example assertion failures and deep-recursion cases.
+   - Fix BOSL2 `cylinder` radius handling and the rounded-`cuboid` path.
    - Improve Truck boolean robustness for the MCAD bitmap/hardware models.
-   - Give `use` its own hidden file scope.
    - Render `color` instead of ignoring it.
    - Treat standalone BOSL2 files that expect `std.scad` as an expected corpus
      category rather than a language gap.
@@ -423,21 +423,21 @@ surface works. BOSL2 shadows built-ins such as `cube` and `cylinder`, and
      language errors from geometry and kernel gaps.
    - Refresh `corpus/baseline-parse.tsv` and `corpus/baseline-evaluate.tsv` only
      after intentional compatibility improvements.
-3. **Finish the 2D/extrusion layer**4. **Finish the 2D/extrusion layer**
+3. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` twist, scale, and slices.
    - `rotate_extrude` negative-side profiles.
-5. **Native intrinsics**
+4. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-6. **Kernel adapters**
+5. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-7. **Product surface**
+6. **Product surface**
    - Recent-file handling.
    - Export, undo/redo, and session persistence.
-8. **Selection polish**
+7. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 

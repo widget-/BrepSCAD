@@ -62,13 +62,26 @@ fn list_arithmetic_is_recursive_and_elementwise() {
 }
 
 #[test]
-fn scalar_broadcast_is_undefined() {
+fn multiplication_follows_open_scad_vectors_and_matrices() {
+    assert_eq!(
+        cube_extents(
+            "dot = [1, 2] * [3, 4];\n\
+             scaled = 2 * [3, 4];\n\
+             matrix = [[1, 2], [3, 4]] * [[5, 6], [7, 8]];\n\
+             cube([dot, scaled[0], matrix[0][0]]);",
+        ),
+        [11.0, 6.0, 19.0]
+    );
+}
+
+#[test]
+fn non_multiplication_scalar_vector_operations_are_undef() {
     assert_eq!(
         cube_extents(
             "cube([\n\
                  is_undef([1, 2] + 1) ? 1 : 2,\n\
-                 is_undef(2 * [3, 4]) ? 1 : 2,\n\
-                 1\n\
+                 is_undef([1, 2] / [3, 4]) ? 1 : 2,\n\
+                 is_undef([1, 2] ^ 2) ? 1 : 2\n\
              ]);",
         ),
         [1.0; 3]
@@ -196,5 +209,38 @@ fn undef_inside_a_list_is_preserved() {
     assert_eq!(
         cube_extents("v = [1, undef, 3];\ncube([len(v), is_undef(v[1]) ? 1 : 2, 1]);"),
         [3.0, 1.0, 1.0]
+    );
+}
+#[test]
+fn let_wrapped_comprehensions_flatten_into_rows() {
+    assert_eq!(
+        cube_extents(
+            "m = [for (i = [0:1]) [let (r = [i, i + 1]) for (j = [0:1]) r[j]]];\n\
+             cube([len(m), len(m[0]), m[1][1]]);",
+        ),
+        [2.0, 2.0, 2.0]
+    );
+}
+
+#[test]
+fn vector_matrix_products_follow_open_scad() {
+    assert_eq!(
+        cube_extents(
+            "v = [1, 2];\n\
+             m = [[1, 0], [0, 1]];\n\
+             cube([(v * m)[1], (m * v)[0], v * [3, 4]]);",
+        ),
+        [2.0, 1.0, 11.0]
+    );
+}
+
+#[test]
+fn search_compares_whole_rows_when_index_column_is_undef() {
+    assert_eq!(
+        cube_extents(
+            "hits = search([[0, 0, 1]], [[0, 0, 1], [1, 0, 0]], index_col_num = undef);\n\
+             cube([hits[0][0] + 1, len(hits[0]), 1]);",
+        ),
+        [1.0, 1.0, 1.0]
     );
 }

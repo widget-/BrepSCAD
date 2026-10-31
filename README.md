@@ -104,7 +104,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` are currently parsed but ignored. |
 | `let` statement | ✔ | |
-| `include` / `use` | ✔ | Angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. |
+| `include` / `use` | ✔ | Angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. `use` imports declarations from the used file's hidden scope. |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
 | `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted |
 | `polyhedron` | ✔ | |

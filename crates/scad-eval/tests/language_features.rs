@@ -141,7 +141,7 @@ fn assert_module_renders_its_children() {
 fn failed_assertions_are_evaluation_errors() {
     let error = source_error("assert(false, \"boom\");\ncube(1);");
 
-    assert!(matches!(error, EvalError::Assertion(message) if message == "\"boom\""));
+    assert!(matches!(error, EvalError::Assertion(message) if message.contains("boom")));
 }
 
 #[test]
