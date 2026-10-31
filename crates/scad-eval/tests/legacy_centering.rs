@@ -12,6 +12,7 @@ fn evaluate(source: &str, legacy_centering: bool) -> brepscad_eval::Evaluation {
         EvaluationOptions {
             tolerance: 0.01,
             legacy_centering,
+            library_paths: Vec::new(),
         },
     )
     .expect("evaluate")

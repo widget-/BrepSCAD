@@ -16,10 +16,10 @@ use thiserror::Error;
 
 pub use cache::MeshCache;
 pub use evaluator::{
-    EvaluationOptions, evaluate, evaluate_file, evaluate_file_with_cache_options,
-    evaluate_file_with_options, evaluate_source_with_path, evaluate_to_meshes,
-    evaluate_to_meshes_with_options, evaluate_with_cache, evaluate_with_cache_options,
-    evaluate_with_options,
+    EvaluationOptions, environment_library_paths, evaluate, evaluate_file,
+    evaluate_file_with_cache_options, evaluate_file_with_options, evaluate_source_with_path,
+    evaluate_to_meshes, evaluate_to_meshes_with_options, evaluate_with_cache,
+    evaluate_with_cache_options, evaluate_with_options,
 };
 pub use model::{EvaluatedShape, Evaluation, Parameter, Part, TreeNode};
 

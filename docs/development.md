@@ -62,6 +62,10 @@ separate language errors from missing geometry modules and kernel failures:
 scripts/check-scad-corpus.sh --evaluate .corpus
 ```
 
+When pointed at `.corpus` (or a directory inside it), the script exports
+`OPENSCADPATH` to the corpus root so `<BOSL2/std.scad>` and `<MCAD/units.scad>`
+resolve. Quoted includes still resolve relative to the including file.
+
 Both modes can write checkable snapshots:
 
 ```sh

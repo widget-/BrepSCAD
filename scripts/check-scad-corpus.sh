@@ -56,6 +56,26 @@ if [[ -n "$baseline_file" && -n "$write_baseline" ]]; then
     exit 2
 fi
 
+# The pinned corpus resolves <BOSL2/std.scad> and <MCAD/units.scad> from its
+# root. Default OPENSCADPATH to .corpus when the caller points us inside it.
+if [[ -z ${OPENSCADPATH:-} ]]; then
+    for directory in "${directories[@]}"; do
+        directory=${directory%/}
+        if [[ "$directory" == ".corpus" || "$directory" == *"/.corpus" ]]; then
+            export OPENSCADPATH="$directory"
+            break
+        fi
+        if [[ "$directory" == .corpus/* ]]; then
+            export OPENSCADPATH=".corpus"
+            break
+        fi
+        if [[ "$directory" == *"/.corpus/"* ]]; then
+            export OPENSCADPATH="${directory%%/.corpus/*}/.corpus"
+            break
+        fi
+    done
+fi
+
 binary=${BREPSCAD_BIN:-target/debug/brepscad}
 limit=${CORPUS_TIMEOUT:-8}
 

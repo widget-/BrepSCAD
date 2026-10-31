@@ -76,12 +76,14 @@ impl Arguments {
 }
 
 /// Evaluation settings shared by the CLI, viewer, and tests.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EvaluationOptions {
     pub tolerance: f64,
     /// Place cubes/squares at the origin, cylinder bases at `z = 0`, and
     /// linear extrusions from `z = 0`, matching OpenSCAD defaults.
     pub legacy_centering: bool,
+    /// Directories searched by angle-bracket `include` / `use` paths.
+    pub library_paths: Vec<PathBuf>,
 }
 
 impl Default for EvaluationOptions {
@@ -89,8 +91,16 @@ impl Default for EvaluationOptions {
         Self {
             tolerance: 0.01,
             legacy_centering: false,
+            library_paths: Vec::new(),
         }
     }
+}
+
+/// Reads `OPENSCADPATH` using the platform path separator.
+pub fn environment_library_paths() -> Vec<PathBuf> {
+    std::env::var_os("OPENSCADPATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default()
 }
 
 /// Parses and evaluates `source`, returning each top-level shape with its
@@ -106,6 +116,7 @@ pub fn evaluate<K: Kernel>(
         EvaluationOptions {
             tolerance,
             legacy_centering: false,
+            library_paths: Vec::new(),
         },
     )
 }
@@ -132,6 +143,7 @@ pub fn evaluate_with_cache<K: Kernel>(
         EvaluationOptions {
             tolerance,
             legacy_centering: false,
+            library_paths: Vec::new(),
         },
         cache,
     )
@@ -160,6 +172,7 @@ pub fn evaluate_file<K: Kernel>(
         EvaluationOptions {
             tolerance,
             legacy_centering: false,
+            library_paths: Vec::new(),
         },
     )
 }
@@ -234,6 +247,7 @@ fn evaluate_with_context<K: Kernel>(
         children_stack: Vec::new(),
         tolerance,
         legacy_centering: options.legacy_centering,
+        library_paths: options.library_paths,
         source_dir,
         include_stack,
         messages: Vec::new(),
@@ -270,6 +284,7 @@ pub fn evaluate_to_meshes<K: Kernel>(
         EvaluationOptions {
             tolerance,
             legacy_centering: false,
+            library_paths: Vec::new(),
         },
     )
 }
@@ -293,6 +308,7 @@ struct Evaluator<'a, K: Kernel> {
     children_stack: Vec<ChildrenFrame>,
     tolerance: f64,
     legacy_centering: bool,
+    library_paths: Vec<PathBuf>,
     source_dir: Option<PathBuf>,
     include_stack: Vec<PathBuf>,
     messages: Vec<String>,
@@ -733,9 +749,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         parent: Transform,
         use_only: bool,
     ) -> Result<Vec<Node>, EvalError> {
-        let request = include_path(&node)
+        let (request, angle) = include_path(&node)
             .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
-        let path = self.resolve_source(&request)?;
+        let path = self.resolve_source(&request, angle)?;
         let source = std::fs::read_to_string(&path).map_err(|error| {
             EvalError::Source(format!("failed to read {}: {error}", path.display()))
         })?;
@@ -761,9 +777,9 @@ impl<K: Kernel> Evaluator<'_, K> {
             if !matches!(statement.kind(), SyntaxKind::INCLUDE | SyntaxKind::USE) {
                 continue;
             }
-            let request = include_path(&statement)
+            let (request, angle) = include_path(&statement)
                 .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
-            let path = self.resolve_source(&request)?;
+            let path = self.resolve_source(&request, angle)?;
             let source = std::fs::read_to_string(&path).map_err(|error| {
                 EvalError::Source(format!("failed to read {}: {error}", path.display()))
             })?;
@@ -779,19 +795,31 @@ impl<K: Kernel> Evaluator<'_, K> {
         Ok(())
     }
 
-    fn resolve_source(&self, request: &str) -> Result<PathBuf, EvalError> {
+    fn resolve_source(&self, request: &str, angle: bool) -> Result<PathBuf, EvalError> {
         let path = Path::new(request);
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.source_dir
-                .as_ref()
-                .ok_or_else(|| {
-                    EvalError::Source(format!("include \"{request}\" requires a source file path"))
-                })?
-                .join(path)
-        };
-        Ok(std::fs::canonicalize(&resolved).unwrap_or(resolved))
+        if path.is_absolute() {
+            return Ok(canonical_path(path));
+        }
+
+        let mut candidates = Vec::new();
+        if let Some(source_dir) = &self.source_dir {
+            candidates.push(source_dir.join(path));
+        }
+        if angle {
+            candidates.extend(self.library_paths.iter().map(|dir| dir.join(path)));
+        }
+        if candidates.is_empty() {
+            return Err(EvalError::Source(format!(
+                "include \"{request}\" requires a source file or library path"
+            )));
+        }
+
+        for candidate in &candidates {
+            if candidate.is_file() {
+                return Ok(canonical_path(candidate));
+            }
+        }
+        Ok(canonical_path(&candidates[0]))
     }
 
     fn with_source_file<T>(
@@ -2583,6 +2611,10 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 }
 
+fn canonical_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn check_transform(transform: Transform) -> Result<(), EvalError> {
     if !transform.is_finite() {
         return Err(EvalError::InvalidTransform(
@@ -2685,7 +2717,7 @@ fn parse_error(path: &Path, parsed: &brepscad_syntax::Parse) -> EvalError {
     EvalError::Parse(format!("{}: {messages}", path.display()))
 }
 
-fn include_path(node: &SyntaxNode) -> Option<String> {
+fn include_path(node: &SyntaxNode) -> Option<(String, bool)> {
     let mut in_angle = false;
     let mut angle = String::new();
     for element in node.children_with_tokens() {
@@ -2693,9 +2725,9 @@ fn include_path(node: &SyntaxNode) -> Option<String> {
             continue;
         };
         match token.kind() {
-            SyntaxKind::STRING => return Some(parse_string_literal(token.text())),
+            SyntaxKind::STRING => return Some((parse_string_literal(token.text()), false)),
             SyntaxKind::LT => in_angle = true,
-            SyntaxKind::GT if in_angle => return Some(angle),
+            SyntaxKind::GT if in_angle => return Some((angle, true)),
             kind if kind.is_trivia() => {}
             _ if in_angle => angle.push_str(token.text()),
             _ => {}

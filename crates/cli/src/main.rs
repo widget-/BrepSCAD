@@ -1,16 +1,20 @@
 use anyhow::{Result, anyhow};
-use brepscad_eval::{EvaluationOptions, evaluate_file_with_options, evaluate_with_options};
+use brepscad_eval::{
+    EvaluationOptions, environment_library_paths, evaluate_file_with_options, evaluate_with_options,
+};
 use brepscad_kernel_truck::TruckKernel;
 use brepscad_syntax::parse;
 
 const DEFAULT_SOURCE: &str = include_str!("../../../assets/sample.scad");
-const USAGE: &str = "usage: brepscad [--legacy-centering] [--parse-only] [file.scad]";
+const USAGE: &str =
+    "usage: brepscad [--legacy-centering] [--parse-only] [--library-path DIR] [file.scad]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct CliArgs {
     path: Option<String>,
     legacy_centering: bool,
     parse_only: bool,
+    library_paths: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -32,9 +36,12 @@ fn main() -> Result<()> {
         return parse_only(args.path.as_deref());
     }
 
+    let mut library_paths = environment_library_paths();
+    library_paths.extend(args.library_paths.iter().map(std::path::PathBuf::from));
     let options = EvaluationOptions {
         tolerance: 0.01,
         legacy_centering: args.legacy_centering,
+        library_paths,
     };
     let mut kernel = TruckKernel::new();
     let evaluation = match &args.path {
@@ -91,12 +98,20 @@ where
     let mut path = None;
     let mut legacy_centering = false;
     let mut parse_only = false;
+    let mut library_paths = Vec::new();
+    let mut args = args.into_iter();
 
-    for arg in args {
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(ParseOutcome::Help),
             "--legacy-centering" => legacy_centering = true,
             "--parse-only" => parse_only = true,
+            "--library-path" | "-I" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--library-path requires a directory".to_owned())?;
+                library_paths.push(value);
+            }
             value if value.starts_with('-') => {
                 return Err(format!("unknown option {value}"));
             }
@@ -113,6 +128,7 @@ where
         path,
         legacy_centering,
         parse_only,
+        library_paths,
     }))
 }
 
@@ -132,6 +148,7 @@ mod tests {
                 path: Some("model.scad".to_owned()),
                 legacy_centering: true,
                 parse_only: false,
+                library_paths: Vec::new(),
             }))
         );
         assert_eq!(
@@ -140,6 +157,7 @@ mod tests {
                 path: Some("model.scad".to_owned()),
                 legacy_centering: true,
                 parse_only: false,
+                library_paths: Vec::new(),
             }))
         );
     }
@@ -152,6 +170,20 @@ mod tests {
                 path: Some("model.scad".to_owned()),
                 legacy_centering: false,
                 parse_only: true,
+                library_paths: Vec::new(),
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_library_paths() {
+        assert_eq!(
+            parse(&["--library-path", "lib", "-I", "more", "model.scad"]),
+            Ok(ParseOutcome::Run(CliArgs {
+                path: Some("model.scad".to_owned()),
+                legacy_centering: false,
+                parse_only: false,
+                library_paths: vec!["lib".to_owned(), "more".to_owned()],
             }))
         );
     }
@@ -164,6 +196,7 @@ mod tests {
                 path: None,
                 legacy_centering: false,
                 parse_only: false,
+                library_paths: Vec::new(),
             }))
         );
     }

@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use brepscad_eval::{EvalError, evaluate, evaluate_file};
+use brepscad_eval::{
+    EvalError, EvaluationOptions, evaluate, evaluate_file, evaluate_file_with_options,
+};
 use brepscad_kernel_api::Mesh;
 use brepscad_kernel_truck::TruckKernel;
 use common::bounds;
@@ -114,6 +116,40 @@ fn use_does_not_import_variables() {
     );
 
     assert_eq!(evaluate_file_extents(&main), [2.0; 3]);
+}
+
+#[test]
+fn angle_bracket_includes_use_library_paths() {
+    let dir = TempDir::new();
+    dir.write("lib/BOSL2/std.scad", "module libbox() { cube(3); }\n");
+    let main = dir.write("main.scad", "include <BOSL2/std.scad>;\nlibbox();\n");
+
+    let mut kernel = TruckKernel::new();
+    let options = EvaluationOptions {
+        tolerance: 0.01,
+        legacy_centering: false,
+        library_paths: vec![dir.path().join("lib")],
+    };
+    let evaluation =
+        evaluate_file_with_options(&main, &mut kernel, options).expect("library path include");
+    assert_eq!(extents(&evaluation.shapes[0].mesh), [3.0; 3]);
+}
+
+#[test]
+fn quoted_includes_do_not_search_library_paths() {
+    let dir = TempDir::new();
+    dir.write("lib/BOSL2/std.scad", "module libbox() { cube(3); }\n");
+    let main = dir.write("main.scad", "include \"BOSL2/std.scad\";\nlibbox();\n");
+
+    let mut kernel = TruckKernel::new();
+    let options = EvaluationOptions {
+        tolerance: 0.01,
+        legacy_centering: false,
+        library_paths: vec![dir.path().join("lib")],
+    };
+    let error = evaluate_file_with_options(&main, &mut kernel, options)
+        .expect_err("quoted include should not use library paths");
+    assert!(matches!(error, EvalError::Source(_)));
 }
 
 #[test]

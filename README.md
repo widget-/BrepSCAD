@@ -72,13 +72,15 @@ cargo run -p brepscad -- path/to/model.scad
 # Parse without evaluating geometry, for syntax checks and corpus runs.
 cargo run -p brepscad -- --parse-only path/to/model.scad
 
+# Add a library directory for angle-bracket include/use paths.
+cargo run -p brepscad -- --library-path lib path/to/model.scad
+
 # Use OpenSCAD's origin-at-corner/base-at-zero placement.
 cargo run -p brepscad -- --legacy-centering path/to/model.scad
 ```
 
-`--parse-only` prints `parse ok` or exits with the parser diagnostics. It is
-used by the pinned corpus check described in
-[`docs/development.md`](docs/development.md#scad-corpus-check).
+Angle-bracket includes also read `OPENSCADPATH` (platform path separator).
+Quoted includes resolve relative to the including file only.
 
 When a file path is given, `include` and `use` paths resolve relative to that
 file. The built-in sample is evaluated from memory and cannot include files.
@@ -109,7 +111,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` parse and render normally, without highlight/background/root-only display. |
 | `let` statement | ✔ | Sequential bindings scoped to the body. |
-| `include` / `use` | ✔ | Quoted or angle-bracket paths; resolved relative to the including file. No separate library search paths. |
+| `include` / `use` | ✔ | Quoted paths resolve relative to the including file; angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
 | `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted; `$fn` selects coarser counts, default 32×16. |
 | `polyhedron` | ✔ | Closed, consistently wound shell with planar faces. |

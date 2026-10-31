@@ -98,9 +98,10 @@ vendor/
   their highlight, background, and root-only presentation semantics are not yet
   implemented.
 - `include` evaluates another source file in place, sharing assignments and
-  definitions. `use` imports only module and function definitions. Paths resolve
-  relative to the including file; cycles and read/parse failures are reported
-  with the file path.
+  definitions. `use` imports only module and function definitions. Quoted paths
+  resolve relative to the including file; angle-bracket paths also search
+  `OPENSCADPATH` and `--library-path` directories. Cycles and read/parse
+  failures are reported with the file path.
 - Lists are heterogeneous and arbitrarily nested: numbers, strings, booleans,
   lists, and `undef` can be mixed. They are the only collection type; matrices
   are lists of lists.
@@ -328,8 +329,6 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - included-file source ranges are not yet mapped back to an editor file
-  - angle-bracket include paths use the same relative lookup; there is no
-    library search path
   - functions are not first-class values; function literals are not parsed
   - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
@@ -384,13 +383,15 @@ For headless UI snapshots, see
 
 A corpus run over BOSL2 and MCAD (109 files) gets past the parser for 95 files;
 the remaining first parse errors are primarily function literals. Full
-evaluation now succeeds on 72 files (all pure definitions), with 4 language
-errors, 10 unresolved library includes, 2 unsupported geometry modules, and 17
-other evaluation errors. The next blockers are library search paths, function
-literals, and the remaining scope semantics.
+evaluation now succeeds on 73 files (all pure definitions), with 13 language
+errors, 2 unsupported geometry modules, and 7 other evaluation errors. Most of
+the language errors are declaration-order failures inside `include`d BOSL2
+files, so the next semantic step is assignment/declaration hoisting and lexical
+scope.
 
 1. **Scope and assignment semantics**
-   - Hoist assignments and use OpenSCAD's last-assignment-wins rule.
+   - Hoist declarations and assignments across included files and blocks.
+   - Use OpenSCAD's last-assignment-wins rule.
    - Resolve normal variables lexically at the definition site; keep `$`
      variables dynamically scoped.
    - Unknown variables and missing arguments already evaluate to `undef`.

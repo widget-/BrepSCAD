@@ -672,6 +672,7 @@ fn evaluate_source(
     let options = EvaluationOptions {
         tolerance: 0.01,
         legacy_centering,
+        library_paths: brepscad_eval::environment_library_paths(),
     };
     let result = match source_path {
         Some(path) => evaluate_source_with_path(source, path, &mut kernel, options, cache),
