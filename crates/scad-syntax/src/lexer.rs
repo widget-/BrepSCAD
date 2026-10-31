@@ -63,6 +63,50 @@ impl<'a> Lexer<'a> {
         });
     }
 
+    fn consume_digits(&mut self) {
+        while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            self.advance();
+        }
+    }
+
+    /// Scans a numeric literal. OpenSCAD also allows identifiers that begin
+    /// with a digit (`3d_tri`, `12ptStar`), so a numeric prefix followed by an
+    /// identifier character is reclassified as an identifier.
+    fn number_or_ident(&mut self, start: usize) {
+        if self.peek() == Some('.') {
+            self.advance();
+            self.consume_digits();
+        } else {
+            self.consume_digits();
+            if self.peek() == Some('.') {
+                self.advance();
+                self.consume_digits();
+            }
+        }
+
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let before_exponent = self.pos;
+            self.advance();
+            if matches!(self.peek(), Some('+' | '-')) {
+                self.advance();
+            }
+            if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                self.consume_digits();
+            } else {
+                self.pos = before_exponent;
+            }
+        }
+
+        if self.peek().is_some_and(is_ident_continue) {
+            while self.peek().is_some_and(is_ident_continue) {
+                self.advance();
+            }
+            self.push(SyntaxKind::IDENT, start);
+        } else {
+            self.push(SyntaxKind::NUMBER, start);
+        }
+    }
+
     fn token(&mut self) {
         let start = self.pos;
         let c = self.peek().expect("run() checks for EOF");
@@ -137,32 +181,18 @@ impl<'a> Lexer<'a> {
             let kind = match &self.input[start..self.pos] {
                 "true" => SyntaxKind::TRUE,
                 "false" => SyntaxKind::FALSE,
+                "undef" => SyntaxKind::UNDEF,
                 _ => SyntaxKind::IDENT,
             };
             self.push(kind, start);
-        } else if c.is_ascii_digit() {
-            self.advance();
-            while let Some(c) = self.peek() {
-                if !c.is_ascii_digit() {
-                    break;
-                }
-                self.advance();
-            }
-            if self.peek() == Some('.')
+        } else if c.is_ascii_digit()
+            || (c == '.'
                 && self.input[self.pos + 1..]
                     .chars()
                     .next()
-                    .is_some_and(|c| c.is_ascii_digit())
-            {
-                self.advance();
-                while let Some(c) = self.peek() {
-                    if !c.is_ascii_digit() {
-                        break;
-                    }
-                    self.advance();
-                }
-            }
-            self.push(SyntaxKind::NUMBER, start);
+                    .is_some_and(|next| next.is_ascii_digit()))
+        {
+            self.number_or_ident(start);
         } else if self.rest().starts_with("==") {
             self.advance();
             self.advance();
@@ -209,6 +239,8 @@ impl<'a> Lexer<'a> {
                 '*' => Some(SyntaxKind::STAR),
                 '/' => Some(SyntaxKind::SLASH),
                 '%' => Some(SyntaxKind::PERCENT),
+                '^' => Some(SyntaxKind::CARET),
+                '#' => Some(SyntaxKind::HASH),
                 _ => None,
             };
             self.advance();

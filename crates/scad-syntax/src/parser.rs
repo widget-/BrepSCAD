@@ -63,13 +63,18 @@ impl<'a> Parser<'a> {
         self.start(SyntaxKind::SOURCE_FILE);
         loop {
             self.eat_trivia();
-            match self.current() {
-                SyntaxKind::EOF => break,
-                SyntaxKind::IDENT => self.statement(),
-                _ => {
-                    self.error("expected a statement");
-                    self.recover_statement();
-                }
+            if self.at(SyntaxKind::EOF) {
+                break;
+            }
+            if self.at(SyntaxKind::SEMICOLON) {
+                self.bump();
+                continue;
+            }
+            if self.starts_statement() {
+                self.statement();
+            } else {
+                self.error("expected a statement");
+                self.recover_statement();
             }
         }
         self.eat_trivia();
@@ -77,6 +82,17 @@ impl<'a> Parser<'a> {
     }
 
     fn statement(&mut self) {
+        if matches!(
+            self.current(),
+            SyntaxKind::STAR | SyntaxKind::BANG | SyntaxKind::HASH | SyntaxKind::PERCENT
+        ) {
+            self.modified_statement();
+            return;
+        }
+        if self.at(SyntaxKind::L_BRACE) {
+            self.block();
+            return;
+        }
         if self.current() == SyntaxKind::IDENT {
             match self.current_text() {
                 "if" => {
@@ -112,6 +128,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn modified_statement(&mut self) {
+        self.start(SyntaxKind::MODIFIER);
+        self.bump();
+        if self.starts_statement() {
+            self.statement();
+        } else {
+            self.error("expected a statement after a modifier");
+            self.recover_statement();
+        }
+        self.finish();
+    }
+
     fn module_declaration(&mut self) {
         self.start(SyntaxKind::MODULE_DECLARATION);
         self.bump();
@@ -127,7 +155,7 @@ impl<'a> Parser<'a> {
         }
         if self.at(SyntaxKind::L_BRACE) {
             self.block();
-        } else if self.at(SyntaxKind::IDENT) {
+        } else if self.starts_statement() {
             self.statement();
         } else {
             self.error("expected a module body");
@@ -195,6 +223,11 @@ impl<'a> Parser<'a> {
             }
             if self.at(SyntaxKind::COMMA) {
                 self.bump();
+                if self.at(SyntaxKind::R_PAREN) {
+                    self.bump();
+                    self.finish();
+                    return true;
+                }
                 continue;
             }
             if self.at(SyntaxKind::R_PAREN) {
@@ -245,7 +278,9 @@ impl<'a> Parser<'a> {
     fn conditional_body(&mut self, keyword: &str) {
         if self.at(SyntaxKind::L_BRACE) {
             self.block();
-        } else if self.at(SyntaxKind::IDENT) {
+        } else if self.at(SyntaxKind::SEMICOLON) {
+            self.bump();
+        } else if self.starts_statement() {
             self.statement();
         } else {
             self.error(format!("expected a statement after {keyword}"));
@@ -269,7 +304,7 @@ impl<'a> Parser<'a> {
         if self.arg_list() {
             if self.at(SyntaxKind::L_BRACE) {
                 self.block();
-            } else if self.at(SyntaxKind::IDENT) {
+            } else if self.starts_statement() {
                 self.eat_trivia();
                 self.statement();
             } else if !self.expect(SyntaxKind::SEMICOLON) {
@@ -295,12 +330,15 @@ impl<'a> Parser<'a> {
                 self.error("unterminated block");
                 break;
             }
-            match self.current() {
-                SyntaxKind::IDENT => self.statement(),
-                _ => {
-                    self.error("expected a statement");
-                    self.recover_statement();
-                }
+            if self.at(SyntaxKind::SEMICOLON) {
+                self.bump();
+                continue;
+            }
+            if self.starts_statement() {
+                self.statement();
+            } else {
+                self.error("expected a statement");
+                self.recover_statement();
             }
         }
         self.block_depth -= 1;
@@ -330,6 +368,11 @@ impl<'a> Parser<'a> {
             }
             if self.at(SyntaxKind::COMMA) {
                 self.bump();
+                if self.at(SyntaxKind::R_PAREN) {
+                    self.bump();
+                    self.finish();
+                    return true;
+                }
                 continue;
             }
             if self.at(SyntaxKind::R_PAREN) {
@@ -428,8 +471,26 @@ impl<'a> Parser<'a> {
             self.finish();
             true
         } else {
-            self.postfix()
+            self.power_expr()
         }
+    }
+
+    fn power_expr(&mut self) -> bool {
+        let checkpoint = self.builder.checkpoint();
+        if !self.postfix() {
+            return false;
+        }
+        if self.at(SyntaxKind::CARET) {
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::BINARY_EXPR.into());
+            self.bump();
+            if !self.unary_expr() {
+                self.finish();
+                return false;
+            }
+            self.finish();
+        }
+        true
     }
 
     fn postfix(&mut self) -> bool {
@@ -437,19 +498,29 @@ impl<'a> Parser<'a> {
         if !self.primary() {
             return false;
         }
-        while self.at(SyntaxKind::L_BRACK) {
-            self.builder
-                .start_node_at(checkpoint, SyntaxKind::INDEX_EXPR.into());
-            self.bump();
-            if !self.expression() {
+        loop {
+            if self.at(SyntaxKind::L_BRACK) {
+                self.builder
+                    .start_node_at(checkpoint, SyntaxKind::INDEX_EXPR.into());
+                self.bump();
+                if !self.expression() {
+                    self.finish();
+                    return false;
+                }
+                if !self.expect(SyntaxKind::R_BRACK) {
+                    self.finish();
+                    return false;
+                }
                 self.finish();
-                return false;
-            }
-            if !self.expect(SyntaxKind::R_BRACK) {
+            } else if self.at(SyntaxKind::DOT) && self.peek(1) == SyntaxKind::IDENT {
+                self.builder
+                    .start_node_at(checkpoint, SyntaxKind::DOT_EXPR.into());
+                self.bump();
+                self.bump();
                 self.finish();
-                return false;
+            } else {
+                break;
             }
-            self.finish();
         }
         true
     }
@@ -460,13 +531,24 @@ impl<'a> Parser<'a> {
                 "let" if self.peek(1) == SyntaxKind::L_PAREN => self.let_expr(),
                 "for" if self.peek(1) == SyntaxKind::L_PAREN => self.for_expr(),
                 "if" if self.peek(1) == SyntaxKind::L_PAREN => self.if_expr(),
+                "echo" if self.peek(1) == SyntaxKind::L_PAREN => {
+                    self.prefixed_expr(SyntaxKind::ECHO_EXPR)
+                }
+                "assert" if self.peek(1) == SyntaxKind::L_PAREN => {
+                    self.prefixed_expr(SyntaxKind::ASSERT_EXPR)
+                }
+                "each" if self.peek_starts_expression(1) => self.each_expr(),
                 _ if self.peek(1) == SyntaxKind::L_PAREN => self.call_expr(),
                 _ => {
                     self.bump();
                     true
                 }
             },
-            SyntaxKind::NUMBER | SyntaxKind::TRUE | SyntaxKind::FALSE | SyntaxKind::STRING => {
+            SyntaxKind::NUMBER
+            | SyntaxKind::TRUE
+            | SyntaxKind::FALSE
+            | SyntaxKind::UNDEF
+            | SyntaxKind::STRING => {
                 self.bump();
                 true
             }
@@ -477,6 +559,32 @@ impl<'a> Parser<'a> {
                 false
             }
         }
+    }
+
+    fn each_expr(&mut self) -> bool {
+        self.start(SyntaxKind::EACH_EXPR);
+        self.bump();
+        if !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
+    }
+
+    fn prefixed_expr(&mut self, kind: SyntaxKind) -> bool {
+        self.start(kind);
+        self.bump();
+        if !self.arg_list() {
+            self.finish();
+            return false;
+        }
+        if self.starts_expression() && !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
     }
 
     fn let_expr(&mut self) -> bool {
@@ -491,6 +599,9 @@ impl<'a> Parser<'a> {
     }
 
     fn for_expr(&mut self) -> bool {
+        if self.for_is_c_style() {
+            return self.c_for_expr();
+        }
         self.start(SyntaxKind::FOR_EXPR);
         self.bump();
         if !self.arg_list() || !self.expression() {
@@ -499,6 +610,75 @@ impl<'a> Parser<'a> {
         }
         self.finish();
         true
+    }
+
+    fn for_is_c_style(&self) -> bool {
+        let mut depth = 0usize;
+        for token in self.tokens[self.pos..]
+            .iter()
+            .filter(|token| !token.kind.is_trivia())
+        {
+            match token.kind {
+                SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_BRACE => depth += 1,
+                SyntaxKind::R_PAREN | SyntaxKind::R_BRACK | SyntaxKind::R_BRACE => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                SyntaxKind::SEMICOLON if depth == 1 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn c_for_expr(&mut self) -> bool {
+        self.start(SyntaxKind::C_FOR_EXPR);
+        self.bump();
+        if !self.expect(SyntaxKind::L_PAREN) {
+            self.finish();
+            return false;
+        }
+        if !self.c_for_clause() || !self.expect(SyntaxKind::SEMICOLON) {
+            self.finish();
+            return false;
+        }
+        if !self.at(SyntaxKind::SEMICOLON) && !self.expression() {
+            self.finish();
+            return false;
+        }
+        if !self.expect(SyntaxKind::SEMICOLON) {
+            self.finish();
+            return false;
+        }
+        if !self.c_for_clause() || !self.expect(SyntaxKind::R_PAREN) || !self.expression() {
+            self.finish();
+            return false;
+        }
+        self.finish();
+        true
+    }
+
+    fn c_for_clause(&mut self) -> bool {
+        loop {
+            if self.at(SyntaxKind::SEMICOLON) || self.at(SyntaxKind::R_PAREN) {
+                return true;
+            }
+            if self.current() == SyntaxKind::IDENT && self.peek(1) == SyntaxKind::EQ {
+                if !self.named_arg() {
+                    return false;
+                }
+            } else {
+                self.error("expected an assignment");
+                return false;
+            }
+            if self.at(SyntaxKind::COMMA) {
+                self.bump();
+                continue;
+            }
+            return true;
+        }
     }
 
     fn if_expr(&mut self) -> bool {
@@ -601,6 +781,11 @@ impl<'a> Parser<'a> {
         loop {
             if self.at(SyntaxKind::COMMA) {
                 self.bump();
+                if self.at(SyntaxKind::R_BRACK) {
+                    self.bump();
+                    self.finish();
+                    return true;
+                }
                 if !self.expression() {
                     self.finish();
                     return false;
@@ -638,6 +823,39 @@ impl<'a> Parser<'a> {
 
     fn at(&self, kind: SyntaxKind) -> bool {
         self.current() == kind
+    }
+
+    fn starts_statement(&self) -> bool {
+        matches!(
+            self.current(),
+            SyntaxKind::IDENT
+                | SyntaxKind::L_BRACE
+                | SyntaxKind::STAR
+                | SyntaxKind::BANG
+                | SyntaxKind::HASH
+                | SyntaxKind::PERCENT
+        )
+    }
+
+    fn starts_expression(&self) -> bool {
+        self.peek_starts_expression(0)
+    }
+
+    fn peek_starts_expression(&self, n: usize) -> bool {
+        matches!(
+            self.peek(n),
+            SyntaxKind::IDENT
+                | SyntaxKind::NUMBER
+                | SyntaxKind::TRUE
+                | SyntaxKind::FALSE
+                | SyntaxKind::UNDEF
+                | SyntaxKind::STRING
+                | SyntaxKind::L_BRACK
+                | SyntaxKind::L_PAREN
+                | SyntaxKind::PLUS
+                | SyntaxKind::MINUS
+                | SyntaxKind::BANG
+        )
     }
 
     fn at_keyword(&self, keyword: &str) -> bool {

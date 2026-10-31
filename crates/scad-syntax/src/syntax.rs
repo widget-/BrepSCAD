@@ -65,6 +65,15 @@ pub enum SyntaxKind {
     DOT,
     INCLUDE,
     USE,
+    CARET,
+    HASH,
+    UNDEF,
+    MODIFIER,
+    ECHO_EXPR,
+    ASSERT_EXPR,
+    EACH_EXPR,
+    DOT_EXPR,
+    C_FOR_EXPR,
     __LAST,
 }
 
@@ -146,6 +155,15 @@ impl Language for ScadLanguage {
             57 => SyntaxKind::DOT,
             58 => SyntaxKind::INCLUDE,
             59 => SyntaxKind::USE,
+            60 => SyntaxKind::CARET,
+            61 => SyntaxKind::HASH,
+            62 => SyntaxKind::UNDEF,
+            63 => SyntaxKind::MODIFIER,
+            64 => SyntaxKind::ECHO_EXPR,
+            65 => SyntaxKind::ASSERT_EXPR,
+            66 => SyntaxKind::EACH_EXPR,
+            67 => SyntaxKind::DOT_EXPR,
+            68 => SyntaxKind::C_FOR_EXPR,
             _ => SyntaxKind::ERROR,
         }
     }
