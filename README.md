@@ -90,12 +90,15 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | Arithmetic, comparisons, logic, ranges, ternary `? :`, `let`, indexing, list comprehensions, and strings. |
+| Expressions | ✔ | Arithmetic including `^`, comparisons, logic, ranges, ternary `? :`, `let`, indexing, dot notation, string indexing, `each`, `undef`, and strings. |
 | Comments and whitespace | ✔ | |
-| `module` declarations | ✔ | Parameters with defaults; `children()` and `$children`; recursive and nested modules. |
+| `module` declarations | ✔ | Parameters with defaults; `children()`, `children(n)`, and `children([...])`; recursive and nested modules. |
 | `function` declarations | ✔ | Positional/named parameters with defaults, recursion, and dynamic scope. |
-| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, and type predicates. No random, `search`, or `lookup` functions. |
-| `for` / `if` | ✔ | |
+| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `is_undef`, `version`, and `version_num`. No random, `search`, or `lookup` functions. |
+| `for` / `if` | ✔ | Includes C-style `for (init; condition; next)` list comprehensions and `each`. |
+| `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
+| Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` parse and render normally, without highlight/background/root-only display. |
+| `let` statement | ✔ | Sequential bindings scoped to the body. |
 | `include` / `use` | ✔ | Quoted or angle-bracket paths; resolved relative to the including file. No separate library search paths. |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
 | `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted; `$fn` selects coarser counts, default 32×16. |

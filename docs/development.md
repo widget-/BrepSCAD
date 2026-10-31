@@ -40,6 +40,22 @@ The script does not need a window manager or a visible desktop. It picks a
 random free display number between `:100` and `:199`, so it can run alongside an
 existing X session.
 
+## SCAD corpus check
+
+To measure real-file compatibility, point the corpus helper at any directory of
+`.scad` files:
+
+```sh
+cargo build -p brepscad
+scripts/check-scad-corpus.sh /path/to/BOSL2 /path/to/MCAD
+```
+
+For each file it runs `target/debug/brepscad`, records the first error, and
+prints totals for parsed files, parse errors, evaluation errors, and timeouts.
+It is a compatibility probe, not a pass/fail test: it exits successfully even
+when individual files fail. Set `BREPSCAD_BIN` to use another binary and
+`CORPUS_TIMEOUT` to change the per-file timeout (default 8 seconds).
+
 ## Toolchain
 
 `shell.nix` provides `rustup`; `rust-toolchain.toml` pins Rust 1.95.0 with

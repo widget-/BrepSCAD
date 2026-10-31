@@ -51,15 +51,19 @@ vendor/
 - `TextEdit` / `apply_edit` with bounds and UTF-8 boundary checks.
 - Supported syntax: top-level assignments, module and function declarations
   with parameters and defaults, module calls, function-call expressions,
-  positional and named arguments, numbers (including negative literals),
-  string literals, identifiers, vectors, booleans, ranges, comments,
-  whitespace.
+  positional and named arguments, numbers (including negative literals,
+  leading-dot forms, and exponents), string literals, identifiers (including
+  digit-leading names), vectors, booleans, `undef`, ranges, comments,
+  whitespace, trailing commas, and empty statements.
 - `include` / `use` statements accept quoted or angle-bracket paths and an
   optional semicolon.
-- Expressions support `+`, `-`, `*`, `/`, `%`, comparisons, `&&`, `||`, `!`,
-  ranges, ternary `? :`, call expressions, postfix indexing, `let`, list
-  comprehensions, unary signs, and parentheses; the tree keeps every token.
+- Expressions support `+`, `-`, `*`, `/`, `%`, `^`, comparisons, `&&`, `||`,
+  `!`, ranges, ternary `? :`, call expressions, postfix indexing, dot notation,
+  `let`, list comprehensions (including C-style `for`), `each`, unary signs, and
+  parentheses; the tree keeps every token.
 - `for` / `if` / `else` statements, including blocks and single-statement bodies.
+- `echo` / `assert` are recognized as both module calls and expression prefixes;
+  `*`, `#`, `%`, and `!` statement modifiers are preserved in the tree.
 - Transform and boolean calls support either a block or a single child module
   call.
 - `module` declarations support block or single-statement bodies; `function`
@@ -77,23 +81,41 @@ vendor/
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
   `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
   `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `is_num`,
-  `is_bool`, `is_list`, and `is_string`.
-- String values support escapes, equality, `len`, and `str` formatting.
+  `is_bool`, `is_list`, `is_string`, `is_undef`, `version`, and
+  `version_num`.
+- `undef` is a value: it is false in conditions, propagates through arithmetic,
+  compares equal to itself, and is detected by `is_undef`. Strings, vectors,
+  and matrices follow OpenSCAD truthiness (empty is false).
+- String values support escapes (including `\x`, `\u`, and `\U`), equality,
+  `len`, character indexing, and `str` formatting.
+- `echo(...)` records messages on `Evaluation::messages`; it can prefix an
+  expression, act as a module statement, and render its children. `assert(...)`
+  takes the same forms and aborts evaluation with `EvalError::Assertion` when
+  its condition is false.
+- `*` disables a modified subtree. `#`, `%`, and `!` evaluate normally for now;
+  their highlight, background, and root-only presentation semantics are not yet
+  implemented.
 - `include` evaluates another source file in place, sharing assignments and
   definitions. `use` imports only module and function definitions. Paths resolve
   relative to the including file; cycles and read/parse failures are reported
   with the file path.
-- Postfix indexing reads vector elements and matrix rows: `v[2]`, `m[1][0]`.
-- `let (a = ..., b = ...) expr` binds sequential locals for one expression.
+- Postfix indexing reads vector elements, matrix rows, and string characters:
+  `v[2]`, `m[1][0]`, `"abc"[1]`; dot notation reads `.x`, `.y`, and `.z`, and
+  unknown members are `undef`.
+- `let (a = ..., b = ...) expr` binds sequential locals for one expression;
+  `let (...) statement` does the same for a module body.
 - List comprehensions support multiple bindings, nesting, `if` filters with
-  optional `else`, and `let`; nested `for` comprehensions flatten, while a
-  vector-valued body becomes a matrix row.
+  optional `else`, `let`, `each`, and C-style `for (init; condition; next)`.
+  Nested `for` comprehensions flatten, while a vector-valued body becomes a
+  matrix row.
 - Module and loop scopes shadow caller variables and restore them on exit.
-  Module and function bodies read caller variables (dynamic scoping, as in
-  OpenSCAD).
-- `children()` renders all call-site children; `children(n)` selects one by
-  index. Children are evaluated in the caller's scope at the transform where
-  `children()` appears. `$children` holds the child count.
+  Module and function bodies currently read caller variables (dynamic scoping).
+  OpenSCAD resolves normal variables lexically at the definition site, so this
+  is a known divergence; `$` variables are dynamic in both.
+- `children()` renders all call-site children; `children(n)` selects one index
+  and `children([...])` selects a range or list of indices. Children are
+  evaluated in the caller's scope at the transform where `children()` appears.
+  `$children` holds the child count.
 - `for` loops over ranges and vectors, with multiple bindings and block or
   single-statement bodies.
 - `if` / `else` with boolean or numeric truthiness.
@@ -116,8 +138,9 @@ vendor/
   `delta` uses miter joins.
 - Positional and named arguments (`size=`, `r=`/`h=`, `v=`, `a=`, `m=`,
   `newsize=`); unknown names are rejected.
-- Arithmetic on numbers and vectors: `+`, `-`, `*`, `/`, `%`, unary signs, and
-  grouping. Division or modulo by zero is an expression error.
+- Arithmetic on numbers and vectors: `+`, `-`, `*`, `/`, `%`, `^`, unary signs,
+  and grouping. Division or modulo by zero is an expression error. `undef`
+  propagates through arithmetic.
 - Nested transforms compose into one matrix before reaching a primitive.
 - Each evaluated top-level shape exposes:
   - its final mesh
@@ -186,7 +209,10 @@ vendor/
   within a block while keeping nested definitions scoped to their enclosing
   module.
 - Module, function, and loop variables use a scope stack. Assignments write to
-  the innermost scope, and lookups fall back outward (dynamic scoping).
+  the innermost scope, and lookups fall back outward (dynamic scoping). This is
+  a known divergence from OpenSCAD for normal variables, which are lexical at
+  the definition site; only `$` variables are dynamic. Resolving the scope
+  model is planned with assignment hoisting.
   Call-site children of a module are evaluated after temporarily removing the
   module's scope, so they see the caller's variables; `$` arguments passed to
   the module are re-applied while children are rendered.
@@ -297,18 +323,22 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - built-in functions omit the random, `search`, and `lookup` families
-  - vectors remain numeric-only; heterogeneous lists and strings inside vectors
-    are not supported
+  - vectors remain numeric-only; heterogeneous lists and strings or `undef`
+    inside vectors are not supported
+  - `undef` cannot appear inside a vector literal
   - included-file source ranges are not yet mapped back to an editor file
   - angle-bracket include paths use the same relative lookup; there is no
     library search path
-  - functions are not first-class values
-  - indexing selects a single element or row; slices and string indexing are not
-    supported
-  - `children(n)` accepts one integer index; vector or range child selection is
-    not supported
+  - functions are not first-class values; function literals are not parsed
+  - unknown variables abort evaluation instead of yielding `undef`
+  - indexing selects a single element or row; range/list slices are not
+    supported (string character indexing is)
+  - `children([...])` accepts a range or list of indices, but nested selection
+    and other child expressions are not supported
   - module bodies return their shapes directly, so a module call does not add a
     group node of its own to the source-shaped tree
+  - `#`, `%`, and `!` parse and evaluate, but do not highlight, ghost, or isolate
+    the modified subtree in the viewer
   - `for` / `if` results used where exactly one child is required (extrusions,
     offset) still error if they emit zero or multiple shapes
   - 2D booleans and offsets are polygonal; circles flatten to sampled profiles
@@ -347,25 +377,41 @@ For headless UI snapshots, see
 
 ## Recommended next steps
 
-1. **Finish the language layer**
+A corpus run over BOSL2 and MCAD (109 files) now gets past the parser for 95
+files; the remaining first parse errors are primarily function literals, with a
+few `for`/`let` edge forms. No library file evaluates end-to-end yet because
+those same libraries use heterogeneous lists, `lookup`/`search`, and scope
+semantics that are not implemented.
+
+1. **Collection value model**
+   - Replace numeric `Vector`/`Matrix` with heterogeneous nested lists.
+   - Allow strings, booleans, `undef`, and deeper nesting inside lists.
+   - Generalise arithmetic, indexing, truthiness, and formatting.
+   - Then add `lookup`, `search`, and `rands`.
+2. **Scope and assignment semantics**
+   - Hoist assignments and use OpenSCAD's last-assignment-wins rule.
+   - Make unassigned identifiers yield `undef` instead of aborting.
+   - Resolve normal variables lexically at the definition site; keep `$`
+     variables dynamically scoped.
+3. **Language finish**
+   - Function literals and first-class functions.
    - Library search paths for angle-bracket includes.
-   - Heterogeneous lists and vector slices.
-   - Remaining built-ins (`search`, `lookup`, `rands`).
-2. **Finish the 2D/extrusion layer**
+   - Remaining parser edge forms from the corpus.
+4. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` twist, scale, and slices.
    - `rotate_extrude` negative-side profiles.
-3. **Native intrinsics**
+5. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-4. **Kernel adapters**
+6. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-5. **Product surface**
+7. **Product surface**
    - Recent-file handling.
    - Export, undo/redo, and session persistence.
-6. **Selection polish**
+8. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 
@@ -374,6 +420,7 @@ For headless UI snapshots, see
 - `docs/status.md` — this file: current capabilities, limitations, and next
   steps.
 - `docs/notes/2026-10-30.md` — first-session snapshot and checkout sync note.
+- `docs/notes/2026-10-31.md` — syntax-compatibility slice and corpus results.
 - `docs/research.md` — prior art, source-first architecture, kernel trade-offs,
   native library fast paths.
 - `docs/kernels.md` — per-operation OCCT/SolidCore/Truck capability matrix.
