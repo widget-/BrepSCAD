@@ -175,6 +175,18 @@ fn each_flattens_inside_for_comprehensions() {
 }
 
 #[test]
+fn each_inside_parentheses_flattens() {
+    assert_eq!(
+        cube_extents(
+            "l = [[1, 2], [3, [4, 5]]];\n\
+             f = [for (a = l) if (is_list(a)) (each a) else a];\n\
+             cube([len(f), len(f[3]), 1]);",
+        ),
+        [4.0, 2.0, 1.0]
+    );
+}
+
+#[test]
 fn c_style_for_comprehensions_thread_assignments() {
     assert_eq!(
         cube_extents(

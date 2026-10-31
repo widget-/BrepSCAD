@@ -8,6 +8,7 @@ use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, T
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
+use crate::hull;
 use crate::model::{EvaluatedShape, Evaluation, Parameter};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
 use crate::parts::{Dimension, Node, collect_parts};
@@ -1090,7 +1091,13 @@ impl<K: Kernel> Evaluator<'_, K> {
             Err(EvalError::BadArguments { module, message })
                 if matches!(
                     module.as_str(),
-                    "translate" | "rotate" | "scale" | "multmatrix" | "mirror"
+                    "translate"
+                        | "rotate"
+                        | "scale"
+                        | "multmatrix"
+                        | "mirror"
+                        | "hull"
+                        | "minkowski"
                 ) && matches!(
                     message.as_str(),
                     "expected at least one child" | "expected a child or block"
@@ -1879,6 +1886,64 @@ impl<K: Kernel> Evaluator<'_, K> {
                     children,
                 })
             }
+            "hull" | "minkowski" => {
+                args.ensure_empty(name.as_str())?;
+                let children = self.with_special_overrides(&args, |evaluator| match block {
+                    Some(block) => evaluator.block(block, parent),
+                    None => {
+                        let child = single_child_statement(&node)
+                            .ok_or_else(|| bad_args(name.as_str(), "expected a child or block"))?;
+                        evaluator.statement(child, parent)
+                    }
+                })?;
+                if children.is_empty() {
+                    return Err(bad_args(name.as_str(), "expected at least one child"));
+                }
+                if children
+                    .iter()
+                    .any(|child| child.dimension != Dimension::ThreeD)
+                {
+                    return Err(bad_args(name.as_str(), "supports only 3D children"));
+                }
+
+                let shape = if name == "hull" {
+                    let mut points = Vec::new();
+                    for child in &children {
+                        let mesh = self.kernel.tessellate(child.shape, self.tolerance)?;
+                        points.extend(mesh.positions);
+                    }
+                    let (points, faces) = hull::convex_hull(&points)
+                        .ok_or_else(|| bad_args("hull", "degenerate hull"))?;
+                    self.kernel
+                        .primitive(Primitive::Polyhedron { points, faces })?
+                } else if children.len() == 1 {
+                    children[0].shape
+                } else {
+                    let mut groups = Vec::new();
+                    for child in &children {
+                        let mesh = self.kernel.tessellate(child.shape, self.tolerance)?;
+                        groups.push(mesh.positions);
+                    }
+                    let points = hull::minkowski_points(&groups)
+                        .ok_or_else(|| bad_args("minkowski", "empty Minkowski sum"))?;
+                    let (points, faces) = hull::convex_hull(&points)
+                        .ok_or_else(|| bad_args("minkowski", "degenerate Minkowski sum"))?;
+                    self.kernel
+                        .primitive(Primitive::Polyhedron { points, faces })?
+                };
+
+                Ok(Node {
+                    shape,
+                    module,
+                    source_range,
+                    parameters,
+                    transform_parameters: None,
+                    world: parent,
+                    dimension: Dimension::ThreeD,
+                    profile: None,
+                    children,
+                })
+            }
             _ => Err(EvalError::UnsupportedModule(name)),
         }
     }
@@ -2084,7 +2149,8 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::INVOKE_EXPR => self.invoke_value(node),
             SyntaxKind::DOT_EXPR => self.dot_value(node),
             kind => Err(EvalError::Expression(format!(
-                "unexpected node in expression: {kind:?}"
+                "unexpected node in expression: {kind:?} [{}]",
+                node.text().to_string().trim()
             ))),
         }
     }
@@ -2683,6 +2749,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let body = comprehension_body(node)?;
                 self.with_let_bindings(&arg_list, |evaluator| evaluator.comprehension_values(&body))
             }
+            SyntaxKind::GROUP => {
+                let inner = group_inner(node)
+                    .ok_or_else(|| EvalError::Expression("empty group".to_owned()))?;
+                self.comprehension_values(&inner)
+            }
             SyntaxKind::EACH_EXPR => {
                 let mut body = None;
                 let mut seen_keyword = false;
@@ -2868,14 +2939,9 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn group_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
-        for element in node.children_with_tokens() {
-            match element.kind() {
-                SyntaxKind::L_PAREN | SyntaxKind::R_PAREN => {}
-                kind if kind.is_trivia() => {}
-                _ => return self.element_value(element),
-            }
-        }
-        Err(EvalError::Expression("empty group".to_owned()))
+        let inner =
+            group_inner(node).ok_or_else(|| EvalError::Expression("empty group".to_owned()))?;
+        self.element_value(inner)
     }
 
     fn expression_after_eq(&mut self, node: &SyntaxNode) -> Result<Option<Value>, EvalError> {
@@ -3302,6 +3368,17 @@ fn format_number(value: f64) -> String {
     }
 }
 
+fn group_inner(node: &SyntaxNode) -> Option<SyntaxElement> {
+    for element in node.children_with_tokens() {
+        match element.kind() {
+            SyntaxKind::L_PAREN | SyntaxKind::R_PAREN => {}
+            kind if kind.is_trivia() => {}
+            _ => return Some(element),
+        }
+    }
+    None
+}
+
 fn is_comprehension(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::FOR_EXPR
@@ -3312,6 +3389,9 @@ fn is_comprehension(node: &SyntaxNode) -> bool {
             .ok()
             .and_then(|body| body.into_node())
             .is_some_and(|body| is_comprehension(&body)),
+        SyntaxKind::GROUP => group_inner(node)
+            .and_then(|inner| inner.into_node())
+            .is_some_and(|inner| is_comprehension(&inner)),
         _ => false,
     }
 }

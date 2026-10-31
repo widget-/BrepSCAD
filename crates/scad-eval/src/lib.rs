@@ -5,6 +5,7 @@
 
 mod cache;
 mod evaluator;
+mod hull;
 mod model;
 mod parameters;
 mod parts;

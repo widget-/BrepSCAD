@@ -26,9 +26,10 @@ fn unknown_identifiers_are_undef() {
 #[test]
 fn reports_unsupported_modules() {
     let mut kernel = TruckKernel::new();
-    let error = evaluate_to_meshes("hull() cube(1);", &mut kernel, 0.01).expect_err("unsupported");
+    let error =
+        evaluate_to_meshes("projection() cube(1);", &mut kernel, 0.01).expect_err("unsupported");
 
-    assert!(matches!(error, EvalError::UnsupportedModule(name) if name == "hull"));
+    assert!(matches!(error, EvalError::UnsupportedModule(name) if name == "projection"));
 }
 
 #[test]

@@ -152,6 +152,8 @@ vendor/
   `convexity`.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`;
   `translate` accepts 2D vectors and pads Z with zero.
+- `hull` and `minkowski` for convex 3D children. Minkowski sums use the convex
+  hull of pairwise vertex sums; 2D and non-convex Minkowski are not supported.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` turns exactly one 2D child into a solid.
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
@@ -376,8 +378,8 @@ For headless UI snapshots, see
     negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
-  - `minkowski` and `hull` are not implemented; BOSL2's rounded `cuboid`
-    reaches `minkowski` before failing
+  - `hull` and `minkowski` support convex 3D children only; 2D hulls and
+    non-convex Minkowski sums are not implemented
   - evaluation stops at 256 nested scopes, so deeply recursive library code
     reports a call-depth error instead of overflowing the stack
 - `color` and `render` are accepted as pass-throughs; color is not rendered.
@@ -418,14 +420,13 @@ kernel, and deeper BOSL2 math/semantics issues.
 “ok” here only means the file evaluated without an error; nearly all are pure
 library files with no top-level geometry. BOSL2’s module surface is now partly
 usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
-`prismoid`, `rect_tube`, and `torus` render through it. Rounded `cuboid`
-reaches the unimplemented `minkowski` operation, so the file-level total is not
-full BOSL2 support.
+`prismoid`, `rect_tube`, and `torus` render through it. `cuboid(chamfer=)` and
+`cuboid(rounding=)` also render; non-convex Minkowski sums remain limited.
 
 1. **Remaining library and kernel gaps**
-   - Implement `minkowski`/`hull` or a BOSL2 rounded-shape path.
    - Improve Truck boolean robustness for the MCAD bitmap/hardware models.
    - Render `color` instead of ignoring it.
+   - Extend `hull`/`minkowski` to 2D and non-convex uses.
    - Treat standalone BOSL2 files that expect `std.scad` as an expected corpus
      category rather than a language gap.
 2. **Keep the pinned corpus green**

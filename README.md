@@ -116,7 +116,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `offset` | ✔ | |
 | `color` | ◐ | Parsed but ignored; color is not rendered. |
 | `render` | ◐ | No effect. |
-| `hull`, `minkowski` | ✖ | |
+| `hull`, `minkowski` | ◐ | Convex 3D children; Minkowski uses the convex hull of pairwise vertex sums. |
 | `import`, `export`, `surface` | ✖ | No file I/O yet. |
 | `projection` | ✖ | |
 
