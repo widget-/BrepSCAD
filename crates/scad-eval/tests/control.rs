@@ -1,6 +1,6 @@
 mod common;
 
-use brepscad_eval::{EvalError, evaluate, evaluate_to_meshes};
+use brepscad_eval::evaluate;
 use brepscad_kernel_truck::TruckKernel;
 use common::bounds;
 
@@ -122,10 +122,14 @@ fn for_and_if_nest() {
 }
 
 #[test]
-fn rejects_invalid_loop_values() {
+fn for_over_scalars_strings_and_undef_matches_open_scad() {
     let mut kernel = TruckKernel::new();
-    let error = evaluate_to_meshes("for (i = 1) cube(1);", &mut kernel, 0.01)
-        .expect_err("scalar loop value");
+    let scalar = evaluate("for (i = 1) cube(1);", &mut kernel, 0.01).expect("scalar loop");
+    assert_eq!(scalar.shapes.len(), 1);
 
-    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "for"));
+    let missing = evaluate("for (i = undef) cube(1);", &mut kernel, 0.01).expect("undef loop");
+    assert!(missing.shapes.is_empty());
+
+    let text = evaluate("for (i = \"ab\") cube(1);", &mut kernel, 0.01).expect("string loop");
+    assert_eq!(text.shapes.len(), 2);
 }

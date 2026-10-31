@@ -221,20 +221,8 @@ fn number_op(op: SyntaxKind, left: f64, right: f64) -> Result<f64, EvalError> {
         SyntaxKind::MINUS => Ok(left - right),
         SyntaxKind::STAR => Ok(left * right),
         SyntaxKind::CARET => Ok(left.powf(right)),
-        SyntaxKind::SLASH => {
-            if right == 0.0 {
-                Err(EvalError::Expression("division by zero".to_owned()))
-            } else {
-                Ok(left / right)
-            }
-        }
-        SyntaxKind::PERCENT => {
-            if right == 0.0 {
-                Err(EvalError::Expression("division by zero".to_owned()))
-            } else {
-                Ok(left % right)
-            }
-        }
+        SyntaxKind::SLASH => Ok(left / right),
+        SyntaxKind::PERCENT => Ok(left % right),
         _ => Err(EvalError::Expression(format!(
             "unsupported operator {op:?}"
         ))),

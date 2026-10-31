@@ -28,6 +28,69 @@ fn exposes_numeric_parameters_for_selection() {
 }
 
 #[test]
+fn per_primitive_center_controls_placement() {
+    let mut kernel = TruckKernel::new();
+
+    let corner_cube = evaluate("cube(2, center = false);", &mut kernel, 0.01).expect("corner cube");
+    let (min, max) = bounds(&corner_cube.shapes[0].mesh);
+    assert!(min[0].abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[0] - 2.0).abs() < 1.0e-6, "max = {max:?}");
+
+    let centered_cube =
+        evaluate("cube(2, center = true);", &mut kernel, 0.01).expect("centered cube");
+    let (min, max) = bounds(&centered_cube.shapes[0].mesh);
+    assert!((min[0] + 1.0).abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[0] - 1.0).abs() < 1.0e-6, "max = {max:?}");
+
+    let base_cylinder = evaluate("cylinder(h = 2, r = 1, center = false);", &mut kernel, 0.01)
+        .expect("base cylinder");
+    let (min, max) = bounds(&base_cylinder.shapes[0].mesh);
+    assert!(min[2].abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 2.0).abs() < 1.0e-6, "max = {max:?}");
+
+    let centered_cylinder = evaluate("cylinder(h = 2, r = 1, center = true);", &mut kernel, 0.01)
+        .expect("centered cylinder");
+    let (min, max) = bounds(&centered_cylinder.shapes[0].mesh);
+    assert!((min[2] + 1.0).abs() < 1.0e-6, "min = {min:?}");
+    assert!((max[2] - 1.0).abs() < 1.0e-6, "max = {max:?}");
+}
+
+#[test]
+fn empty_booleans_produce_no_geometry() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "union() {}\ndifference() {}\nintersection() {}",
+        &mut kernel,
+        0.01,
+    )
+    .expect("empty booleans");
+
+    assert!(evaluation.shapes.is_empty());
+}
+
+#[test]
+fn color_and_render_pass_through_children() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "color(\"red\") cube(2);\nrender() cube(3);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("pass-through modules");
+
+    assert_eq!(evaluation.shapes.len(), 2);
+    let sizes = evaluation
+        .shapes
+        .iter()
+        .map(|shape| {
+            let (min, max) = bounds(&shape.mesh);
+            [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sizes, [[2.0; 3], [3.0; 3]]);
+}
+
+#[test]
 fn exposes_selectable_operand_parts() {
     let source = "size = [2, 2, 2];\ndifference() { cube(size); cylinder(0.5, 4); }\n";
     let mut kernel = TruckKernel::new();

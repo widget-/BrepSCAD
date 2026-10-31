@@ -156,6 +156,14 @@ fn each_flattens_lists_ranges_and_scalars() {
 }
 
 #[test]
+fn each_flattens_a_variable_value() {
+    assert_eq!(
+        cube_extents("v = [1, 2];\nw = [each v];\ncube([len(w), w[0], w[1]]);"),
+        [2.0, 1.0, 2.0]
+    );
+}
+
+#[test]
 fn each_flattens_inside_for_comprehensions() {
     assert_eq!(
         cube_extents(

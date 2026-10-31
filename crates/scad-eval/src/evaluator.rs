@@ -19,6 +19,7 @@ use crate::{EvalError, bad_args};
 const SINGULAR_DETERMINANT: f64 = 1.0e-12;
 const FACETED_MAX: usize = 32;
 const PROFILE_SEGMENTS_MAX: usize = 256;
+const MAX_CALL_DEPTH: usize = 256;
 
 #[derive(Debug, Default)]
 struct Arguments {
@@ -253,6 +254,7 @@ fn evaluate_with_context<K: Kernel>(
         source_dir,
         include_stack,
         messages: Vec::new(),
+        call_depth: 0,
     };
     let roots = evaluator.evaluate_source_tree(&parsed.syntax(), Transform::IDENTITY)?;
     let messages = std::mem::take(&mut evaluator.messages);
@@ -314,6 +316,7 @@ struct Evaluator<'a, K: Kernel> {
     source_dir: Option<PathBuf>,
     include_stack: Vec<PathBuf>,
     messages: Vec<String>,
+    call_depth: usize,
 }
 
 #[derive(Debug)]
@@ -363,11 +366,27 @@ impl<K: Kernel> Evaluator<'_, K> {
             "let" => self.let_call(node, parent),
             "echo" => self.echo_call(node, parent),
             "assert" => self.assert_call(node, parent),
+            "color" | "render" => self.pass_through_call(node, parent),
+            "union" | "difference" | "intersection" if call_children(&node).is_empty() => {
+                Ok(Vec::new())
+            }
             _ => match self.lookup_module(&name) {
                 Some(declaration) => self.user_module_call(node, parent, &name, declaration),
                 None => self.module_call_one(node, parent).map(|node| vec![node]),
             },
         }
+    }
+
+    fn pass_through_call(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        let mut nodes = Vec::new();
+        for statement in call_children(&node) {
+            nodes.extend(self.statement(statement, parent)?);
+        }
+        Ok(nodes)
     }
 
     fn modified_statement(
@@ -681,9 +700,16 @@ impl<K: Kernel> Evaluator<'_, K> {
         env: Rc<Env>,
         f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
     ) -> Result<T, EvalError> {
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(EvalError::Expression(
+                "maximum call depth exceeded".to_owned(),
+            ));
+        }
+        self.call_depth += 1;
         self.scopes.push(env);
         let result = f(self);
         self.scopes.pop();
+        self.call_depth -= 1;
         result
     }
 
@@ -1015,15 +1041,20 @@ impl<K: Kernel> Evaluator<'_, K> {
 
         match name.as_str() {
             "cube" => {
-                args.ensure_known("cube", &["size"])?;
-                if args.positional.len() > 1 {
-                    return Err(bad_args("cube", "expected one argument"));
+                args.ensure_known("cube", &["size", "center"])?;
+                if args.positional.len() > 2 {
+                    return Err(bad_args("cube", "expected size and optional center"));
                 }
                 let size = args
                     .argument("size", 0)
                     .ok_or_else(|| bad_args("cube", "expected size"))?
                     .as_size("cube")?;
-                let local = self.centering_offset([size[0] / 2.0, size[1] / 2.0, size[2] / 2.0]);
+                let center = args
+                    .argument("center", 1)
+                    .map(|value| value.as_boolean("cube"))
+                    .transpose()?;
+                let local =
+                    self.placement_offset([size[0] / 2.0, size[1] / 2.0, size[2] / 2.0], center);
                 let world = parent.compose(local);
                 let shape = self.kernel.primitive(Primitive::Cuboid { size })?;
                 let shape = self.apply_transform(shape, world)?;
@@ -1040,7 +1071,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "cylinder" => {
-                args.ensure_known("cylinder", &["r", "h"])?;
+                args.ensure_known("cylinder", &["r", "h", "center"])?;
                 if args.positional.len() > 2 {
                     return Err(bad_args("cylinder", "expected radius and height"));
                 }
@@ -1052,7 +1083,12 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("h", 1)
                     .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
                     .as_number("cylinder")?;
-                let local = self.centering_offset([0.0, 0.0, height / 2.0]);
+                let center = args
+                    .named
+                    .get("center")
+                    .map(|value| value.as_boolean("cylinder"))
+                    .transpose()?;
+                let local = self.placement_offset([0.0, 0.0, height / 2.0], center);
                 let world = parent.compose(local);
                 let shape = match self.fn_segments(&args)? {
                     Some(segments) => {
@@ -1098,7 +1134,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "polyhedron" => {
-                args.ensure_known("polyhedron", &["points", "faces", "convexity"])?;
+                args.ensure_known("polyhedron", &["points", "faces", "triangles", "convexity"])?;
                 if args.positional.len() > 2 {
                     return Err(bad_args("polyhedron", "expected points and faces"));
                 }
@@ -1108,6 +1144,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .as_points3("polyhedron")?;
                 let faces = args
                     .argument("faces", 1)
+                    .or_else(|| args.named.get("triangles"))
                     .ok_or_else(|| bad_args("polyhedron", "expected faces"))?
                     .as_faces("polyhedron", points.len())?;
                 let shape = self
@@ -1754,10 +1791,15 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn centering_offset(&self, translation: [f64; 3]) -> Transform {
-        if self.legacy_centering {
-            Transform::from_translation(translation)
-        } else {
+        self.placement_offset(translation, None)
+    }
+
+    fn placement_offset(&self, translation: [f64; 3], center: Option<bool>) -> Transform {
+        let centered = center.unwrap_or(!self.legacy_centering);
+        if centered {
             Transform::IDENTITY
+        } else {
+            Transform::from_translation(translation)
         }
     }
 
@@ -2071,11 +2113,16 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn builtin_function(&self, name: &str, args: &Arguments) -> Result<Value, EvalError> {
-        args.ensure_known(name, &[])?;
+        let allowed = match name {
+            "search" => &["num_returns_per_match", "index_col_num"][..],
+            _ => &[][..],
+        };
+        args.ensure_known(name, allowed)?;
 
         match name {
             "abs" | "sign" | "sqrt" | "ln" | "log" | "exp" | "floor" | "ceil" | "round" | "sin"
-            | "cos" | "tan" | "asin" | "acos" | "atan" => {
+            | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
+            | "acosh" | "atanh" => {
                 let value = single_number(name, args)?;
                 let result = match name {
                     "abs" => value.abs(),
@@ -2098,7 +2145,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                     "tan" => value.to_radians().tan(),
                     "asin" => value.asin().to_degrees(),
                     "acos" => value.acos().to_degrees(),
-                    _ => value.atan().to_degrees(),
+                    "atan" => value.atan().to_degrees(),
+                    "sinh" => value.sinh(),
+                    "cosh" => value.cosh(),
+                    "tanh" => value.tanh(),
+                    "asinh" => value.asinh(),
+                    "acosh" => value.acosh(),
+                    _ => value.atanh(),
                 };
                 Ok(Value::Number(result))
             }
@@ -2111,15 +2164,16 @@ impl<K: Kernel> Evaluator<'_, K> {
                 Ok(Value::Number(base.powf(exponent)))
             }
             "min" | "max" => {
-                let values = number_list(name, args)?;
+                let values = match number_list(name, args) {
+                    Ok(values) => values,
+                    Err(_) => return Ok(Value::Undef),
+                };
                 let result = if name == "min" {
                     values.into_iter().reduce(f64::min)
                 } else {
                     values.into_iter().reduce(f64::max)
                 };
-                result
-                    .map(Value::Number)
-                    .ok_or_else(|| bad_args(name, "expected at least one number"))
+                Ok(result.map(Value::Number).unwrap_or(Value::Undef))
             }
             "norm" => {
                 let Value::List(values) = single_value(name, args)? else {
@@ -2215,6 +2269,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             "is_num" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
                 Value::Number(_)
+            ))),
+            "is_nan" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::Number(value) if value.is_nan()
             ))),
             "is_bool" => Ok(Value::Boolean(matches!(
                 single_value(name, args)?,
@@ -2468,9 +2526,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             SyntaxKind::EACH_EXPR => {
                 let mut body = None;
+                let mut seen_keyword = false;
                 for element in node.children_with_tokens() {
                     match element.kind() {
-                        SyntaxKind::IDENT => {}
+                        SyntaxKind::IDENT if !seen_keyword => seen_keyword = true,
                         kind if kind.is_trivia() => {}
                         _ => {
                             body = Some(element);
@@ -2789,18 +2848,16 @@ fn check_transform(transform: Transform) -> Result<(), EvalError> {
     Ok(())
 }
 
-fn loop_values(name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
-    match value {
-        Value::List(values) => Ok(values),
-        Value::String(text) => Ok(text
+fn loop_values(_name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
+    Ok(match value {
+        Value::List(values) => values,
+        Value::String(text) => text
             .chars()
             .map(|character| Value::String(character.to_string()))
-            .collect()),
-        _ => Err(bad_args(
-            "for",
-            format!("loop variable {name} must be a vector or range"),
-        )),
-    }
+            .collect(),
+        Value::Undef => Vec::new(),
+        value => vec![value],
+    })
 }
 
 fn child_index(value: f64) -> Result<usize, EvalError> {
@@ -3096,23 +3153,25 @@ fn search_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
         [target, list, ..] => (target, list),
         _ => return Err(bad_args(name, "expected a match and a list")),
     };
-    let num_returns = args
-        .positional
-        .get(2)
-        .map(|value| value.as_number(name))
-        .transpose()?
-        .unwrap_or(1.0);
+    let num_returns = search_number(
+        name,
+        args.named
+            .get("num_returns_per_match")
+            .or_else(|| args.positional.get(2)),
+        1.0,
+    )?;
     let num_returns = if num_returns <= 0.0 {
         usize::MAX
     } else {
         num_returns as usize
     };
-    let index_col = args
-        .positional
-        .get(3)
-        .map(|value| value.as_number(name))
-        .transpose()?
-        .unwrap_or(0.0);
+    let index_col = search_number(
+        name,
+        args.named
+            .get("index_col_num")
+            .or_else(|| args.positional.get(3)),
+        0.0,
+    )?;
     if index_col < 0.0 || index_col.fract() != 0.0 {
         return Err(bad_args(
             name,
@@ -3172,6 +3231,13 @@ fn search_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
             .into_iter()
             .next()
             .unwrap_or(Value::List(Vec::new())))
+    }
+}
+
+fn search_number(name: &str, value: Option<&Value>, default: f64) -> Result<f64, EvalError> {
+    match value {
+        None | Some(Value::Undef) => Ok(default),
+        Some(value) => value.as_number(name),
     }
 }
 

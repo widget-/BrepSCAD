@@ -106,22 +106,23 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Comments and whitespace | ✔ | |
 | `module` declarations | ✔ | Parameters with defaults; `children()`, `children(n)`, and `children([...])`; recursive and nested modules. Normal variables are lexical at the definition site, while `$` variables are dynamic. |
 | `function` declarations | ✔ | Positional/named parameters with defaults, recursion, lexical capture, and first-class function literals. |
-| Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `lookup`, `search`, `rands`, `is_undef`, `is_function`, `version`, and `version_num`. |
-| `for` / `if` | ✔ | Includes C-style `for (init; condition; next)` list comprehensions and `each`. |
+| Built-in functions | ◐ | Math/trig and hyperbolic functions, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `lookup`, `search`, `rands`, `is_undef`, `is_nan`, `is_function`, `version`, and `version_num`. |
+| `for` / `if` | ✔ | Includes C-style `for (init; condition; next)` list comprehensions, `each`, and OpenSCAD's scalar/string/undef loop behavior. |
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` parse and render normally, without highlight/background/root-only display. |
 | `let` statement | ✔ | Sequential bindings scoped to the body. |
 | `include` / `use` | ✔ | Quoted paths resolve relative to the including file; angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
-| `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted; `$fn` selects coarser counts, default 32×16. |
-| `polyhedron` | ✔ | Closed, consistently wound shell with planar faces. |
+| `cube`, `cylinder`, `sphere` | ✔ | `cube` and `cylinder` accept per-call `center`; `sphere` is faceted; `$fn` selects coarser counts, default 32×16. |
+| `polyhedron` | ✔ | Closed, consistently wound shell with planar faces; `triangles` is accepted as an alias for `faces`. |
 | `square`, `circle`, `polygon` | ✔ | `square`/`circle` centered in XY; `polygon` points used as given. |
 | `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `rotate` vector form only; `resize` `newsize` only, no `auto`. |
 | `linear_extrude` | ◐ | `height` and `center`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
 | `rotate_extrude` | ◐ | Profile must lie at `x >= 0`. |
-| `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. |
+| `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. Zero-child booleans produce no geometry. |
 | `offset` | ✔ | `r`, `delta`, and `chamfer` joins; `$fn` only affects profile sampling. |
-| `color` | ✖ | |
+| `color` | ◐ | Accepted as a pass-through; color is not rendered. |
+| `render` | ◐ | Accepted as a pass-through. |
 | `hull`, `minkowski` | ✖ | |
 | `import`, `export`, `surface` | ✖ | No file I/O yet. |
 | `projection` | ✖ | |

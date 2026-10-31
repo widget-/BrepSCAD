@@ -83,10 +83,11 @@ vendor/
   `is_function` recognizes them. Conditional expressions (`? :`) evaluate only
   the selected branch.
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
-  `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
-  `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `lookup`,
-  `search`, `rands`, `is_num`, `is_bool`, `is_list`, `is_string`, `is_undef`,
-  `is_function`, `version`, and `version_num`.
+  `ceil`, `round`, the degree-based trig functions, the hyperbolic functions,
+  `atan2`, `pow`, `min`, `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`,
+  `ord`, `lookup`, `search`, `rands`, `is_num`, `is_nan`, `is_bool`, `is_list`,
+  `is_string`, `is_undef`, `is_function`, `version`, and `version_num`.
+  `min`/`max` return `undef` for empty or non-numeric inputs.
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
@@ -130,12 +131,15 @@ vendor/
   and `children([...])` selects a range or list of indices. Children are
   evaluated in the caller's scope at the transform where `children()` appears.
   `$children` holds the child count.
-- `for` loops over ranges and vectors, with multiple bindings and block or
-  single-statement bodies.
+- `for` loops over ranges, vectors, strings, scalars, and `undef`, with
+  multiple bindings and block or single-statement bodies. `undef` yields no
+  iterations and scalars yield one, matching OpenSCAD.
 - `if` / `else` with boolean or numeric truthiness.
 - `$fn` switches between faceted and analytic geometry at 33 segments;
   `$fa`/`$fs` only affect 2D profile sampling.
-- `cube`, `cylinder`, `sphere`, `polyhedron`.
+- `cube`, `cylinder`, `sphere`, `polyhedron`; `cube` and `cylinder` accept a
+  per-call `center`, and `polyhedron` accepts `triangles` as an alias for
+  `faces`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude` with optional
   `center`.
 - `rotate_extrude` with optional sweep and start angles.
@@ -360,12 +364,13 @@ For headless UI snapshots, see
   - `$fa`/`$fs` do not affect geometry; they only sample 2D profiles
   - empty 2D boolean or offset results are reported as errors
   - `linear_extrude` supports `height` and `center`; no twist, scale, or slices
-  - `center` is not supported per primitive; OpenSCAD placement is a global
-    evaluation option
   - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
-- No color handling.
+  - evaluation stops at 256 nested scopes, so deeply recursive library code
+    reports a call-depth error instead of overflowing the stack
+- `color` and `render` are accepted as pass-throughs; color is not rendered.
+- Arithmetic division and modulo by zero follow IEEE `inf`/`nan` behavior.
 - `resize` supports a positional `newsize` only; `auto` and named arguments are
   not supported. It asks the kernel for bounds, which are tessellation-derived,
   so it is slower than a matrix-only transform.
@@ -392,17 +397,20 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
-evaluation succeeds on 85 files (all pure definitions), with 3 language errors,
-2 assertion failures, 2 unsupported geometry modules, and 17 other evaluation
-errors. Assignment and declaration hoisting now let included BOSL2 files
-progress to arithmetic and library-behavior gaps such as division by zero,
-missing hyperbolic functions, and per-primitive `center`.
+evaluation succeeds on 88 files (all pure definitions), with 5 kernel boolean
+failures, 7 BOSL2 assertion failures, 3 language errors from standalone library
+files, 1 MCAD test-module error, and 5 other evaluation errors. The arithmetic,
+built-in, primitive, color/render, loop, search, and empty-boolean gaps from the
+previous pass are fixed; the remaining failures are mostly library-context,
+kernel, and deeper BOSL2 math/semantics issues.
 
-1. **Remaining corpus evaluation gaps**
-   - Add missing built-ins such as `acosh` and the other hyperbolic functions.
-   - Support per-primitive `center` on `cube` and `cylinder`.
-   - Decide how to represent empty boolean/union results.
-   - Resolve the remaining BOSL2/MCAD module argument mismatches.
+1. **Remaining library and kernel gaps**
+   - Investigate the BOSL2 example assertion failures and deep-recursion cases.
+   - Improve Truck boolean robustness for the MCAD bitmap/hardware models.
+   - Give `use` its own hidden file scope.
+   - Render `color` instead of ignoring it.
+   - Treat standalone BOSL2 files that expect `std.scad` as an expected corpus
+     category rather than a language gap.
 2. **Keep the pinned corpus green**
    - Run `scripts/fetch-scad-corpus.sh` and then
      `scripts/check-scad-corpus.sh .corpus` after language changes.

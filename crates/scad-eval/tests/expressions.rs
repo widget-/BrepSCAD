@@ -1,8 +1,16 @@
 mod common;
 
-use brepscad_eval::{EvalError, evaluate, evaluate_to_meshes};
+use brepscad_eval::evaluate;
 use brepscad_kernel_truck::TruckKernel;
 use common::bounds;
+
+fn cube_extents(source: &str) -> [f64; 3] {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
+}
 
 #[test]
 fn evaluates_arithmetic_in_arguments() {
@@ -73,10 +81,14 @@ fn logical_operators_short_circuit() {
 }
 
 #[test]
-fn rejects_division_by_zero() {
-    let mut kernel = TruckKernel::new();
-    let error =
-        evaluate_to_meshes("cube([1 / 0, 1, 1]);", &mut kernel, 0.01).expect_err("division");
+fn division_by_zero_follows_ieee_values() {
+    let size = cube_extents(
+        "cube([\n\
+             is_num(1 / 0) ? 1 : 2,\n\
+             (0 / 0 != 0 / 0) ? 1 : 2,\n\
+             is_nan(1 % 0) ? 1 : 2\n\
+         ]);",
+    );
 
-    assert!(matches!(error, EvalError::Expression(_)));
+    assert_eq!(size, [1.0; 3]);
 }

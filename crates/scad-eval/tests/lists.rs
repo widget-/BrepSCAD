@@ -149,6 +149,18 @@ fn search_zero_returns_all_matches() {
 }
 
 #[test]
+fn search_accepts_named_options() {
+    assert_eq!(
+        cube_extents(
+            "r = search(1, [1, 1, 1], num_returns_per_match = 0);\n\
+             s = search([2, 3], [[1, 10], [2, 20], [3, 30]], index_col_num = 0);\n\
+             cube([len(r), s[0][0], s[1][0]]);",
+        ),
+        [3.0, 1.0, 2.0]
+    );
+}
+
+#[test]
 fn rands_is_deterministic_for_a_given_seed() {
     assert_eq!(
         cube_extents(

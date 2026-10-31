@@ -17,6 +17,11 @@ fn cube_extents(source: &str) -> [f64; 3] {
     extents(&evaluation.shapes[0].mesh)
 }
 
+fn source_error(source: &str) -> EvalError {
+    let mut kernel = TruckKernel::new();
+    evaluate(source, &mut kernel, 0.01).expect_err("expected an error")
+}
+
 #[test]
 fn functions_evaluate_and_return_values() {
     assert_eq!(
@@ -47,6 +52,16 @@ fn functions_can_recurse() {
     assert_eq!(
         cube_extents("function fact(n) = n <= 1 ? 1 : n * fact(n - 1);\ncube(fact(5));"),
         [120.0; 3]
+    );
+}
+
+#[test]
+fn recursion_is_bounded() {
+    let error = source_error("function f(n) = f(n + 1);\nx = f(0);\ncube(1);");
+
+    assert!(
+        matches!(&error, EvalError::Expression(message) if message.contains("call depth")),
+        "error = {error:?}"
     );
 }
 
@@ -118,6 +133,20 @@ fn user_functions_shadow_builtins() {
     assert_eq!(
         cube_extents("function sin(x) = x;\ncube(sin(2));"),
         [2.0; 3]
+    );
+}
+
+#[test]
+fn builtin_hyperbolic_functions() {
+    assert_eq!(
+        cube_extents(
+            "cube([\n\
+                 acosh(2) > 1 ? 1 : 2,\n\
+                 abs(cosh(0) - 1) < 1e-12 ? 1 : 2,\n\
+                 is_nan(acosh(0.5)) ? 1 : 2\n\
+             ]);",
+        ),
+        [1.0; 3]
     );
 }
 
@@ -218,9 +247,14 @@ fn too_many_function_arguments_are_rejected() {
 }
 
 #[test]
-fn min_without_arguments_is_an_error() {
-    let mut kernel = TruckKernel::new();
-    let error = evaluate("x = min();\ncube(x);", &mut kernel, 0.01).expect_err("empty min");
-
-    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "min"));
+fn min_and_max_without_numbers_are_undef() {
+    assert_eq!(
+        cube_extents(
+            "a = min();\n\
+             b = max([]);\n\
+             c = min([1, undef]);\n\
+             cube([is_undef(a) ? 1 : 2, is_undef(b) ? 1 : 2, is_undef(c) ? 1 : 2]);",
+        ),
+        [1.0; 3]
+    );
 }
