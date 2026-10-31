@@ -104,7 +104,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Module calls | ✔ | |
 | Expressions | ✔ | Arithmetic including `^`, comparisons, logic, ranges, ternary `? :`, `let`, indexing, dot notation, string indexing, `each`, `undef`, function literals, heterogeneous nested lists, and strings. |
 | Comments and whitespace | ✔ | |
-| `module` declarations | ✔ | Parameters with defaults; `children()`, `children(n)`, and `children([...])`; recursive and nested modules. |
+| `module` declarations | ✔ | Parameters with defaults; `children()`, `children(n)`, and `children([...])`; recursive and nested modules. Normal variables are lexical at the definition site, while `$` variables are dynamic. |
 | `function` declarations | ✔ | Positional/named parameters with defaults, recursion, lexical capture, and first-class function literals. |
 | Built-in functions | ◐ | Math/trig, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `lookup`, `search`, `rands`, `is_undef`, `is_function`, `version`, and `version_num`. |
 | `for` / `if` | ✔ | Includes C-style `for (init; condition; next)` list comprehensions and `each`. |

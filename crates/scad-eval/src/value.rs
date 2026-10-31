@@ -1,20 +1,27 @@
 //! Expression values and arithmetic.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use brepscad_kernel_api::Transform;
-use brepscad_syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
+use brepscad_syntax::{SyntaxElement, SyntaxKind};
 
+use crate::scope::Env;
 use crate::{EvalError, bad_args};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct FunctionValue {
     pub(crate) parameters: Vec<(String, Option<SyntaxElement>)>,
     pub(crate) body: SyntaxElement,
     pub(crate) source: String,
-    pub(crate) variables: HashMap<String, Value>,
-    pub(crate) functions: HashMap<String, SyntaxNode>,
+    pub(crate) env: Rc<Env>,
+}
+
+impl PartialEq for FunctionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.parameters == other.parameters
+            && self.body == other.body
+            && self.source == other.source
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

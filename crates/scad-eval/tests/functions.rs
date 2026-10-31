@@ -51,9 +51,27 @@ fn functions_can_recurse() {
 }
 
 #[test]
-fn functions_read_caller_variables() {
+fn functions_use_their_defining_scope() {
     assert_eq!(
-        cube_extents("width = 2;\nfunction area() = width * width;\ncube(area());"),
+        cube_extents(
+            "width = 2;\n\
+             function area() = width * width;\n\
+             module caller() { width = 10; cube(area()); }\n\
+             caller();",
+        ),
+        [4.0; 3]
+    );
+}
+
+#[test]
+fn function_special_variables_are_dynamic() {
+    assert_eq!(
+        cube_extents(
+            "$fn = 8;\n\
+             function size() = $fn;\n\
+             module caller() { $fn = 4; cube(size()); }\n\
+             caller();",
+        ),
         [4.0; 3]
     );
 }

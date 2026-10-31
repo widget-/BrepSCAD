@@ -12,6 +12,7 @@ use crate::model::{EvaluatedShape, Evaluation, Parameter};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
 use crate::parts::{Dimension, Node, collect_parts};
 use crate::profile;
+use crate::scope::{Declaration, Env};
 use crate::value::{FunctionValue, Value, binary_value, unary_value};
 use crate::{EvalError, bad_args};
 
@@ -244,7 +245,7 @@ fn evaluate_with_context<K: Kernel>(
     };
     let mut evaluator = Evaluator {
         kernel,
-        scopes: vec![Scope::default()],
+        scopes: vec![Env::root()],
         children_stack: Vec::new(),
         tolerance,
         legacy_centering: options.legacy_centering,
@@ -305,7 +306,7 @@ pub fn evaluate_to_meshes_with_options<K: Kernel>(
 
 struct Evaluator<'a, K: Kernel> {
     kernel: &'a mut K,
-    scopes: Vec<Scope>,
+    scopes: Vec<Rc<Env>>,
     children_stack: Vec<ChildrenFrame>,
     tolerance: f64,
     legacy_centering: bool,
@@ -315,18 +316,10 @@ struct Evaluator<'a, K: Kernel> {
     messages: Vec<String>,
 }
 
-#[derive(Debug, Default)]
-struct Scope {
-    variables: HashMap<String, Value>,
-    assignments: HashMap<String, SyntaxNode>,
-    modules: HashMap<String, SyntaxNode>,
-    functions: HashMap<String, SyntaxNode>,
-}
-
 #[derive(Debug)]
 struct ChildrenFrame {
     statements: Vec<SyntaxNode>,
-    caller_depth: usize,
+    caller_env: Rc<Env>,
     special: HashMap<String, Value>,
 }
 
@@ -354,9 +347,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         let value = self
             .expression_after_eq(&node)?
             .ok_or_else(|| EvalError::Parse(format!("missing expression for {name}")))?;
-        let scope = self.scopes.last_mut().expect("root scope");
-        scope.assignments.insert(name.clone(), node);
-        scope.variables.insert(name, value);
+        let env = self.current_env();
+        env.assignments.borrow_mut().insert(name.clone(), node);
+        env.variables.borrow_mut().insert(name, value);
         Ok(())
     }
 
@@ -504,8 +497,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         node: SyntaxNode,
         parent: Transform,
         name: &str,
-        declaration: SyntaxNode,
+        declaration: Declaration,
     ) -> Result<Vec<Node>, EvalError> {
+        let declaration_node = declaration.node.clone();
         let args = match node
             .children()
             .find(|child| child.kind() == SyntaxKind::ARG_LIST)
@@ -513,7 +507,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             Some(arg_list) => self.arg_list(arg_list)?,
             None => Arguments::default(),
         };
-        let parameters = declaration
+        let parameters = declaration_node
             .children()
             .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
             .map(|list| declaration_parameters(&list))
@@ -545,16 +539,17 @@ impl<K: Kernel> Evaluator<'_, K> {
             .find(|child| child.kind() == SyntaxKind::ARG_LIST)
             .map(|arg_list| collect_parameters(&arg_list, &self.assignment_view()))
             .unwrap_or_default();
-        let caller_depth = self.scopes.len();
+        let caller_env = self.current_env();
         let special = args.special.clone();
+        let call_env = Env::child(declaration.env.clone(), caller_env.clone());
 
-        let mut nodes = self.with_scope(Scope::default(), |evaluator| {
+        let mut nodes = self.with_env(call_env.clone(), |evaluator| {
             {
-                let scope = evaluator.scopes.last_mut().expect("module scope");
+                let mut variables = call_env.variables.borrow_mut();
                 for (name, value) in &special {
-                    scope.variables.insert(name.clone(), value.clone());
+                    variables.insert(name.clone(), value.clone());
                 }
-                scope.variables.insert(
+                variables.insert(
                     "$children".to_owned(),
                     Value::Number(statements.len() as f64),
                 );
@@ -568,20 +563,15 @@ impl<K: Kernel> Evaluator<'_, K> {
                         None => Value::Undef,
                     },
                 };
-                evaluator
-                    .scopes
-                    .last_mut()
-                    .expect("module scope")
-                    .variables
-                    .insert(param.clone(), value);
+                call_env.variables.borrow_mut().insert(param.clone(), value);
             }
 
             evaluator.children_stack.push(ChildrenFrame {
                 statements,
-                caller_depth,
+                caller_env,
                 special,
             });
-            let body = declaration
+            let body = declaration_node
                 .children()
                 .find(|child| {
                     matches!(
@@ -618,10 +608,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             return Err(bad_args("children", "expected at most one index"));
         }
         let index = args.positional.first();
-        let (statements, caller_depth, special) = match self.children_stack.last() {
+        let (statements, caller_env, special) = match self.children_stack.last() {
             Some(frame) => (
                 frame.statements.clone(),
-                frame.caller_depth,
+                frame.caller_env.clone(),
                 frame.special.clone(),
             ),
             None => return Err(bad_args("children", "not inside a module")),
@@ -656,14 +646,13 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
         };
 
-        let saved = self.scopes.split_off(caller_depth);
-        let pushed_scope = !special.is_empty();
-        if pushed_scope {
-            self.scopes.push(Scope {
-                variables: special,
-                ..Scope::default()
-            });
+        let mut env = caller_env.clone();
+        if !special.is_empty() {
+            let child = Env::child(caller_env.clone(), caller_env.clone());
+            child.variables.borrow_mut().extend(special);
+            env = child;
         }
+        let saved = std::mem::replace(&mut self.scopes, vec![env]);
         let result = (|| {
             let mut nodes = Vec::new();
             for statement in selected {
@@ -671,10 +660,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             Ok(nodes)
         })();
-        if pushed_scope {
-            self.scopes.pop();
-        }
-        self.scopes.extend(saved);
+        self.scopes = saved;
         result
     }
 
@@ -686,15 +672,27 @@ impl<K: Kernel> Evaluator<'_, K> {
         }
     }
 
-    fn with_scope<T>(
+    fn current_env(&self) -> Rc<Env> {
+        self.scopes.last().expect("scope").clone()
+    }
+
+    fn with_env<T>(
         &mut self,
-        scope: Scope,
+        env: Rc<Env>,
         f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
     ) -> Result<T, EvalError> {
-        self.scopes.push(scope);
+        self.scopes.push(env);
         let result = f(self);
         self.scopes.pop();
         result
+    }
+
+    fn with_child_scope<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
+        let parent = self.current_env();
+        self.with_env(Env::child(parent.clone(), parent), f)
     }
 
     fn register_declarations(&mut self, node: &SyntaxNode) {
@@ -708,27 +706,53 @@ impl<K: Kernel> Evaluator<'_, K> {
             .filter(|child| child.kind() == SyntaxKind::FUNCTION_DECLARATION)
             .filter_map(|child| module_name(&child).map(|name| (name, child)))
             .collect::<Vec<_>>();
-        let scope = self.scopes.last_mut().expect("root scope");
-        for (name, declaration) in modules {
-            scope.modules.insert(name, declaration);
+        let env = self.current_env();
+        {
+            let mut registered = env.modules.borrow_mut();
+            for (name, node) in modules {
+                registered.insert(
+                    name,
+                    Declaration {
+                        node,
+                        env: env.clone(),
+                    },
+                );
+            }
         }
-        for (name, declaration) in functions {
-            scope.functions.insert(name, declaration);
+        {
+            let mut registered = env.functions.borrow_mut();
+            for (name, node) in functions {
+                registered.insert(
+                    name,
+                    Declaration {
+                        node,
+                        env: env.clone(),
+                    },
+                );
+            }
         }
     }
 
-    fn lookup_module(&self, name: &str) -> Option<SyntaxNode> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.modules.get(name).cloned())
+    fn lookup_module(&self, name: &str) -> Option<Declaration> {
+        let mut env = Some(self.current_env());
+        while let Some(current) = env {
+            if let Some(declaration) = current.modules.borrow().get(name) {
+                return Some(declaration.clone());
+            }
+            env = current.lexical_parent.clone();
+        }
+        None
     }
 
-    fn lookup_function(&self, name: &str) -> Option<SyntaxNode> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.functions.get(name).cloned())
+    fn lookup_function(&self, name: &str) -> Option<Declaration> {
+        let mut env = Some(self.current_env());
+        while let Some(current) = env {
+            if let Some(declaration) = current.functions.borrow().get(name) {
+                return Some(declaration.clone());
+            }
+            env = current.lexical_parent.clone();
+        }
+        None
     }
 
     fn evaluate_source_tree(
@@ -849,13 +873,16 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn assignment_view(&self) -> HashMap<String, SyntaxNode> {
         let mut assignments = HashMap::new();
-        for scope in &self.scopes {
+        let mut env = Some(self.current_env());
+        while let Some(current) = env {
             assignments.extend(
-                scope
+                current
                     .assignments
+                    .borrow()
                     .iter()
                     .map(|(name, node)| (name.clone(), node.clone())),
             );
+            env = current.lexical_parent.clone();
         }
         assignments
     }
@@ -941,9 +968,12 @@ impl<K: Kernel> Evaluator<'_, K> {
         let (name, values) = &bindings[index];
         let mut outcome = Ok(());
         for value in values {
-            let mut scope = Scope::default();
-            scope.variables.insert(name.clone(), value.clone());
-            self.scopes.push(scope);
+            let env_parent = self.current_env();
+            let env = Env::child(env_parent.clone(), env_parent);
+            env.variables
+                .borrow_mut()
+                .insert(name.clone(), value.clone());
+            self.scopes.push(env);
             outcome = self.for_bindings(bindings, index + 1, body, parent, nodes);
             self.scopes.pop();
             if outcome.is_err() {
@@ -1829,13 +1859,10 @@ impl<K: Kernel> Evaluator<'_, K> {
         if args.special.is_empty() {
             return f(self);
         }
-        self.with_scope(
-            Scope {
-                variables: args.special.clone(),
-                ..Scope::default()
-            },
-            f,
-        )
+        let parent = self.current_env();
+        let env = Env::child(parent.clone(), parent);
+        env.variables.borrow_mut().extend(args.special.clone());
+        self.with_env(env, f)
     }
 
     fn element_value(&mut self, element: SyntaxElement) -> Result<Value, EvalError> {
@@ -1905,24 +1932,12 @@ impl<K: Kernel> Evaluator<'_, K> {
         let parameters = declaration_parameters(&param_list);
         let body = function_literal_body(node)?;
         let source = node.text().to_string().trim().to_owned();
-        let (variables, functions) = self.capture_scope();
         Ok(Value::Function(Rc::new(FunctionValue {
             parameters,
             body,
             source,
-            variables,
-            functions,
+            env: self.current_env(),
         })))
-    }
-
-    fn capture_scope(&self) -> (HashMap<String, Value>, HashMap<String, SyntaxNode>) {
-        let mut variables = HashMap::new();
-        let mut functions = HashMap::new();
-        for scope in &self.scopes {
-            variables.extend(scope.variables.clone());
-            functions.extend(scope.functions.clone());
-        }
-        (variables, functions)
     }
 
     fn call_function_value(
@@ -1950,16 +1965,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             bindings.insert(param.clone(), value.clone());
         }
 
-        let mut scope = Scope {
-            variables: function.variables.clone(),
-            functions: function.functions.clone(),
-            ..Scope::default()
-        };
-        for (name, value) in &args.special {
-            scope.variables.insert(name.clone(), value.clone());
-        }
+        let call_env = Env::child(function.env.clone(), self.current_env());
+        call_env.variables.borrow_mut().extend(args.special.clone());
 
-        self.with_scope(scope, |evaluator| {
+        self.with_env(call_env.clone(), |evaluator| {
             for (param, default) in &function.parameters {
                 let value = match bindings.get(param) {
                     Some(value) => value.clone(),
@@ -1968,12 +1977,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                         None => Value::Undef,
                     },
                 };
-                evaluator
-                    .scopes
-                    .last_mut()
-                    .expect("function value scope")
-                    .variables
-                    .insert(param.clone(), value);
+                call_env.variables.borrow_mut().insert(param.clone(), value);
             }
             evaluator.element_value(function.body.clone())
         })
@@ -2010,10 +2014,11 @@ impl<K: Kernel> Evaluator<'_, K> {
     fn user_function_call(
         &mut self,
         name: &str,
-        declaration: &SyntaxNode,
+        declaration: &Declaration,
         args: Arguments,
     ) -> Result<Value, EvalError> {
-        let parameters = declaration
+        let declaration_node = &declaration.node;
+        let parameters = declaration_node
             .children()
             .find(|child| child.kind() == SyntaxKind::PARAM_LIST)
             .map(|list| declaration_parameters(&list))
@@ -2039,15 +2044,16 @@ impl<K: Kernel> Evaluator<'_, K> {
             bindings.insert(param.clone(), value.clone());
         }
 
-        let body = function_expression(declaration)
+        let body = function_expression(declaration_node)
             .ok_or_else(|| bad_args(name, "missing function body"))?;
         let special = args.special.clone();
+        let call_env = Env::child(declaration.env.clone(), self.current_env());
 
-        self.with_scope(Scope::default(), |evaluator| {
+        self.with_env(call_env.clone(), |evaluator| {
             {
-                let scope = evaluator.scopes.last_mut().expect("function scope");
+                let mut variables = call_env.variables.borrow_mut();
                 for (name, value) in &special {
-                    scope.variables.insert(name.clone(), value.clone());
+                    variables.insert(name.clone(), value.clone());
                 }
             }
             for (param, default) in &parameters {
@@ -2058,12 +2064,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                         None => Value::Undef,
                     },
                 };
-                evaluator
-                    .scopes
-                    .last_mut()
-                    .expect("function scope")
-                    .variables
-                    .insert(param.clone(), value);
+                call_env.variables.borrow_mut().insert(param.clone(), value);
             }
             evaluator.element_value(body.clone())
         })
@@ -2374,7 +2375,7 @@ impl<K: Kernel> Evaluator<'_, K> {
 
         let body = body.ok_or_else(|| EvalError::Expression("missing for body".to_owned()))?;
         let mut values = Vec::new();
-        self.with_scope(Scope::default(), |evaluator| {
+        self.with_child_scope(|evaluator| {
             for assignment in &init {
                 evaluator.c_for_assignment(assignment)?;
             }
@@ -2410,10 +2411,9 @@ impl<K: Kernel> Evaluator<'_, K> {
         let value = self
             .expression_after_eq(assignment)?
             .ok_or_else(|| EvalError::Parse(format!("missing expression for {name}")))?;
-        self.scopes
-            .last_mut()
-            .expect("for scope")
+        self.current_env()
             .variables
+            .borrow_mut()
             .insert(name, value);
         Ok(())
     }
@@ -2505,9 +2505,12 @@ impl<K: Kernel> Evaluator<'_, K> {
 
         let (name, items) = &bindings[index];
         for value in items {
-            let mut scope = Scope::default();
-            scope.variables.insert(name.clone(), value.clone());
-            self.scopes.push(scope);
+            let env_parent = self.current_env();
+            let env = Env::child(env_parent.clone(), env_parent);
+            env.variables
+                .borrow_mut()
+                .insert(name.clone(), value.clone());
+            self.scopes.push(env);
             let result = self.for_comprehension_values(bindings, index + 1, body, values);
             self.scopes.pop();
             result?;
@@ -2550,7 +2553,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         arg_list: &SyntaxNode,
         f: impl FnOnce(&mut Self) -> Result<T, EvalError>,
     ) -> Result<T, EvalError> {
-        self.with_scope(Scope::default(), |evaluator| {
+        self.with_child_scope(|evaluator| {
             for element in arg_list.children_with_tokens() {
                 match element.kind() {
                     SyntaxKind::L_PAREN | SyntaxKind::R_PAREN | SyntaxKind::COMMA => {}
@@ -2565,10 +2568,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                             EvalError::Parse(format!("missing value for binding {name}"))
                         })?;
                         evaluator
-                            .scopes
-                            .last_mut()
-                            .expect("let scope")
+                            .current_env()
                             .variables
+                            .borrow_mut()
                             .insert(name, value);
                     }
                     _ => {
@@ -2755,10 +2757,19 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn lookup_optional(&self, name: &str) -> Option<Value> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.variables.get(name).cloned())
+        let dynamic = name.starts_with('$');
+        let mut env = Some(self.current_env());
+        while let Some(current) = env {
+            if let Some(value) = current.variables.borrow().get(name) {
+                return Some(value.clone());
+            }
+            env = if dynamic {
+                current.dynamic_parent.clone()
+            } else {
+                current.lexical_parent.clone()
+            };
+        }
+        None
     }
 }
 

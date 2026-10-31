@@ -76,11 +76,12 @@ vendor/
   before its declaration in the same block. Parameters bind positionally or by
   name, defaults can reference earlier parameters, and calls can recurse.
 - User functions: same declaration and binding rules, with expression bodies.
-  Functions can recurse, call other functions, and read caller variables.
-  Function literals (`function(x) ...`) are first-class values: they capture
-  their defining scope, can be passed, returned, stored in lists, and invoked
-  with `f(...)` or chained calls such as `f(2)(3)`. `is_function` recognizes
-  them. Conditional expressions (`? :`) evaluate only the selected branch.
+  Functions can recurse, call other functions, and resolve normal variables in
+  their defining scope. Function literals (`function(x) ...`) are first-class
+  values: they capture their defining scope, can be passed, returned, stored in
+  lists, and invoked with `f(...)` or chained calls such as `f(2)(3)`.
+  `is_function` recognizes them. Conditional expressions (`? :`) evaluate only
+  the selected branch.
 - Built-in functions: `abs`, `sign`, `sqrt`, `ln`, `log`, `exp`, `floor`,
   `ceil`, `round`, the degree-based trig functions, `atan2`, `pow`, `min`,
   `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`, `ord`, `lookup`,
@@ -121,10 +122,10 @@ vendor/
   forward references and self-references yield `undef`, matching OpenSCAD.
 - Module and function declarations are hoisted across `include` boundaries, so
   an included file can use a declaration from a file included later.
-- Module and loop scopes shadow caller variables and restore them on exit.
-  Module and function bodies currently read caller variables (dynamic scoping).
-  OpenSCAD resolves normal variables lexically at the definition site, so this
-  is a known divergence; `$` variables are dynamic in both.
+- Module and function calls use persistent environments. Normal variables and
+  declarations resolve through the lexical parent (the definition site); `$`
+  variables resolve through the dynamic parent chain, matching OpenSCAD.
+  Module and loop scopes shadow and restore their enclosing bindings.
 - `children()` renders all call-site children; `children(n)` selects one index
   and `children([...])` selects a range or list of indices. Children are
   evaluated in the caller's scope at the transform where `children()` appears.
@@ -222,14 +223,13 @@ vendor/
   file or block, then executed in source order. This permits forward references
   within a block while keeping nested definitions scoped to their enclosing
   module.
-- Module, function, and loop variables use a scope stack. Assignments write to
-  the innermost scope, and lookups fall back outward (dynamic scoping). This is
-  a known divergence from OpenSCAD for normal variables, which are lexical at
-  the definition site; only `$` variables are dynamic. Resolving the scope
-  model is planned with assignment hoisting.
-  Call-site children of a module are evaluated after temporarily removing the
-  module's scope, so they see the caller's variables; `$` arguments passed to
-  the module are re-applied while children are rendered.
+- Module, function, and loop bindings use persistent environments. Normal
+  variables and declarations resolve lexically through the environment where
+  the module or function was defined; `$` variables resolve dynamically through
+  the caller chain.
+  Call-site children of a module are evaluated in the caller's environment, so
+  they see caller variables; `$` arguments passed to the module are re-applied
+  while children are rendered.
 - A user module returns its body shapes directly, without an implicit union.
   This matches the top-level behavior and avoids extra booleans; transforms and
   booleans above the call union them when one result is required.
@@ -337,6 +337,9 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - included-file source ranges are not yet mapped back to an editor file
+  - `use` imports declarations into the caller's environment rather than giving
+    the used file its own hidden file scope, so used library modules can see
+    caller variables
   - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
     supported (string character indexing is)
@@ -395,24 +398,19 @@ errors. Assignment and declaration hoisting now let included BOSL2 files
 progress to arithmetic and library-behavior gaps such as division by zero,
 missing hyperbolic functions, and per-primitive `center`.
 
-1. **Lexical scope semantics**
-   - Resolve normal variables lexically at the definition site; keep `$`
-     variables dynamically scoped.
-   - Preserve the current assignment/declaration hoisting rules.
-   - Unknown variables and missing arguments already evaluate to `undef`.
-2. **Remaining corpus evaluation gaps**
+1. **Remaining corpus evaluation gaps**
    - Add missing built-ins such as `acosh` and the other hyperbolic functions.
    - Support per-primitive `center` on `cube` and `cylinder`.
    - Decide how to represent empty boolean/union results.
    - Resolve the remaining BOSL2/MCAD module argument mismatches.
-3. **Keep the pinned corpus green**
+2. **Keep the pinned corpus green**
    - Run `scripts/fetch-scad-corpus.sh` and then
      `scripts/check-scad-corpus.sh .corpus` after language changes.
    - Use parse-only runs for syntax coverage and `--evaluate` to separate
      language errors from geometry and kernel gaps.
    - Refresh `corpus/baseline-parse.tsv` and `corpus/baseline-evaluate.tsv` only
      after intentional compatibility improvements.
-4. **Finish the 2D/extrusion layer**
+3. **Finish the 2D/extrusion layer**4. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` twist, scale, and slices.
    - `rotate_extrude` negative-side profiles.

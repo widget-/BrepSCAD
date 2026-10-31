@@ -9,6 +9,7 @@ mod model;
 mod parameters;
 mod parts;
 mod profile;
+mod scope;
 mod value;
 
 use brepscad_kernel_api::KernelError;

@@ -75,14 +75,51 @@ fn module_assignments_shadow_and_restore_caller_variables() {
 }
 
 #[test]
-fn module_bodies_read_caller_variables() {
+fn module_bodies_use_their_defining_scope() {
     let mut kernel = TruckKernel::new();
     let evaluation = evaluate(
-        "width = 3;\nmodule plate() { cube([width, 1, 1]); }\nplate();",
+        "width = 3;\n\
+         module plate() { cube([width, 1, 1]); }\n\
+         module caller() { width = 5; plate(); }\n\
+         caller();",
         &mut kernel,
         0.01,
     )
-    .expect("dynamic scope");
+    .expect("lexical scope");
+
+    assert_eq!(extents(&evaluation.shapes[0].mesh), [3.0, 1.0, 1.0]);
+}
+
+#[test]
+fn special_variables_are_dynamic() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "$fn = 8;\n\
+         module shape() { cube([$fn, 1, 1]); }\n\
+         module caller() { $fn = 4; shape(); }\n\
+         caller();",
+        &mut kernel,
+        0.01,
+    )
+    .expect("dynamic special variables");
+
+    assert_eq!(extents(&evaluation.shapes[0].mesh), [4.0, 1.0, 1.0]);
+}
+
+#[test]
+fn nested_modules_capture_the_outer_call_scope() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "module outer() {\n\
+             width = 3;\n\
+             module inner() { cube([width, 1, 1]); }\n\
+             inner();\n\
+         }\n\
+         outer();",
+        &mut kernel,
+        0.01,
+    )
+    .expect("nested module scope");
 
     assert_eq!(extents(&evaluation.shapes[0].mesh), [3.0, 1.0, 1.0]);
 }
