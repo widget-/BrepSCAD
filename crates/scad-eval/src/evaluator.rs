@@ -1484,7 +1484,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "linear_extrude" => {
-                args.ensure_known("linear_extrude", &["height", "center"])?;
+                args.ensure_known("linear_extrude", &["height", "center", "convexity"])?;
                 if args.positional.len() > 2 {
                     return Err(bad_args("linear_extrude", "expected height and center"));
                 }
@@ -1540,17 +1540,17 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "rotate_extrude" => {
-                args.ensure_known("rotate_extrude", &["angle", "start"])?;
+                args.ensure_known("rotate_extrude", &["angle", "start", "convexity"])?;
                 if args.positional.len() > 2 {
                     return Err(bad_args("rotate_extrude", "expected an angle and start"));
                 }
                 let angle = match args.argument("angle", 0) {
+                    None | Some(Value::Undef) => 360.0,
                     Some(value) => value.as_number("rotate_extrude")?,
-                    None => 360.0,
                 };
                 let start = match args.argument("start", 1) {
+                    None | Some(Value::Undef) => 0.0,
                     Some(value) => value.as_number("rotate_extrude")?,
-                    None => 0.0,
                 };
                 if !start.is_finite() {
                     return Err(bad_args("rotate_extrude", "start must be finite"));
@@ -1711,7 +1711,17 @@ impl<K: Kernel> Evaluator<'_, K> {
                 args.ensure_known(name.as_str(), &[first])?;
                 let argument = args.one(name.as_str(), first)?;
                 let local = match name.as_str() {
-                    "translate" => Transform::from_translation(argument.as_vector3("translate")?),
+                    "translate" => {
+                        let vector = match argument {
+                            Value::List(values) if values.len() == 2 => [
+                                values[0].as_number("translate")?,
+                                values[1].as_number("translate")?,
+                                0.0,
+                            ],
+                            _ => argument.as_vector3("translate")?,
+                        };
+                        Transform::from_translation(vector)
+                    }
                     "rotate" => {
                         let [x, y, z] = argument.as_vector3("rotate")?;
                         Transform::from_rotation_xyz([

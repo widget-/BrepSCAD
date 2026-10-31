@@ -109,9 +109,9 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `cube`, `cylinder`, `sphere` | ✔ | `cylinder` accepts `h`, `r`/`d`, `r1`/`r2`, `d1`/`d2`, positional `center`, and builds frustums/cones. `sphere` is faceted. |
 | `polyhedron` | ✔ | |
 | `square`, `circle`, `polygon` | ✔ | |
-| `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `rotate` vector form only; `resize` `newsize` only, no `auto`. |
-| `linear_extrude` | ◐ | `height` and `center`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
-| `rotate_extrude` | ◐ | Profile must lie at `x >= 0`. |
+| `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `translate` accepts 2D or 3D vectors; `rotate` vector form only; `resize` `newsize` only, no `auto`. |
+| `linear_extrude` | ◐ | `height`, `center`, and ignored `convexity`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
+| `rotate_extrude` | ◐ | `angle`, `start`, and ignored `convexity`; profile must lie at `x >= 0`. |
 | `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. Zero-child booleans produce no geometry. |
 | `offset` | ✔ | |
 | `color` | ◐ | Parsed but ignored; color is not rendered. |

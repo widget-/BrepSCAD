@@ -147,9 +147,11 @@ vendor/
   builds polyhedral frustums and cones. `polyhedron` accepts `triangles` as an
   alias for `faces`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude` with optional
-  `center`.
-- `rotate_extrude` with optional sweep and start angles.
-- `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`.
+  `center` and ignored `convexity`.
+- `rotate_extrude` with optional sweep and start angles and ignored
+  `convexity`.
+- `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`;
+  `translate` accepts 2D vectors and pads Z with zero.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` turns exactly one 2D child into a solid.
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
@@ -368,8 +370,10 @@ For headless UI snapshots, see
     and there is no curve intersection support
   - `$fa`/`$fs` do not affect geometry; they only sample 2D profiles
   - empty 2D boolean or offset results are reported as errors
-  - `linear_extrude` supports `height` and `center`; no twist, scale, or slices
-  - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
+  - `linear_extrude` supports `height` and `center` and ignores `convexity`;
+    no twist, scale, or slices
+  - `rotate_extrude` requires `x >= 0`, ignores `convexity`, and has no
+    negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
   - `minkowski` and `hull` are not implemented; BOSL2's rounded `cuboid`
@@ -413,9 +417,10 @@ kernel, and deeper BOSL2 math/semantics issues.
 
 “ok” here only means the file evaluated without an error; nearly all are pure
 library files with no top-level geometry. BOSL2’s module surface is now partly
-usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, and `sphere` render
-through it. Rounded `cuboid` reaches the unimplemented `minkowski` operation, so
-the file-level total is not full BOSL2 support.
+usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
+`prismoid`, `rect_tube`, and `torus` render through it. Rounded `cuboid`
+reaches the unimplemented `minkowski` operation, so the file-level total is not
+full BOSL2 support.
 
 1. **Remaining library and kernel gaps**
    - Implement `minkowski`/`hull` or a BOSL2 rounded-shape path.

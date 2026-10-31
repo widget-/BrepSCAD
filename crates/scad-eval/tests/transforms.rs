@@ -262,3 +262,13 @@ fn empty_transforms_emit_no_geometry() {
     let (min, max) = bounds(&evaluation.shapes[0].mesh);
     assert!((max[0] - min[0] - 1.0).abs() < 1e-6);
 }
+#[test]
+fn translate_accepts_two_dimensional_vectors() {
+    let mut kernel = TruckKernel::new();
+    let evaluation =
+        evaluate("translate([1, 2]) cube(1);", &mut kernel, 0.01).expect("2D translate");
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((min[0] - 0.5).abs() < 1e-6);
+    assert!((min[1] - 1.5).abs() < 1e-6);
+    assert!((max[2] - 0.5).abs() < 1e-6);
+}

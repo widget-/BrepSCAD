@@ -329,3 +329,25 @@ fn rejects_empty_2d_boolean_results() {
 
     assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "difference"));
 }
+#[test]
+fn extrusions_accept_convexity() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "rotate_extrude(convexity = 4) translate([2, 0]) circle(r = 1, $fn = 32);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("rotate extrude");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((max[0] - min[0] - 6.0).abs() < 0.1);
+    assert!((max[2] - min[2] - 2.0).abs() < 0.1);
+
+    let evaluation = evaluate(
+        "linear_extrude(height = 1, convexity = 2) square(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("linear extrude");
+    assert_eq!(evaluation.shapes.len(), 1);
+}
