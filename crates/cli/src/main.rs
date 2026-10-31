@@ -1,7 +1,5 @@
 use anyhow::Result;
-use brepscad_eval::{
-    EvaluationOptions, evaluate_file_with_options, evaluate_to_meshes_with_options,
-};
+use brepscad_eval::{EvaluationOptions, evaluate_file_with_options, evaluate_with_options};
 use brepscad_kernel_truck::TruckKernel;
 
 const DEFAULT_SOURCE: &str = include_str!("../../../assets/sample.scad");
@@ -33,14 +31,18 @@ fn main() -> Result<()> {
         legacy_centering: args.legacy_centering,
     };
     let mut kernel = TruckKernel::new();
-    let meshes = match &args.path {
-        Some(path) => evaluate_file_with_options(path, &mut kernel, options)?
-            .shapes
-            .into_iter()
-            .map(|shape| shape.mesh)
-            .collect(),
-        None => evaluate_to_meshes_with_options(DEFAULT_SOURCE, &mut kernel, options)?,
+    let evaluation = match &args.path {
+        Some(path) => evaluate_file_with_options(path, &mut kernel, options)?,
+        None => evaluate_with_options(DEFAULT_SOURCE, &mut kernel, options)?,
     };
+    for message in &evaluation.messages {
+        eprintln!("{message}");
+    }
+    let meshes = evaluation
+        .shapes
+        .into_iter()
+        .map(|shape| shape.mesh)
+        .collect::<Vec<_>>();
 
     println!("meshes: {}", meshes.len());
     for (index, mesh) in meshes.iter().enumerate() {

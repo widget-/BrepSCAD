@@ -12,25 +12,29 @@ pub(crate) enum Value {
     String(String),
     Vector(Vec<f64>),
     Matrix(Vec<Vec<f64>>),
+    Undef,
 }
 
 impl Value {
     pub(crate) fn as_number(&self, module: &str) -> Result<f64, EvalError> {
         match self {
             Self::Number(value) => Ok(*value),
-            Self::Boolean(_) | Self::String(_) | Self::Vector(_) | Self::Matrix(_) => {
-                Err(bad_args(module, "expected a number"))
-            }
+            Self::Boolean(_)
+            | Self::String(_)
+            | Self::Vector(_)
+            | Self::Matrix(_)
+            | Self::Undef => Err(bad_args(module, "expected a number")),
         }
     }
 
-    pub(crate) fn as_boolean(&self, module: &str) -> Result<bool, EvalError> {
+    pub(crate) fn as_boolean(&self, _module: &str) -> Result<bool, EvalError> {
         match self {
             Self::Boolean(value) => Ok(*value),
             Self::Number(value) => Ok(*value != 0.0),
-            Self::String(_) | Self::Vector(_) | Self::Matrix(_) => {
-                Err(bad_args(module, "expected a boolean or number"))
-            }
+            Self::String(value) => Ok(!value.is_empty()),
+            Self::Vector(values) => Ok(!values.is_empty()),
+            Self::Matrix(rows) => Ok(!rows.is_empty()),
+            Self::Undef => Ok(false),
         }
     }
 
@@ -45,9 +49,11 @@ impl Value {
         match self {
             Self::Number(value) => Ok([*value; 3]),
             Self::Vector(values) if values.len() == 3 => Ok([values[0], values[1], values[2]]),
-            Self::Boolean(_) | Self::String(_) | Self::Vector(_) | Self::Matrix(_) => {
-                Err(bad_args(module, "expected a 3-element vector or a scalar"))
-            }
+            Self::Boolean(_)
+            | Self::String(_)
+            | Self::Vector(_)
+            | Self::Matrix(_)
+            | Self::Undef => Err(bad_args(module, "expected a 3-element vector or a scalar")),
         }
     }
 
@@ -152,6 +158,7 @@ fn number_op(op: SyntaxKind, left: f64, right: f64) -> Result<f64, EvalError> {
         SyntaxKind::PLUS => Ok(left + right),
         SyntaxKind::MINUS => Ok(left - right),
         SyntaxKind::STAR => Ok(left * right),
+        SyntaxKind::CARET => Ok(left.powf(right)),
         SyntaxKind::SLASH => {
             if right == 0.0 {
                 Err(EvalError::Expression("division by zero".to_owned()))
@@ -177,6 +184,9 @@ pub(crate) fn binary_value(op: SyntaxKind, left: Value, right: Value) -> Result<
         SyntaxKind::EQEQ => Ok(Value::Boolean(left == right)),
         SyntaxKind::NE => Ok(Value::Boolean(left != right)),
         SyntaxKind::LT | SyntaxKind::LE | SyntaxKind::GT | SyntaxKind::GE => {
+            if matches!(left, Value::Undef) || matches!(right, Value::Undef) {
+                return Ok(Value::Boolean(false));
+            }
             let (Value::Number(left), Value::Number(right)) = (left, right) else {
                 return Err(EvalError::Expression(
                     "comparison requires numbers".to_owned(),
@@ -195,34 +205,39 @@ pub(crate) fn binary_value(op: SyntaxKind, left: Value, right: Value) -> Result<
         SyntaxKind::OR_OR => Ok(Value::Boolean(
             left.as_boolean("||")? || right.as_boolean("||")?,
         )),
-        _ => match (left, right) {
-            (Value::Number(left), Value::Number(right)) => {
-                Ok(Value::Number(number_op(op, left, right)?))
+        _ => {
+            if matches!(left, Value::Undef) || matches!(right, Value::Undef) {
+                return Ok(Value::Undef);
             }
-            (Value::Vector(left), Value::Vector(right)) if left.len() == right.len() => {
-                let values = left
-                    .iter()
-                    .zip(&right)
-                    .map(|(left, right)| number_op(op, *left, *right))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::Vector(values))
+            match (left, right) {
+                (Value::Number(left), Value::Number(right)) => {
+                    Ok(Value::Number(number_op(op, left, right)?))
+                }
+                (Value::Vector(left), Value::Vector(right)) if left.len() == right.len() => {
+                    let values = left
+                        .iter()
+                        .zip(&right)
+                        .map(|(left, right)| number_op(op, *left, *right))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(Value::Vector(values))
+                }
+                (Value::Vector(values), Value::Number(scalar)) => Ok(Value::Vector(
+                    values
+                        .iter()
+                        .map(|value| number_op(op, *value, scalar))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                (Value::Number(scalar), Value::Vector(values)) => Ok(Value::Vector(
+                    values
+                        .iter()
+                        .map(|value| number_op(op, scalar, *value))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                _ => Err(EvalError::Expression(
+                    "unsupported operand types".to_owned(),
+                )),
             }
-            (Value::Vector(values), Value::Number(scalar)) => Ok(Value::Vector(
-                values
-                    .iter()
-                    .map(|value| number_op(op, *value, scalar))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            (Value::Number(scalar), Value::Vector(values)) => Ok(Value::Vector(
-                values
-                    .iter()
-                    .map(|value| number_op(op, scalar, *value))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            _ => Err(EvalError::Expression(
-                "unsupported operand types".to_owned(),
-            )),
-        },
+        }
     }
 }
 
@@ -231,6 +246,7 @@ pub(crate) fn unary_value(op: SyntaxKind, value: Value) -> Result<Value, EvalErr
         (SyntaxKind::PLUS, value) => Ok(value),
         (SyntaxKind::BANG, value) => Ok(Value::Boolean(!value.as_boolean("!")?)),
         (SyntaxKind::MINUS, Value::Number(value)) => Ok(Value::Number(-value)),
+        (SyntaxKind::MINUS, Value::Undef) => Ok(Value::Undef),
         (SyntaxKind::MINUS, Value::Vector(values)) => Ok(Value::Vector(
             values.into_iter().map(|value| -value).collect(),
         )),

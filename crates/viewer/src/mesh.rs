@@ -83,6 +83,7 @@ mod tests {
                     part_index: None,
                 },
             }],
+            messages: Vec::new(),
         };
 
         let mesh = combine_evaluation(&evaluation);

@@ -679,7 +679,13 @@ fn evaluate_source(
     };
     match result {
         Ok(evaluation) => (evaluation, None),
-        Err(error) => (Evaluation { shapes: Vec::new() }, Some(error.to_string())),
+        Err(error) => (
+            Evaluation {
+                shapes: Vec::new(),
+                messages: Vec::new(),
+            },
+            Some(error.to_string()),
+        ),
     }
 }
 

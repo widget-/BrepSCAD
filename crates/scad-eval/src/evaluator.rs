@@ -236,8 +236,11 @@ fn evaluate_with_context<K: Kernel>(
         legacy_centering: options.legacy_centering,
         source_dir,
         include_stack,
+        messages: Vec::new(),
     };
     let roots = evaluator.evaluate_source_tree(&parsed.syntax(), Transform::IDENTITY)?;
+    let messages = std::mem::take(&mut evaluator.messages);
+    drop(evaluator);
 
     let mut shapes = Vec::new();
     for root in roots {
@@ -252,7 +255,7 @@ fn evaluate_with_context<K: Kernel>(
         });
     }
 
-    Ok(Evaluation { shapes })
+    Ok(Evaluation { shapes, messages })
 }
 
 /// Convenience wrapper for callers that only need final meshes.
@@ -292,6 +295,7 @@ struct Evaluator<'a, K: Kernel> {
     legacy_centering: bool,
     source_dir: Option<PathBuf>,
     include_stack: Vec<PathBuf>,
+    messages: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -321,6 +325,8 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::INCLUDE => self.include_file(node, parent, false),
             SyntaxKind::USE => self.include_file(node, parent, true),
             SyntaxKind::MODULE_CALL => self.module_call(node, parent),
+            SyntaxKind::MODIFIER => self.modified_statement(node, parent),
+            SyntaxKind::BLOCK => self.block(node, parent),
             _ => Ok(Vec::new()),
         }
     }
@@ -344,10 +350,144 @@ impl<K: Kernel> Evaluator<'_, K> {
             "for" => self.for_call(node, parent),
             "if" => self.if_call(node, parent),
             "children" => self.children_call(node, parent),
+            "let" => self.let_call(node, parent),
+            "echo" => self.echo_call(node, parent),
+            "assert" => self.assert_call(node, parent),
             _ => match self.lookup_module(&name) {
                 Some(declaration) => self.user_module_call(node, parent, &name, declaration),
                 None => self.module_call_one(node, parent).map(|node| vec![node]),
             },
+        }
+    }
+
+    fn modified_statement(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        let modifier = node
+            .children_with_tokens()
+            .find_map(|element| element.into_token())
+            .map(|token| token.kind());
+        if modifier == Some(SyntaxKind::STAR) {
+            return Ok(Vec::new());
+        }
+        match node.children().next() {
+            Some(child) => self.statement(child, parent),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn let_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        let arg_list = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+            .ok_or_else(|| bad_args("let", "missing bindings"))?;
+        let body = node
+            .children()
+            .find(|child| child.kind() != SyntaxKind::ARG_LIST)
+            .ok_or_else(|| bad_args("let", "missing body"))?;
+        self.with_let_bindings(&arg_list, |evaluator| evaluator.module_body(body, parent))
+    }
+
+    fn echo_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        let args = self.arg_list_for(&node)?;
+        self.messages.push(echo_message(&args));
+        self.call_children(node, parent)
+    }
+
+    fn assert_call(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
+        let args = self.arg_list_for(&node)?;
+        check_assertion(&args)?;
+        self.call_children(node, parent)
+    }
+
+    fn call_children(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        let mut nodes = Vec::new();
+        for child in node
+            .children()
+            .filter(|child| child.kind() != SyntaxKind::ARG_LIST)
+        {
+            nodes.extend(self.statement(child, parent)?);
+        }
+        Ok(nodes)
+    }
+
+    fn arg_list_for(&mut self, node: &SyntaxNode) -> Result<Arguments, EvalError> {
+        match node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ARG_LIST)
+        {
+            Some(arg_list) => self.arg_list(arg_list),
+            None => Ok(Arguments::default()),
+        }
+    }
+
+    fn prefixed_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let args = self.arg_list_for(node)?;
+        if node.kind() == SyntaxKind::ECHO_EXPR {
+            self.messages.push(echo_message(&args));
+        } else {
+            check_assertion(&args)?;
+        }
+
+        let mut body = None;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::IDENT | SyntaxKind::ARG_LIST => {}
+                kind if kind.is_trivia() => {}
+                _ => {
+                    body = Some(element);
+                    break;
+                }
+            }
+        }
+        match body {
+            Some(body) => self.element_value(body),
+            None => Ok(Value::Undef),
+        }
+    }
+
+    fn dot_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut base = None;
+        let mut member = None;
+        let mut after_dot = false;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::DOT => after_dot = true,
+                kind if kind.is_trivia() => {}
+                _ if after_dot => {
+                    member = element.into_token().map(|token| token.text().to_owned());
+                }
+                _ => base = Some(element),
+            }
+        }
+
+        let base = self.element_value(
+            base.ok_or_else(|| EvalError::Expression("missing dotted value".to_owned()))?,
+        )?;
+        let index = match member.as_deref() {
+            Some("x") => 0,
+            Some("y") => 1,
+            Some("z") => 2,
+            _ => return Ok(Value::Undef),
+        };
+        match base {
+            Value::Vector(values) => Ok(values
+                .get(index)
+                .copied()
+                .map(Value::Number)
+                .unwrap_or(Value::Undef)),
+            Value::Matrix(rows) => Ok(rows
+                .get(index)
+                .cloned()
+                .map(Value::Vector)
+                .unwrap_or(Value::Undef)),
+            _ => Ok(Value::Undef),
         }
     }
 
@@ -471,12 +611,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         if args.positional.len() > 1 {
             return Err(bad_args("children", "expected at most one index"));
         }
-        let index = args
-            .positional
-            .first()
-            .map(|value| value.as_number("children"))
-            .transpose()?;
-
+        let index = args.positional.first();
         let (statements, caller_depth, special) = match self.children_stack.last() {
             Some(frame) => (
                 frame.statements.clone(),
@@ -488,15 +623,30 @@ impl<K: Kernel> Evaluator<'_, K> {
 
         let selected = match index {
             None => statements,
-            Some(index) => {
-                if index < 0.0 || index.fract() != 0.0 {
-                    return Err(bad_args("children", "index must be a non-negative integer"));
-                }
+            Some(Value::Number(index)) => {
+                let index = child_index(*index)?;
                 statements
                     .into_iter()
-                    .nth(index as usize)
+                    .nth(index)
                     .map(|statement| vec![statement])
                     .ok_or_else(|| bad_args("children", format!("no child at index {index}")))?
+            }
+            Some(Value::Vector(indices)) => {
+                let mut selected = Vec::new();
+                for index in indices {
+                    let index = child_index(*index)?;
+                    let statement = statements.get(index).cloned().ok_or_else(|| {
+                        bad_args("children", format!("no child at index {index}"))
+                    })?;
+                    selected.push(statement);
+                }
+                selected
+            }
+            Some(_) => {
+                return Err(bad_args(
+                    "children",
+                    "index must be a number or a list of numbers",
+                ));
             }
         };
 
@@ -1645,6 +1795,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 SyntaxKind::NUMBER => Ok(Value::Number(parse_number(token.text())?)),
                 SyntaxKind::TRUE => Ok(Value::Boolean(true)),
                 SyntaxKind::FALSE => Ok(Value::Boolean(false)),
+                SyntaxKind::UNDEF => Ok(Value::Undef),
                 SyntaxKind::IDENT => self.lookup(token.text()),
                 SyntaxKind::STRING => Ok(Value::String(parse_string_literal(token.text()))),
                 kind => Err(EvalError::Expression(format!(
@@ -1666,7 +1817,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::CONDITIONAL_EXPR => self.conditional_value(node),
             SyntaxKind::INDEX_EXPR => self.index_value(node),
             SyntaxKind::FOR_EXPR | SyntaxKind::IF_EXPR => self.sequence_value(node),
+            SyntaxKind::C_FOR_EXPR => self.c_for_value(node),
             SyntaxKind::LET_EXPR => self.let_value(node),
+            SyntaxKind::ECHO_EXPR | SyntaxKind::ASSERT_EXPR => self.prefixed_value(node),
+            SyntaxKind::DOT_EXPR => self.dot_value(node),
             kind => Err(EvalError::Expression(format!(
                 "unexpected node in expression: {kind:?}"
             ))),
@@ -1881,6 +2035,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                 single_value(name, args)?,
                 Value::String(_)
             ))),
+            "is_undef" => Ok(Value::Boolean(matches!(
+                single_value(name, args)?,
+                Value::Undef
+            ))),
+            "version" => {
+                args.ensure_empty(name)?;
+                Ok(Value::Vector(vec![2021.0, 1.0]))
+            }
+            "version_num" => {
+                args.ensure_empty(name)?;
+                Ok(Value::Number(20_210_100.0))
+            }
             _ => Err(EvalError::UnknownFunction(name.to_owned())),
         }
     }
@@ -1966,14 +2132,103 @@ impl<K: Kernel> Evaluator<'_, K> {
                 .cloned()
                 .map(Value::Vector)
                 .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
+            Value::String(text) => text
+                .chars()
+                .nth(index)
+                .map(|character| Value::String(character.to_string()))
+                .ok_or_else(|| EvalError::Expression(format!("index {index} is out of range"))),
             _ => Err(EvalError::Expression(
-                "only vectors and matrices can be indexed".to_owned(),
+                "only vectors, matrices, and strings can be indexed".to_owned(),
             )),
         }
     }
 
     fn sequence_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
         values_to_value(self.comprehension_values(&NodeOrToken::Node(node.clone()))?)
+    }
+
+    fn c_for_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
+        let mut stage = 0;
+        let mut init = Vec::new();
+        let mut condition = None;
+        let mut next = Vec::new();
+        let mut body = None;
+        for element in node.children_with_tokens() {
+            match element.kind() {
+                SyntaxKind::SEMICOLON => {
+                    stage += 1;
+                    continue;
+                }
+                SyntaxKind::L_PAREN | SyntaxKind::R_PAREN | SyntaxKind::COMMA => continue,
+                kind if kind.is_trivia() => continue,
+                _ => {}
+            }
+            match stage {
+                0 => {
+                    if let NodeOrToken::Node(child) = element {
+                        if child.kind() == SyntaxKind::NAMED_ARG {
+                            init.push(child);
+                        }
+                    }
+                }
+                1 => condition = Some(element),
+                2 => {
+                    if element.kind() == SyntaxKind::NAMED_ARG {
+                        if let NodeOrToken::Node(child) = element {
+                            next.push(child);
+                        }
+                    } else if body.is_none() {
+                        body = Some(element);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let body = body.ok_or_else(|| EvalError::Expression("missing for body".to_owned()))?;
+        let mut values = Vec::new();
+        self.with_scope(Scope::default(), |evaluator| {
+            for assignment in &init {
+                evaluator.c_for_assignment(assignment)?;
+            }
+            let mut iterations = 0usize;
+            loop {
+                if let Some(condition) = &condition {
+                    if !evaluator
+                        .element_value(condition.clone())?
+                        .as_boolean("for")?
+                    {
+                        break;
+                    }
+                }
+                values.extend(evaluator.comprehension_values(&body)?);
+                for assignment in &next {
+                    evaluator.c_for_assignment(assignment)?;
+                }
+                iterations += 1;
+                if iterations > 100_000 {
+                    return Err(EvalError::Expression(
+                        "for loop exceeded 100000 iterations".to_owned(),
+                    ));
+                }
+            }
+            Ok(())
+        })?;
+        values_to_value(values)
+    }
+
+    fn c_for_assignment(&mut self, assignment: &SyntaxNode) -> Result<(), EvalError> {
+        let name = first_ident(assignment)
+            .ok_or_else(|| EvalError::Parse("missing assignment name".to_owned()))?;
+        let value = self
+            .expression_after_eq(assignment)?
+            .ok_or_else(|| EvalError::Parse(format!("missing expression for {name}")))?;
+        self.scopes
+            .last_mut()
+            .expect("for scope")
+            .variables
+            .insert(name, value);
+        Ok(())
     }
 
     fn let_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
@@ -2023,6 +2278,27 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let arg_list = comprehension_arguments(node)?;
                 let body = comprehension_body(node)?;
                 self.with_let_bindings(&arg_list, |evaluator| evaluator.comprehension_values(&body))
+            }
+            SyntaxKind::EACH_EXPR => {
+                let mut body = None;
+                for element in node.children_with_tokens() {
+                    match element.kind() {
+                        SyntaxKind::IDENT => {}
+                        kind if kind.is_trivia() => {}
+                        _ => {
+                            body = Some(element);
+                            break;
+                        }
+                    }
+                }
+                let body =
+                    body.ok_or_else(|| EvalError::Expression("each needs a value".to_owned()))?;
+                let value = self.element_value(body)?;
+                Ok(each_values(value))
+            }
+            SyntaxKind::C_FOR_EXPR => {
+                let value = self.c_for_value(node)?;
+                Ok(each_values(value))
             }
             _ => Ok(vec![self.node_value(node)?]),
         }
@@ -2130,6 +2406,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 | SyntaxKind::STAR
                 | SyntaxKind::SLASH
                 | SyntaxKind::PERCENT
+                | SyntaxKind::CARET
                 | SyntaxKind::EQEQ
                 | SyntaxKind::NE
                 | SyntaxKind::LT
@@ -2223,7 +2500,13 @@ impl<K: Kernel> Evaluator<'_, K> {
                 kind if kind.is_trivia() => {}
                 _ => {
                     if let NodeOrToken::Node(child) = &element {
-                        if matches!(child.kind(), SyntaxKind::FOR_EXPR | SyntaxKind::IF_EXPR) {
+                        if matches!(
+                            child.kind(),
+                            SyntaxKind::FOR_EXPR
+                                | SyntaxKind::IF_EXPR
+                                | SyntaxKind::EACH_EXPR
+                                | SyntaxKind::C_FOR_EXPR
+                        ) {
                             for value in self.comprehension_values(&element)? {
                                 push_sequence_value(value, &mut numbers, &mut rows)?;
                             }
@@ -2328,6 +2611,59 @@ fn loop_values(name: &str, value: Value) -> Result<Vec<Value>, EvalError> {
     }
 }
 
+fn child_index(value: f64) -> Result<usize, EvalError> {
+    if value < 0.0 || value.fract() != 0.0 {
+        return Err(bad_args("children", "index must be a non-negative integer"));
+    }
+    Ok(value as usize)
+}
+
+fn each_values(value: Value) -> Vec<Value> {
+    match value {
+        Value::Vector(values) => values.into_iter().map(Value::Number).collect(),
+        Value::Matrix(rows) => rows.into_iter().map(Value::Vector).collect(),
+        Value::String(text) => text
+            .chars()
+            .map(|character| Value::String(character.to_string()))
+            .collect(),
+        value => vec![value],
+    }
+}
+
+fn echo_message(args: &Arguments) -> String {
+    let mut parts = args
+        .positional
+        .iter()
+        .map(format_echo_value)
+        .collect::<Vec<_>>();
+    for name in &args.named_order {
+        if let Some(value) = args.named.get(name) {
+            parts.push(format!("{name} = {}", format_echo_value(value)));
+        }
+    }
+    format!("ECHO: {}", parts.join(", "))
+}
+
+fn check_assertion(args: &Arguments) -> Result<(), EvalError> {
+    let condition = args
+        .positional
+        .first()
+        .ok_or_else(|| bad_args("assert", "expected a condition"))?;
+    if condition.as_boolean("assert")? {
+        return Ok(());
+    }
+    let message = if args.positional.len() > 1 {
+        args.positional[1..]
+            .iter()
+            .map(format_echo_value)
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        "assertion failed".to_owned()
+    };
+    Err(EvalError::Assertion(message))
+}
+
 fn function_expression(node: &SyntaxNode) -> Option<SyntaxElement> {
     let mut after_eq = false;
     for element in node.children_with_tokens() {
@@ -2389,6 +2725,30 @@ fn parse_string_literal(text: &str) -> String {
             Some('r') => result.push('\r'),
             Some('"') => result.push('"'),
             Some('\\') => result.push('\\'),
+            Some('x') => match hex_escape(&mut characters, 2) {
+                Some('\0') => result.push(' '),
+                Some(character) => result.push(character),
+                None => {
+                    result.push('\\');
+                    result.push('x');
+                }
+            },
+            Some('u') => match hex_escape(&mut characters, 4) {
+                Some('\0') => result.push(' '),
+                Some(character) => result.push(character),
+                None => {
+                    result.push('\\');
+                    result.push('u');
+                }
+            },
+            Some('U') => match hex_escape(&mut characters, 8) {
+                Some('\0') => result.push(' '),
+                Some(character) => result.push(character),
+                None => {
+                    result.push('\\');
+                    result.push('U');
+                }
+            },
             Some(other) => {
                 result.push('\\');
                 result.push(other);
@@ -2399,11 +2759,22 @@ fn parse_string_literal(text: &str) -> String {
     result
 }
 
+fn hex_escape(characters: &mut std::str::Chars<'_>, digits: usize) -> Option<char> {
+    let mut probe = characters.clone();
+    let mut value = 0u32;
+    for _ in 0..digits {
+        value = value * 16 + probe.next()?.to_digit(16)?;
+    }
+    *characters = probe;
+    char::from_u32(value)
+}
+
 fn format_value(value: &Value) -> String {
     match value {
         Value::Number(value) => format_number(*value),
         Value::Boolean(value) => value.to_string(),
         Value::String(value) => value.clone(),
+        Value::Undef => "undef".to_owned(),
         Value::Vector(values) => format!(
             "[{}]",
             values
@@ -2419,6 +2790,39 @@ fn format_value(value: &Value) -> String {
                     "[{}]",
                     row.iter()
                         .map(|value| format_number(*value))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn format_echo_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => {
+            let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{escaped}\"")
+        }
+        Value::Number(value) => format_number(*value),
+        Value::Boolean(value) => value.to_string(),
+        Value::Undef => "undef".to_owned(),
+        Value::Vector(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| format_echo_value(&Value::Number(*value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Matrix(rows) => format!(
+            "[{}]",
+            rows.iter()
+                .map(|row| format!(
+                    "[{}]",
+                    row.iter()
+                        .map(|value| format_echo_value(&Value::Number(*value)))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))
@@ -2490,6 +2894,11 @@ fn push_sequence_value(
         Value::Matrix(_) => {
             return Err(EvalError::Expression(
                 "vectors support at most two levels".to_owned(),
+            ));
+        }
+        Value::Undef => {
+            return Err(EvalError::Expression(
+                "vectors cannot contain undef".to_owned(),
             ));
         }
     }

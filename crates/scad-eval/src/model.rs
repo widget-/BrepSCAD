@@ -8,6 +8,8 @@ use brepscad_kernel_api::Mesh;
 #[derive(Debug, Clone)]
 pub struct Evaluation {
     pub shapes: Vec<EvaluatedShape>,
+    /// Messages collected from `echo(...)`, in evaluation order.
+    pub messages: Vec<String>,
 }
 
 /// One top-level shape, its final mesh, and its selectable operands.
