@@ -79,6 +79,14 @@ fn function_literals_are_lexical_not_dynamic() {
 }
 
 #[test]
+fn function_literals_see_hoisted_assignment_values() {
+    assert_eq!(
+        cube_extents("a = 10;\nf = function(x) x + a;\na = 20;\ncube(f(1));"),
+        [21.0; 3]
+    );
+}
+
+#[test]
 fn function_literals_can_recurse() {
     assert_eq!(
         cube_extents("f = function(n) n <= 1 ? 1 : n * f(n - 1);\ncube(f(5));"),

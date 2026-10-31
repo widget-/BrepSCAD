@@ -337,8 +337,6 @@ For headless UI snapshots, see
 
 - Parser/evaluator subset is small:
   - included-file source ranges are not yet mapped back to an editor file
-  - function literals capture variables at creation; later sequential
-    reassignment is not reflected until assignment hoisting is implemented
   - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
     supported (string character indexing is)
