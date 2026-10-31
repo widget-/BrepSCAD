@@ -247,3 +247,18 @@ fn evaluates_a_named_multmatrix() {
     let (min, _) = bounds(&evaluation.shapes[0].mesh);
     assert!((min[0] - 4.0).abs() < 1e-6, "min_x = {}", min[0]);
 }
+
+#[test]
+fn empty_transforms_emit_no_geometry() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "translate([1, 0, 0]);\nmultmatrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]);\ncube(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("empty transforms");
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((max[0] - min[0] - 1.0).abs() < 1e-6);
+}

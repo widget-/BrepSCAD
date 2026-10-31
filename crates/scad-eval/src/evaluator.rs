@@ -387,7 +387,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 self.call_stack.push(name.clone());
                 let result = match self.lookup_module(&name) {
                     Some(declaration) => self.user_module_call(node, parent, &name, declaration),
-                    None => self.module_call_one(node, parent).map(|node| vec![node]),
+                    None => self.module_call_one_nodes(node, parent),
                 };
                 self.call_stack.pop();
                 result
@@ -1077,6 +1077,29 @@ impl<K: Kernel> Evaluator<'_, K> {
             self.block(body, parent)
         } else {
             self.statement(body, parent)
+        }
+    }
+
+    fn module_call_one_nodes(
+        &mut self,
+        node: SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Node>, EvalError> {
+        match self.module_call_one(node, parent) {
+            Ok(node) => Ok(vec![node]),
+            Err(EvalError::BadArguments { module, message })
+                if matches!(
+                    module.as_str(),
+                    "translate" | "rotate" | "scale" | "multmatrix" | "mirror"
+                ) && matches!(
+                    message.as_str(),
+                    "expected at least one child" | "expected a child or block"
+                ) =>
+            {
+                // OpenSCAD treats an empty transform as an empty subtree.
+                Ok(Vec::new())
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -2331,13 +2354,28 @@ impl<K: Kernel> Evaluator<'_, K> {
                 Ok(Value::String(text))
             }
             "chr" => {
-                let value = single_number(name, args)?;
-                if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
-                    return Err(bad_args(name, "code point must be a non-negative integer"));
+                let value = single_value(name, args)?;
+                let convert = |code: f64| -> Result<char, EvalError> {
+                    if !code.is_finite() || code < 0.0 || code.fract() != 0.0 {
+                        return Err(bad_args(name, "code point must be a non-negative integer"));
+                    }
+                    char::from_u32(code as u32)
+                        .ok_or_else(|| bad_args(name, "invalid Unicode code point"))
+                };
+                match value {
+                    Value::Number(code) => Ok(Value::String(convert(*code)?.to_string())),
+                    Value::List(values) => {
+                        let mut text = String::new();
+                        for value in values {
+                            let Value::Number(code) = value else {
+                                return Err(bad_args(name, "code points must be numbers"));
+                            };
+                            text.push(convert(*code)?);
+                        }
+                        Ok(Value::String(text))
+                    }
+                    _ => Err(bad_args(name, "expected a number or list of numbers")),
                 }
-                char::from_u32(value as u32)
-                    .map(|character| Value::String(character.to_string()))
-                    .ok_or_else(|| bad_args(name, "invalid Unicode code point"))
             }
             "ord" => {
                 let text = single_value(name, args)?.as_string(name)?;

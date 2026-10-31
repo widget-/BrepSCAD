@@ -99,7 +99,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Comments and whitespace | ✔ | |
 | `module` declarations | ✔ | |
 | `function` declarations | ✔ | |
-| Built-in functions | ◐ | Math/trig and hyperbolic functions, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `lookup`, `search`, `rands`, `is_undef`, `is_nan`, `is_function`, `version`, and `version_num`. |
+| Built-in functions | ◐ | Math/trig and hyperbolic functions, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord` (`chr` accepts code-point lists), type predicates, `lookup`, `search`, `rands`, `is_undef`, `is_nan`, `is_function`, `version`, and `version_num`. |
 | `for` / `if` | ✔ | |
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` are currently parsed but ignored. |

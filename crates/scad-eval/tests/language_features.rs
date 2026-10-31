@@ -308,3 +308,11 @@ fn assert_and_echo_prefixes_can_return_bare_identifiers() {
         [2.0; 3]
     );
 }
+
+#[test]
+fn chr_accepts_code_point_lists() {
+    assert_eq!(
+        cube_extents("s = chr([72, 105]); cube([len(s), ord(s[0]) - 64, 1]);"),
+        [2.0, 8.0, 1.0]
+    );
+}

@@ -87,7 +87,8 @@ vendor/
   `atan2`, `pow`, `min`, `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`,
   `ord`, `lookup`, `search`, `rands`, `is_num`, `is_nan`, `is_bool`, `is_list`,
   `is_string`, `is_undef`, `is_function`, `version`, and `version_num`.
-  `min`/`max` return `undef` for empty or non-numeric inputs.
+  `chr` accepts a number or a list of code points. `min`/`max` return `undef`
+  for empty or non-numeric inputs.
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
