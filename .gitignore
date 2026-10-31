@@ -2,6 +2,9 @@
 /target/
 **/*.rs.bk
 
+# Downloaded SCAD corpus checkouts
+/.corpus/
+
 # Generated model exports
 *.stl
 *.3mf

@@ -395,21 +395,28 @@ blockers are scope semantics, function literals, and library search paths.
    - Function literals and first-class functions.
    - Library search paths for angle-bracket includes.
    - Remaining parser edge forms from the corpus.
-3. **Finish the 2D/extrusion layer**
+3. **Keep the pinned corpus green**
+   - Run `scripts/fetch-scad-corpus.sh` and then
+     `scripts/check-scad-corpus.sh .corpus` after language changes.
+   - Use parse-only runs for syntax coverage and `--evaluate` to separate
+     language errors from geometry and kernel gaps.
+   - Refresh `corpus/baseline-parse.tsv` and `corpus/baseline-evaluate.tsv` only
+     after intentional compatibility improvements.
+4. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` twist, scale, and slices.
    - `rotate_extrude` negative-side profiles.
-4. **Native intrinsics**
+5. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-5. **Kernel adapters**
+6. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-6. **Product surface**
+7. **Product surface**
    - Recent-file handling.
    - Export, undo/redo, and session persistence.
-7. **Selection polish**
+8. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 

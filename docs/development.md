@@ -42,19 +42,39 @@ existing X session.
 
 ## SCAD corpus check
 
-To measure real-file compatibility, point the corpus helper at any directory of
-`.scad` files:
+Real-file compatibility is measured against pinned BOSL2 and MCAD checkouts.
+The revisions live in [`corpus/revisions.tsv`](../corpus/revisions.tsv); the
+checkouts are fetched into `.corpus/`, which is ignored by git because MCAD is
+LGPL-2.1 and is not vendored.
 
 ```sh
+scripts/fetch-scad-corpus.sh
 cargo build -p brepscad
-scripts/check-scad-corpus.sh /path/to/BOSL2 /path/to/MCAD
+scripts/check-scad-corpus.sh .corpus
 ```
 
-For each file it runs `target/debug/brepscad`, records the first error, and
-prints totals for parsed files, parse errors, evaluation errors, and timeouts.
-It is a compatibility probe, not a pass/fail test: it exits successfully even
-when individual files fail. Set `BREPSCAD_BIN` to use another binary and
-`CORPUS_TIMEOUT` to change the per-file timeout (default 8 seconds).
+Parse-only mode is the default and is the language-syntax signal. It runs
+`brepscad --parse-only` on every `.scad` file and reports parser coverage
+without invoking geometry. Use `--evaluate` to run the full evaluator and
+separate language errors from missing geometry modules and kernel failures:
+
+```sh
+scripts/check-scad-corpus.sh --evaluate .corpus
+```
+
+Both modes can write checkable snapshots:
+
+```sh
+scripts/check-scad-corpus.sh --parse-only --write-baseline corpus/baseline-parse.tsv .corpus
+scripts/check-scad-corpus.sh --parse-only --baseline corpus/baseline-parse.tsv .corpus
+scripts/check-scad-corpus.sh --evaluate --write-baseline corpus/baseline-evaluate.tsv .corpus
+scripts/check-scad-corpus.sh --evaluate --baseline corpus/baseline-evaluate.tsv .corpus
+```
+
+A baseline run exits non-zero on regressions, new files, or missing files.
+`--results FILE` writes a per-file `PATH<TAB>STATUS<TAB>ERROR` table, and
+`--verbose` prints every non-ok result. Set `BREPSCAD_BIN` to use another
+binary and `CORPUS_TIMEOUT` to change the per-file timeout (default 8 seconds).
 
 ## Toolchain
 
