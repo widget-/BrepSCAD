@@ -30,11 +30,11 @@ vendor/
   truck-shapeops/ patched Truck boolean crate (see vendor/README.md)
 ```
 
-The planned backend crates (`kernel-occt`, `kernel-solidcore`) are not created yet; the viewer currently combines UI and rendering in one crate.
+Additional backend crates (`kernel-occt`, `kernel-solidcore`) are planned for the future.
 
 ## Development
 
-A `shell.nix` provides `rustup` and native build essentials. `rust-toolchain.toml` pins Rust 1.95.0 with clippy, rustfmt, and rust-analyzer; the first shell downloads that toolchain.
+A `shell.nix` provides `rustup` and native build essentials: Rust 1.95.0 with clippy, rustfmt, and rust-analyzer.
 
 ### Nix / NixOS
 
@@ -51,18 +51,11 @@ nix-shell --run 'cargo run -p brepscad'
 
 ### Everything else
 
-With a Rust toolchain installed:
-
-```sh
-cargo run -p brepscad
-cargo test --workspace
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-```
+Same as above, but you must install a Rust toolchain yourself.
 
 ## CLI Usage
 
-The CLI is mainly for evaluation and debugging. It prints the number
+The CLI currently is mainly for evaluation and debugging. It prints the number
 of top-level meshes and the triangle/vertex counts for each mesh:
 
 ```sh
@@ -102,27 +95,27 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | ----------- | -------- | ------- |
 | Top-level assignments | ✔ | |
 | Module calls | ✔ | |
-| Expressions | ✔ | Arithmetic including `^`, comparisons, logic, ranges, ternary `? :`, `let`, indexing, dot notation, string indexing, `each`, `undef`, function literals, heterogeneous nested lists, and strings. |
+| Expressions | ✔ | Arithmetic , comparisons, logic, ranges, ternary , `let`, indexing, dot notation, string indexing, `each`, `undef`, function literals, heterogeneous nested lists, and strings. |
 | Comments and whitespace | ✔ | |
-| `module` declarations | ✔ | Parameters with defaults; `children()`, `children(n)`, and `children([...])`; recursive and nested modules. Normal variables are lexical at the definition site, while `$` variables are dynamic. |
-| `function` declarations | ✔ | Positional/named parameters with defaults, recursion, lexical capture, and first-class function literals. |
+| `module` declarations | ✔ | |
+| `function` declarations | ✔ | |
 | Built-in functions | ◐ | Math/trig and hyperbolic functions, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord`, type predicates, `lookup`, `search`, `rands`, `is_undef`, `is_nan`, `is_function`, `version`, and `version_num`. |
-| `for` / `if` | ✔ | Includes C-style `for (init; condition; next)` list comprehensions, `each`, and OpenSCAD's scalar/string/undef loop behavior. |
+| `for` / `if` | ✔ | |
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
-| Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` parse and render normally, without highlight/background/root-only display. |
-| `let` statement | ✔ | Sequential bindings scoped to the body. |
-| `include` / `use` | ✔ | Quoted paths resolve relative to the including file; angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. |
+| Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` are currently parsed but ignored. |
+| `let` statement | ✔ | |
+| `include` / `use` | ✔ | Angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. |
 | `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
-| `cube`, `cylinder`, `sphere` | ✔ | `cube` and `cylinder` accept per-call `center`; `sphere` is faceted; `$fn` selects coarser counts, default 32×16. |
-| `polyhedron` | ✔ | Closed, consistently wound shell with planar faces; `triangles` is accepted as an alias for `faces`. |
-| `square`, `circle`, `polygon` | ✔ | `square`/`circle` centered in XY; `polygon` points used as given. |
+| `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted |
+| `polyhedron` | ✔ | |
+| `square`, `circle`, `polygon` | ✔ | |
 | `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `rotate` vector form only; `resize` `newsize` only, no `auto`. |
 | `linear_extrude` | ◐ | `height` and `center`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
 | `rotate_extrude` | ◐ | Profile must lie at `x >= 0`. |
 | `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. Zero-child booleans produce no geometry. |
-| `offset` | ✔ | `r`, `delta`, and `chamfer` joins; `$fn` only affects profile sampling. |
-| `color` | ◐ | Accepted as a pass-through; color is not rendered. |
-| `render` | ◐ | Accepted as a pass-through. |
+| `offset` | ✔ | |
+| `color` | ◐ | Parsed but ignored; color is not rendered. |
+| `render` | ◐ | No effect. |
 | `hull`, `minkowski` | ✖ | |
 | `import`, `export`, `surface` | ✖ | No file I/O yet. |
 | `projection` | ✖ | |
@@ -140,25 +133,20 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Source editor | ✔ | In-memory basic textbox. |
 | Source tree | ✔ | Groups and selectable leaf primitives. |
 | UI parameter editing | ◐ | Numeric parameters only. |
-| Background evaluation | ✔ | Worker thread; queued requests and stale-result rejection; spinner while running. |
-| Legacy OpenSCAD centering | ✔ | CLI `--legacy-centering` or the viewer checkbox. |
+| Background evaluation | ✔ | |
 | Preview-based selection | ✔ | |
 | 2D profile CSG | ✔ | Via `clipper2-rust`. |
 | Alternate kernels | ✖ | Truck only; OCCT and SolidCore are candidates. |
-| File open/save | ✔ | Native Open/Save dialogs; Ctrl+S saves, Ctrl+Shift+S saves as; includes resolve relative to the open file. |
+| File open/save | ✔ | Permanent buttons for now |
 | Export | ✖ | |
 | Undo/redo | ✖ | |
-| Persistence | ✖ | Source text is in memory only; no project/session persistence. |
+| Persistence | ✖ | |
 
 ## GUI
 
 ```sh
 cargo run -p brepscad-viewer
 ```
-
-Use the File row to open or save a `.scad` file with the native file dialog;
-Ctrl+S saves and Ctrl+Shift+S saves as. Evaluation uses the editor text, so
-unsaved edits are evaluated, and includes resolve relative to the open file.
 
 ## Documentation
 
@@ -175,7 +163,7 @@ BrepSCAD depends on several third-party libraries. Of note:
 
 - Truck is MIT/Apache-2.0 dual-licensed.
 - The vendored `truck-shapeops` crate is Apache-2.0; its license and patch notes are in [`vendor/`](vendor/README.md).
-- clipper2-rust is BSL-1.0, the same license as Clipper2.
+- clipper2-rust is BSL-1.0, the same as Clipper2.
 
 Planned backends:
 

@@ -404,6 +404,11 @@ built-in, primitive, color/render, loop, search, and empty-boolean gaps from the
 previous pass are fixed; the remaining failures are mostly library-context,
 kernel, and deeper BOSL2 math/semantics issues.
 
+“ok” here only means the file evaluated without an error; nearly all are pure
+library files with no top-level geometry. It does not mean BOSL2’s module
+surface works. BOSL2 shadows built-ins such as `cube` and `cylinder`, and
+`include <BOSL2/std.scad>; cube(10);` currently trips a BOSL2 assertion.
+
 1. **Remaining library and kernel gaps**
    - Investigate the BOSL2 example assertion failures and deep-recursion cases.
    - Improve Truck boolean robustness for the MCAD bitmap/hardware models.
