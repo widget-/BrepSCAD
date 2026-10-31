@@ -266,7 +266,7 @@ fn rejects_3d_children_in_extrusions() {
 
 #[test]
 fn extrudes_a_2d_boolean_with_a_hole() {
-    let source = "linear_extrude(2) difference() { square([4, 4]); circle(r = 1); }";
+    let source = "linear_extrude(2) difference() { square([4, 4]); circle(r = 1, $fn = 64); }";
     let mut kernel = TruckKernel::new();
     let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
 

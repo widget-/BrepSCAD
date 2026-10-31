@@ -99,7 +99,7 @@ fn legacy_linear_extrusion_center_override() {
 
 #[test]
 fn legacy_centering_evaluates_the_default_sample() {
-    let source = "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    translate([0.2, 0, 0]) cylinder(0.5, 4);\n}\n";
+    let source = "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    translate([0.2, 0, 0]) cylinder(h=4, r=0.5);\n}\n";
     let evaluation = evaluate(source, true);
 
     assert_eq!(evaluation.shapes.len(), 1);

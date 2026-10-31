@@ -136,11 +136,14 @@ vendor/
   multiple bindings and block or single-statement bodies. `undef` yields no
   iterations and scalars yield one, matching OpenSCAD.
 - `if` / `else` with boolean or numeric truthiness.
-- `$fn` switches between faceted and analytic geometry at 33 segments;
-  `$fa`/`$fs` only affect 2D profile sampling.
+- `$fn` switches between faceted and analytic geometry at 33 segments.
+  `$fa=12`, `$fs=2`, `$fn=0`, `$t=0`, `$preview=false`, and `PI` are initialized
+  to OpenSCAD defaults; `$fa`/`$fs` only affect 2D profile sampling.
 - `cube`, `cylinder`, `sphere`, `polyhedron`; `cube` and `cylinder` accept a
-  per-call `center`, and `polyhedron` accepts `triangles` as an alias for
-  `faces`.
+  per-call `center`. `cylinder` accepts OpenSCAD's positional
+  `(h, r1, r2, center)` order and `r`/`d`/`r1`/`r2`/`d1`/`d2` aliases, and
+  builds polyhedral frustums and cones. `polyhedron` accepts `triangles` as an
+  alias for `faces`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude` with optional
   `center`.
 - `rotate_extrude` with optional sweep and start angles.
@@ -367,6 +370,8 @@ For headless UI snapshots, see
   - `rotate_extrude` requires `x >= 0` and has no negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
+  - `minkowski` and `hull` are not implemented; BOSL2's rounded `cuboid`
+    reaches `minkowski` before failing
   - evaluation stops at 256 nested scopes, so deeply recursive library code
     reports a call-depth error instead of overflowing the stack
 - `color` and `render` are accepted as pass-throughs; color is not rendered.
@@ -406,12 +411,12 @@ kernel, and deeper BOSL2 math/semantics issues.
 
 “ok” here only means the file evaluated without an error; nearly all are pure
 library files with no top-level geometry. BOSL2’s module surface is now partly
-usable: `std.scad` loads, and `cube`/`cuboid` render through it. `cylinder` and
-rounded `cuboid` still hit evaluator or geometry gaps, so the file-level total
-is not full BOSL2 support.
+usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, and `sphere` render
+through it. Rounded `cuboid` reaches the unimplemented `minkowski` operation, so
+the file-level total is not full BOSL2 support.
 
 1. **Remaining library and kernel gaps**
-   - Fix BOSL2 `cylinder` radius handling and the rounded-`cuboid` path.
+   - Implement `minkowski`/`hull` or a BOSL2 rounded-shape path.
    - Improve Truck boolean robustness for the MCAD bitmap/hardware models.
    - Render `color` instead of ignoring it.
    - Treat standalone BOSL2 files that expect `std.scad` as an expected corpus

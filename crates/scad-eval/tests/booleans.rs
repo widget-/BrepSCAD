@@ -6,7 +6,8 @@ use common::bounds;
 
 #[test]
 fn evaluates_a_cube_with_a_hole() {
-    let source = "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    cylinder(0.5, 4);\n}\n";
+    let source =
+        "size = [2, 2, 2];\ndifference() {\n    cube(size);\n    cylinder(h=4, r=0.5);\n}\n";
     let mut kernel = TruckKernel::new();
     let meshes = evaluate_to_meshes(source, &mut kernel, 0.01).expect("evaluate");
 
@@ -16,8 +17,7 @@ fn evaluates_a_cube_with_a_hole() {
 
 #[test]
 fn exposes_a_source_shaped_tree() {
-    let source =
-        "difference() {\n    cube([2, 2, 2]);\n    translate([0.2, 0, 0]) cylinder(0.5, 4);\n}\n";
+    let source = "difference() {\n    cube([2, 2, 2]);\n    translate([0.2, 0, 0]) cylinder(h=4, r=0.5);\n}\n";
     let mut kernel = TruckKernel::new();
     let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
     let shape = &evaluation.shapes[0];

@@ -105,8 +105,8 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` are currently parsed but ignored. |
 | `let` statement | ✔ | |
 | `include` / `use` | ✔ | Angle-bracket paths also search `OPENSCADPATH` and `--library-path` directories. `use` imports declarations from the used file's hidden scope. |
-| `$fn`, `$fa`, `$fs` | ◐ | `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
-| `cube`, `cylinder`, `sphere` | ✔ | `sphere` is faceted |
+| `$fn`, `$fa`, `$fs` | ◐ | OpenSCAD defaults `$fn=0`, `$fa=12`, `$fs=2`; `PI` is available. `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
+| `cube`, `cylinder`, `sphere` | ✔ | `cylinder` accepts `h`, `r`/`d`, `r1`/`r2`, `d1`/`d2`, positional `center`, and builds frustums/cones. `sphere` is faceted. |
 | `polyhedron` | ✔ | |
 | `square`, `circle`, `polygon` | ✔ | |
 | `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `rotate` vector form only; `resize` `newsize` only, no `auto`. |

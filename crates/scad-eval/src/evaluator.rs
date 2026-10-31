@@ -246,7 +246,18 @@ fn evaluate_with_context<K: Kernel>(
     };
     let mut evaluator = Evaluator {
         kernel,
-        scopes: vec![Env::root()],
+        scopes: vec![{
+            let root = Env::root();
+            let mut variables = root.variables.borrow_mut();
+            variables.insert("$fa".to_owned(), Value::Number(12.0));
+            variables.insert("$fs".to_owned(), Value::Number(2.0));
+            variables.insert("$fn".to_owned(), Value::Number(0.0));
+            variables.insert("$t".to_owned(), Value::Number(0.0));
+            variables.insert("$preview".to_owned(), Value::Boolean(false));
+            variables.insert("PI".to_owned(), Value::Number(std::f64::consts::PI));
+            drop(variables);
+            root
+        }],
         children_stack: Vec::new(),
         tolerance,
         legacy_centering: options.legacy_centering,
@@ -372,10 +383,15 @@ impl<K: Kernel> Evaluator<'_, K> {
             "union" | "difference" | "intersection" if call_children(&node).is_empty() => {
                 Ok(Vec::new())
             }
-            _ => match self.lookup_module(&name) {
-                Some(declaration) => self.user_module_call(node, parent, &name, declaration),
-                None => self.module_call_one(node, parent).map(|node| vec![node]),
-            },
+            _ => {
+                self.call_stack.push(name.clone());
+                let result = match self.lookup_module(&name) {
+                    Some(declaration) => self.user_module_call(node, parent, &name, declaration),
+                    None => self.module_call_one(node, parent).map(|node| vec![node]),
+                };
+                self.call_stack.pop();
+                result
+            }
         }
     }
 
@@ -466,16 +482,28 @@ impl<K: Kernel> Evaluator<'_, K> {
             check_assertion(&args).map_err(|error| self.assertion_error(node, error))?;
         }
 
+        let mut seen_keyword = false;
+        let mut seen_args = false;
         let mut body = None;
         for element in node.children_with_tokens() {
-            match element.kind() {
-                SyntaxKind::IDENT | SyntaxKind::ARG_LIST => {}
-                kind if kind.is_trivia() => {}
-                _ => {
-                    body = Some(element);
-                    break;
-                }
+            let kind = element.kind();
+            if kind.is_trivia() {
+                continue;
             }
+            if !seen_keyword {
+                seen_keyword = true;
+                continue;
+            }
+            if !seen_args {
+                if kind == SyntaxKind::ARG_LIST {
+                    seen_args = true;
+                    continue;
+                }
+                body = Some(element);
+                break;
+            }
+            body = Some(element);
+            break;
         }
         match body {
             Some(body) => self.element_value(body),
@@ -563,8 +591,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         let special = args.special.clone();
         let call_env = Env::child(declaration.env.clone(), caller_env.clone());
 
-        self.call_stack.push(name.to_owned());
-        let result = self.with_env(call_env.clone(), |evaluator| {
+        let mut nodes = self.with_env(call_env.clone(), |evaluator| {
             {
                 let mut variables = call_env.variables.borrow_mut();
                 for (name, value) in &special {
@@ -603,9 +630,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             let result = body.and_then(|body| evaluator.module_body(body, parent));
             evaluator.children_stack.pop();
             result
-        });
-        self.call_stack.pop();
-        let mut nodes = result?;
+        })?;
 
         for node in &mut nodes {
             merge_parameters(node, &caller_parameters);
@@ -1106,34 +1131,84 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "cylinder" => {
-                args.ensure_known("cylinder", &["r", "h", "center"])?;
-                if args.positional.len() > 2 {
-                    return Err(bad_args("cylinder", "expected radius and height"));
+                args.ensure_known(
+                    "cylinder",
+                    &["r", "r1", "r2", "d", "d1", "d2", "h", "center"],
+                )?;
+                if args.positional.len() > 4 {
+                    return Err(bad_args("cylinder", "too many positional arguments"));
                 }
-                let radius = args
-                    .argument("r", 0)
-                    .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
+
+                let named_radius = |name: &str| -> Result<Option<f64>, EvalError> {
+                    match args.named.get(name) {
+                        None | Some(Value::Undef) => Ok(None),
+                        Some(value) => Ok(Some(value.as_number("cylinder")?)),
+                    }
+                };
+                let positional_radius = |index: usize| -> Result<Option<f64>, EvalError> {
+                    match args.positional.get(index) {
+                        Some(value) => Ok(Some(value.as_number("cylinder")?)),
+                        None => Ok(None),
+                    }
+                };
+                let base = named_radius("r")?.or(named_radius("d")?.map(|diameter| diameter / 2.0));
+                let radius1 = named_radius("r1")?
+                    .or(named_radius("d1")?.map(|diameter| diameter / 2.0))
+                    .or(positional_radius(1)?)
+                    .or(base)
+                    .unwrap_or(1.0);
+                let radius2 = named_radius("r2")?
+                    .or(named_radius("d2")?.map(|diameter| diameter / 2.0))
+                    .or(positional_radius(2)?)
+                    .or(base)
+                    .unwrap_or(radius1);
+                let height_value = match args.named.get("h") {
+                    Some(Value::Undef) | None => args.positional.first(),
+                    Some(value) => Some(value),
+                };
+                let height = height_value
+                    .ok_or_else(|| bad_args("cylinder", "expected height"))?
                     .as_number("cylinder")?;
-                let height = args
-                    .argument("h", 1)
-                    .ok_or_else(|| bad_args("cylinder", "expected radius and height"))?
-                    .as_number("cylinder")?;
-                let center = args
-                    .named
-                    .get("center")
+                if !radius1.is_finite() || radius1 < 0.0 {
+                    return Err(bad_args("cylinder", "r1 must be a non-negative number"));
+                }
+                if !radius2.is_finite() || radius2 < 0.0 {
+                    return Err(bad_args("cylinder", "r2 must be a non-negative number"));
+                }
+                if !height.is_finite() || height <= 0.0 {
+                    return Err(bad_args("cylinder", "h must be a positive number"));
+                }
+                if radius1 == 0.0 && radius2 == 0.0 {
+                    return Err(bad_args("cylinder", "cylinder radii cannot both be zero"));
+                }
+
+                let center_value = match args.named.get("center") {
+                    Some(Value::Undef) | None => args.positional.get(3),
+                    Some(value) => Some(value),
+                };
+                let center = center_value
                     .map(|value| value.as_boolean("cylinder"))
                     .transpose()?;
                 let local = self.placement_offset([0.0, 0.0, height / 2.0], center);
                 let world = parent.compose(local);
-                let shape = match self.fn_segments(&args)? {
-                    Some(segments) => {
-                        let profile = profile::circle_with_segments(radius, segments);
-                        let sketch = self.kernel.sketch_profile(&profile::to_regions(&profile))?;
-                        self.kernel.extrude(sketch, height)?
+                let shape = if radius1 == radius2 {
+                    match self.fn_segments(&args)? {
+                        Some(segments) => {
+                            let profile = profile::circle_with_segments(radius1, segments);
+                            let sketch =
+                                self.kernel.sketch_profile(&profile::to_regions(&profile))?;
+                            self.kernel.extrude(sketch, height)?
+                        }
+                        None => self.kernel.primitive(Primitive::Cylinder {
+                            radius: radius1,
+                            height,
+                        })?,
                     }
-                    None => self
-                        .kernel
-                        .primitive(Primitive::Cylinder { radius, height })?,
+                } else {
+                    let segments = self.fn_segments(&args)?.unwrap_or(64).max(3);
+                    let (points, faces) = cylinder_frustum(radius1, radius2, height, segments);
+                    self.kernel
+                        .primitive(Primitive::Polyhedron { points, faces })?
                 };
                 let shape = self.apply_transform(shape, world)?;
                 Ok(Node {
@@ -2936,6 +3011,59 @@ impl<K: Kernel> Evaluator<'_, K> {
             error => error,
         }
     }
+}
+
+fn cylinder_frustum(
+    radius1: f64,
+    radius2: f64,
+    height: f64,
+    segments: usize,
+) -> (Vec<[f64; 3]>, Vec<Vec<usize>>) {
+    let mut points = Vec::new();
+    let bottom_is_apex = radius1 == 0.0;
+    if !bottom_is_apex {
+        for index in 0..segments {
+            let angle = std::f64::consts::TAU * index as f64 / segments as f64;
+            points.push([radius1 * angle.cos(), radius1 * angle.sin(), 0.0]);
+        }
+    } else {
+        points.push([0.0, 0.0, 0.0]);
+    }
+    let top_start = points.len();
+    let top_is_apex = radius2 == 0.0;
+    if !top_is_apex {
+        for index in 0..segments {
+            let angle = std::f64::consts::TAU * index as f64 / segments as f64;
+            points.push([radius2 * angle.cos(), radius2 * angle.sin(), height]);
+        }
+    } else {
+        points.push([0.0, 0.0, height]);
+    }
+
+    let mut faces = Vec::new();
+    if !bottom_is_apex {
+        faces.push((0..segments).rev().collect());
+    }
+    if !top_is_apex {
+        faces.push((top_start..top_start + segments).collect());
+    }
+    for index in 0..segments {
+        let next = (index + 1) % segments;
+        let bottom = index;
+        let bottom_next = next;
+        let top = top_start + index;
+        let top_next = top_start + next;
+        match (bottom_is_apex, top_is_apex) {
+            (false, false) => {
+                faces.push(vec![bottom, bottom_next, top_next]);
+                faces.push(vec![bottom, top_next, top]);
+            }
+            (true, false) => faces.push(vec![0, top_next, top]),
+            (false, true) => faces.push(vec![bottom, bottom_next, top_start]),
+            (true, true) => unreachable!("both cylinder radii cannot be zero"),
+        }
+    }
+    (points, faces)
 }
 
 fn check_assertion(args: &Arguments) -> Result<(), EvalError> {

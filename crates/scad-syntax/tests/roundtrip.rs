@@ -64,7 +64,7 @@ fn parses_assignment_and_module_call() {
 
 #[test]
 fn round_trips_boolean_block() {
-    let source = "difference() {\n    cube([2, 2, 2]);\n    cylinder(0.5, 4);\n}\n";
+    let source = "difference() {\n    cube([2, 2, 2]);\n    cylinder(h=4, r=0.5);\n}\n";
     let parsed = parse(source);
 
     assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());

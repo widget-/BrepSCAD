@@ -198,7 +198,7 @@ fn resize_is_applied_before_the_parent_transform() {
 
 #[test]
 fn resize_uses_the_combined_child_bounds() {
-    let source = "resize([4, 0, 0]) difference() { cube([2, 2, 2]); translate([0.2, 0, 0]) cylinder(0.5, 4); }\n";
+    let source = "resize([4, 0, 0]) difference() { cube([2, 2, 2]); translate([0.2, 0, 0]) cylinder(h=4, r=0.5); }\n";
     let mut kernel = TruckKernel::new();
     let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
 

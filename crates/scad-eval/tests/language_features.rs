@@ -292,3 +292,19 @@ fn stray_semicolons_are_empty_statements() {
 
     assert_eq!(evaluation.shapes.len(), 1);
 }
+
+#[test]
+fn default_special_variables_and_pi_are_visible() {
+    assert_eq!(
+        cube_extents("cube([$fa, $fs, PI > 3 ? 1 : 2]);"),
+        [12.0, 2.0, 1.0]
+    );
+}
+
+#[test]
+fn assert_and_echo_prefixes_can_return_bare_identifiers() {
+    assert_eq!(
+        cube_extents("x = 2; y = assert(true) x; z = echo(x) y; cube(z);"),
+        [2.0; 3]
+    );
+}
