@@ -153,6 +153,19 @@ fn quoted_includes_do_not_search_library_paths() {
 }
 
 #[test]
+fn function_declarations_hoist_across_includes() {
+    let dir = TempDir::new();
+    dir.write("first.scad", "cube(triple(2));\n");
+    dir.write("second.scad", "function triple(x) = x * 3;\n");
+    let main = dir.write(
+        "main.scad",
+        "include \"first.scad\";\ninclude \"second.scad\";\n",
+    );
+
+    assert_eq!(evaluate_file_extents(&main), [6.0; 3]);
+}
+
+#[test]
 fn nested_includes_resolve_relative_to_each_file() {
     let dir = TempDir::new();
     dir.write("sub/inner.scad", "module inner() { cube(2); }\n");

@@ -116,6 +116,11 @@ vendor/
 - List comprehensions support multiple bindings, nesting, `if` filters with
   optional `else`, `let`, `each`, and C-style `for (init; condition; next)`.
   Nested `for` comprehensions flatten.
+- Assignments are hoisted to the start of their file or block. The last
+  assignment to a name wins, evaluated at the position of its first definition;
+  forward references and self-references yield `undef`, matching OpenSCAD.
+- Module and function declarations are hoisted across `include` boundaries, so
+  an included file can use a declaration from a file included later.
 - Module and loop scopes shadow caller variables and restore them on exit.
   Module and function bodies currently read caller variables (dynamic scoping).
   OpenSCAD resolves normal variables lexically at the definition site, so this
@@ -386,17 +391,16 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
-evaluation succeeds on 85 files (all pure definitions), with 14 language
-errors, 2 unsupported geometry modules, and 8 other evaluation errors. Most of
-the language errors are declaration-order failures inside `include`d BOSL2
-files, so the next semantic step is assignment/declaration hoisting and lexical
-scope.
+evaluation succeeds on 85 files (all pure definitions), with 3 language errors,
+2 assertion failures, 2 unsupported geometry modules, and 17 other evaluation
+errors. Assignment and declaration hoisting now let included BOSL2 files
+progress to arithmetic and library-behavior gaps such as division by zero,
+missing hyperbolic functions, and per-primitive `center`.
 
-1. **Scope and assignment semantics**
-   - Hoist declarations and assignments across included files and blocks.
-   - Use OpenSCAD's last-assignment-wins rule.
+1. **Lexical scope semantics**
    - Resolve normal variables lexically at the definition site; keep `$`
      variables dynamically scoped.
+   - Preserve the current assignment/declaration hoisting rules.
    - Unknown variables and missing arguments already evaluate to `undef`.
 2. **Remaining corpus evaluation gaps**
    - Add missing built-ins such as `acosh` and the other hyperbolic functions.

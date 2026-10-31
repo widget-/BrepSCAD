@@ -736,9 +736,13 @@ impl<K: Kernel> Evaluator<'_, K> {
         root: &SyntaxNode,
         parent: Transform,
     ) -> Result<Vec<Node>, EvalError> {
-        self.register_declarations(root);
+        self.register_declarations_deep(root)?;
+        self.apply_assignments(root)?;
         let mut nodes = Vec::new();
         for statement in root.children() {
+            if statement.kind() == SyntaxKind::ASSIGNMENT {
+                continue;
+            }
             nodes.extend(self.statement(statement, parent)?);
         }
         Ok(nodes)
@@ -1672,11 +1676,38 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn block(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
         self.register_declarations(&node);
+        self.apply_assignments(&node)?;
         let mut nodes = Vec::new();
         for statement in node.children() {
+            if statement.kind() == SyntaxKind::ASSIGNMENT {
+                continue;
+            }
             nodes.extend(self.statement(statement, parent)?);
         }
         Ok(nodes)
+    }
+
+    fn apply_assignments(&mut self, node: &SyntaxNode) -> Result<(), EvalError> {
+        let mut order = Vec::new();
+        let mut last = HashMap::new();
+        for assignment in node
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::ASSIGNMENT)
+        {
+            let name = first_ident(&assignment)
+                .ok_or_else(|| EvalError::Parse("missing assignment name".to_owned()))?;
+            if !last.contains_key(&name) {
+                order.push(name.clone());
+            }
+            last.insert(name, assignment);
+        }
+        for name in order {
+            let assignment = last
+                .remove(&name)
+                .expect("assignment recorded in first-occurrence order");
+            self.assignment(assignment)?;
+        }
+        Ok(())
     }
 
     fn apply_transform(
