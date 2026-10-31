@@ -86,6 +86,8 @@ vendor/
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
+- Unknown variables and omitted module/function arguments without defaults
+  evaluate to `undef`, matching OpenSCAD.
 - String values support escapes (including `\x`, `\u`, and `\U`), equality,
   `len`, character indexing, and `str` formatting.
 - `echo(...)` records messages on `Evaluation::messages`; it can prefix an
@@ -329,7 +331,6 @@ For headless UI snapshots, see
   - angle-bracket include paths use the same relative lookup; there is no
     library search path
   - functions are not first-class values; function literals are not parsed
-  - unknown variables abort evaluation instead of yielding `undef`
   - ranges are represented as lists rather than a distinct value type
   - indexing selects a single element or row; range/list slices are not
     supported (string character indexing is)
@@ -382,15 +383,17 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 A corpus run over BOSL2 and MCAD (109 files) gets past the parser for 95 files;
-the remaining first parse errors are primarily function literals, with a few
-`for`/`let` edge forms. No library file evaluates end-to-end yet; the next
-blockers are scope semantics, function literals, and library search paths.
+the remaining first parse errors are primarily function literals. Full
+evaluation now succeeds on 72 files (all pure definitions), with 4 language
+errors, 10 unresolved library includes, 2 unsupported geometry modules, and 17
+other evaluation errors. The next blockers are library search paths, function
+literals, and the remaining scope semantics.
 
 1. **Scope and assignment semantics**
    - Hoist assignments and use OpenSCAD's last-assignment-wins rule.
-   - Make unassigned identifiers yield `undef` instead of aborting.
    - Resolve normal variables lexically at the definition site; keep `$`
      variables dynamically scoped.
+   - Unknown variables and missing arguments already evaluate to `undef`.
 2. **Language finish**
    - Function literals and first-class functions.
    - Library search paths for angle-bracket includes.

@@ -108,13 +108,12 @@ fn use_imports_definitions_without_geometry() {
 fn use_does_not_import_variables() {
     let dir = TempDir::new();
     dir.write("lib.scad", "size = 9;\nmodule box() { cube(size); }\n");
-    let main = dir.write("main.scad", "use \"lib.scad\";\ncube(size);\n");
+    let main = dir.write(
+        "main.scad",
+        "use \"lib.scad\";\ncube(is_undef(size) ? 2 : 1);\n",
+    );
 
-    let mut kernel = TruckKernel::new();
-    let error =
-        evaluate_file(&main, &mut kernel, 0.01).expect_err("variable should not be imported");
-
-    assert!(matches!(error, EvalError::UnknownIdentifier(name) if name == "size"));
+    assert_eq!(evaluate_file_extents(&main), [2.0; 3]);
 }
 
 #[test]

@@ -27,8 +27,6 @@ pub use model::{EvaluatedShape, Evaluation, Parameter, Part, TreeNode};
 pub enum EvalError {
     #[error("parse error: {0}")]
     Parse(String),
-    #[error("unknown identifier: {0}")]
-    UnknownIdentifier(String),
     #[error("unsupported module: {0}")]
     UnsupportedModule(String),
     #[error("unknown function: {0}")]

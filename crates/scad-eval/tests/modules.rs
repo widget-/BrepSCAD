@@ -253,16 +253,16 @@ fn unknown_named_arguments_are_rejected() {
 }
 
 #[test]
-fn missing_arguments_are_rejected() {
+fn missing_arguments_are_undef() {
     let mut kernel = TruckKernel::new();
-    let error = evaluate(
-        "module box(size) { cube(size); }\nbox();",
+    let evaluation = evaluate(
+        "module box(size) { cube(is_undef(size) ? 2 : 1); }\nbox();",
         &mut kernel,
         0.01,
     )
-    .expect_err("missing argument");
+    .expect("missing argument should be undef");
 
-    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "box"));
+    assert_eq!(extents(&evaluation.shapes[0].mesh), [2.0; 3]);
 }
 
 #[test]

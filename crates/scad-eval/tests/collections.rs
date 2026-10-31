@@ -77,9 +77,9 @@ fn let_bindings_are_sequential_and_scoped() {
 
 #[test]
 fn let_bindings_do_not_leak() {
-    let error = source_error("y = let (a = 1) a;\ncube(a);");
+    let size = cube_extents("y = let (a = 1) a;\ncube(is_undef(a) ? 2 : 1);");
 
-    assert!(matches!(error, EvalError::UnknownIdentifier(name) if name == "a"));
+    assert_eq!(size, [2.0; 3]);
 }
 
 #[test]

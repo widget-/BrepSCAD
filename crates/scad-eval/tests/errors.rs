@@ -1,5 +1,8 @@
+mod common;
+
 use brepscad_eval::{EvalError, evaluate_to_meshes};
 use brepscad_kernel_truck::TruckKernel;
+use common::bounds;
 
 #[test]
 fn rejects_unknown_named_arguments() {
@@ -11,11 +14,13 @@ fn rejects_unknown_named_arguments() {
 }
 
 #[test]
-fn reports_unknown_identifiers() {
+fn unknown_identifiers_are_undef() {
     let mut kernel = TruckKernel::new();
-    let error = evaluate_to_meshes("cube(size);", &mut kernel, 0.01).expect_err("unknown size");
+    let meshes = evaluate_to_meshes("cube(is_undef(size) ? 2 : 1);", &mut kernel, 0.01)
+        .expect("unknown identifier should be undef");
 
-    assert!(matches!(error, EvalError::UnknownIdentifier(name) if name == "size"));
+    let (min, max) = bounds(&meshes[0]);
+    assert!((max[0] - min[0] - 2.0).abs() < 1.0e-6);
 }
 
 #[test]

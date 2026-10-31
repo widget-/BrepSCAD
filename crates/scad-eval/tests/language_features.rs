@@ -222,9 +222,10 @@ fn let_statements_bind_sequentially_and_restore_the_outer_scope() {
 
 #[test]
 fn let_statement_bindings_do_not_leak() {
-    let error = source_error("let (a = 2) cube(a);\ncube(a);");
+    let evaluation = evaluate_source("let (a = 2) cube(a);\ncube(is_undef(a) ? 2 : 1);");
 
-    assert!(matches!(error, EvalError::UnknownIdentifier(name) if name == "a"));
+    assert_eq!(evaluation.shapes.len(), 2);
+    assert_eq!(extents(&evaluation.shapes[1].mesh), [2.0; 3]);
 }
 
 #[test]

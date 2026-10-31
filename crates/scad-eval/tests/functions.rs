@@ -166,12 +166,11 @@ fn unknown_functions_are_rejected() {
 }
 
 #[test]
-fn missing_function_arguments_are_rejected() {
-    let mut kernel = TruckKernel::new();
-    let error = evaluate("function f(a) = a;\nx = f();\ncube(x);", &mut kernel, 0.01)
-        .expect_err("missing argument");
-
-    assert!(matches!(error, EvalError::BadArguments { module, .. } if module == "f"));
+fn missing_function_arguments_are_undef() {
+    assert_eq!(
+        cube_extents("function f(a) = is_undef(a) ? 2 : 1;\ncube(f());"),
+        [2.0; 3]
+    );
 }
 
 #[test]

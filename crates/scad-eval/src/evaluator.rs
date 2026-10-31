@@ -548,9 +548,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     Some(value) => value.clone(),
                     None => match default {
                         Some(expression) => evaluator.element_value(expression.clone())?,
-                        None => {
-                            return Err(bad_args(name, format!("missing argument {param}")));
-                        }
+                        None => Value::Undef,
                     },
                 };
                 evaluator
@@ -1882,9 +1880,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     Some(value) => value.clone(),
                     None => match default {
                         Some(expression) => evaluator.element_value(expression.clone())?,
-                        None => {
-                            return Err(bad_args(name, format!("missing argument {param}")));
-                        }
+                        None => Value::Undef,
                     },
                 };
                 evaluator
@@ -2576,8 +2572,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn lookup(&self, name: &str) -> Result<Value, EvalError> {
-        self.lookup_optional(name)
-            .ok_or_else(|| EvalError::UnknownIdentifier(name.to_owned()))
+        Ok(self.lookup_optional(name).unwrap_or(Value::Undef))
     }
 
     fn lookup_optional(&self, name: &str) -> Option<Value> {
