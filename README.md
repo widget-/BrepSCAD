@@ -1,6 +1,8 @@
 # BrepSCAD
 
-An (extremely) experimental alternative to OpenSCAD, using B-rep geometry rather than OpenSCAD’s CGAL/Manifold CSG backends.
+An (extremely) experimental alternative to OpenSCAD, using B-rep geometry rather than OpenSCAD's CGAL/Manifold CSG backends.
+
+![Screenshot](docs/image.png)
 
 BrepSCAD is an independent project and is not affiliated with OpenSCAD.
 
@@ -9,6 +11,7 @@ BrepSCAD is an independent project and is not affiliated with OpenSCAD.
 - Keep `.scad` text as the canonical document.
 - Allow direct manipulation in the UI, saved back to the source.
 - Use B-rep geometry as the canonical representation, rather than mesh tris.
+- Export STEP files
 - Support multiple kernel backends.
 - Implement faster and/or more accurate versions of some common OpenSCAD geometry libraries.
 - Render all OpenSCAD source files "close enough" to the original.
