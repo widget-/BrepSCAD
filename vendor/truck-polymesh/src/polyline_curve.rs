@@ -40,6 +40,9 @@ impl PolylineCurve<Point2> {
     /// assert!(!hexagon.include(p1));
     /// ```
     pub fn include(&self, c: Point2) -> bool {
+        if self.iter().any(|p| (*p - c).so_small()) {
+            return true;
+        }
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
         self.iter()
@@ -62,7 +65,7 @@ impl PolylineCurve<Point2> {
                 }
             })
             .map(|counter| counter > 0)
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 }
 
@@ -123,6 +126,9 @@ pub fn include<'a>(
         .into_iter()
         .flat_map(|boundary| boundary.iter().circular_tuple_windows())
         .try_fold(0_i32, move |counter, (p0, p1)| {
+            if (*p0 - c).so_small() {
+                return None;
+            }
             let a = p0 - c;
             let b = p1 - c;
             let s0 = r.x * a.y - r.y * a.x; // v times a
@@ -140,7 +146,7 @@ pub fn include<'a>(
             }
         })
         .map(|counter| counter > 0)
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 impl<P> AsRef<Vec<P>> for PolylineCurve<P> {

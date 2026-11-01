@@ -1,5 +1,6 @@
 use super::*;
 use truck_base::newton::{self, CalcOutput};
+use truck_base::tolerance::TOLERANCE;
 
 fn double_projection<S0, S1>(
     surface0: &S0,
@@ -31,7 +32,23 @@ where
     };
     let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(plane_point, hint0, trials))?;
     let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(plane_point, hint1, trials))?;
-    let Vector4 { x, y, z, w } = newton::solve(function, Vector4 { x, y, z, w }, trials).ok()?;
+    let solved = match newton::solve(function, Vector4 { x, y, z, w }, trials) {
+        Ok(solved) => solved,
+        Err(_) => {
+            // PATCH(BrepSCAD, PR #110): coplanar or tangent surfaces can make
+            // the Jacobian singular. Accept the initial projection when the
+            // points coincide and the normals are parallel.
+            let pt0 = surface0.subs(x, y);
+            let pt1 = surface1.subs(z, w);
+            let n0 = surface0.normal(x, y);
+            let n1 = surface1.normal(z, w);
+            if (pt0 - pt1).magnitude() < TOLERANCE && n0.cross(n1).magnitude() < TOLERANCE {
+                return Some((pt0, Point2::new(x, y), Point2::new(z, w)));
+            }
+            return None;
+        }
+    };
+    let Vector4 { x, y, z, w } = solved;
     let point = surface0.subs(x, y).midpoint(surface1.subs(z, w));
     Some((point, Point2::new(x, y), Point2::new(z, w)))
 }
