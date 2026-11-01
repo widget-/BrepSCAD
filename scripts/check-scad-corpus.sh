@@ -125,7 +125,10 @@ classify() {
         "Error: assertion failed:"*) printf 'assertion' ;;
         "Error:"*) printf 'eval' ;;
         *)
-            if printf '%s\n' "$output" | grep -q '^meshes: 0$'; then
+            if [[ $status -ne 0 ]]; then
+                # Crashes and aborts must not be mistaken for successful files.
+                printf 'eval'
+            elif printf '%s\n' "$output" | grep -q '^meshes: 0$'; then
                 printf 'ok-empty'
             else
                 printf 'ok'

@@ -133,3 +133,22 @@ fn for_over_scalars_strings_and_undef_matches_open_scad() {
     let text = evaluate("for (i = \"ab\") cube(1);", &mut kernel, 0.01).expect("string loop");
     assert_eq!(text.shapes.len(), 2);
 }
+#[test]
+fn for_supports_special_variable_bindings() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "for ($idx = [0:1]) translate([$idx * 2, 0, 0]) cube(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("special for binding");
+
+    assert_eq!(evaluation.shapes.len(), 2);
+    let mins = evaluation
+        .shapes
+        .iter()
+        .map(|shape| bounds(&shape.mesh).0[0])
+        .collect::<Vec<_>>();
+    assert!((mins[0] + 0.5).abs() < 1.0e-6, "mins = {mins:?}");
+    assert!((mins[1] - 1.5).abs() < 1.0e-6, "mins = {mins:?}");
+}

@@ -87,8 +87,9 @@ vendor/
   `atan2`, `pow`, `min`, `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`,
   `ord`, `lookup`, `search`, `rands`, `is_num`, `is_nan`, `is_bool`, `is_list`,
   `is_string`, `is_undef`, `is_function`, `version`, and `version_num`.
-  `chr` accepts a number or a list of code points. `min`/`max` return `undef`
-  for empty or non-numeric inputs.
+  `chr` accepts a number or a list of code points, `rands` accepts a
+  `seed_value` named argument, and `min`/`max` return `undef` for empty or
+  non-numeric inputs.
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
@@ -135,8 +136,8 @@ vendor/
   body's dynamic scope, so values such as `$parent_geom` are visible.
   `$children` holds the child count.
 - `for` loops over ranges, vectors, strings, scalars, and `undef`, with
-  multiple bindings and block or single-statement bodies. `undef` yields no
-  iterations and scalars yield one, matching OpenSCAD.
+  multiple bindings, `$` loop variables, and block or single-statement bodies.
+  `undef` yields no iterations and scalars yield one, matching OpenSCAD.
 - `if` / `else` with boolean or numeric truthiness.
 - `$fn` switches between faceted and analytic geometry at 33 segments.
   `$fa=12`, `$fs=2`, `$fn=0`, `$t=0`, `$preview=false`, and `PI` are initialized

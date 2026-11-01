@@ -1011,22 +1011,9 @@ impl<K: Kernel> Evaluator<'_, K> {
             .children()
             .find(|child| child.kind() == SyntaxKind::ARG_LIST)
             .ok_or_else(|| bad_args("for", "expected loop bindings"))?;
-        let args = self.arg_list(arg_list)?;
-        if !args.positional.is_empty() {
-            return Err(bad_args("for", "expected named loop bindings"));
-        }
-        if args.named_order.is_empty() {
+        let bindings = self.comprehension_bindings(&arg_list)?;
+        if bindings.is_empty() {
             return Err(bad_args("for", "expected at least one loop binding"));
-        }
-
-        let mut bindings = Vec::with_capacity(args.named_order.len());
-        for name in &args.named_order {
-            let value = args
-                .named
-                .get(name)
-                .cloned()
-                .ok_or_else(|| bad_args("for", format!("missing value for {name}")))?;
-            bindings.push((name.clone(), loop_values(name, value)?));
         }
 
         let body = node
@@ -2418,6 +2405,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     fn builtin_function(&self, name: &str, args: &Arguments) -> Result<Value, EvalError> {
         let allowed = match name {
             "search" => &["num_returns_per_match", "index_col_num"][..],
+            "rands" => &["seed_value"][..],
             _ => &[][..],
         };
         args.ensure_known(name, allowed)?;
@@ -3680,12 +3668,14 @@ fn rands_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
         return Err(bad_args(name, "count must be a non-negative integer"));
     }
     let count = count as usize;
-    let seed = args
-        .positional
-        .get(3)
-        .map(|value| value.as_number(name))
-        .transpose()?
-        .unwrap_or(0.0);
+    let seed = match args
+        .named
+        .get("seed_value")
+        .or_else(|| args.positional.get(3))
+    {
+        None | Some(Value::Undef) => 0.0,
+        Some(value) => value.as_number(name)?,
+    };
 
     let mut random = Random(seed.to_bits() ^ 0x9E37_79B9_7F4A_7C15);
     let mut values = Vec::with_capacity(count);

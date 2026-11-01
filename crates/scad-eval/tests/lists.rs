@@ -244,3 +244,14 @@ fn search_compares_whole_rows_when_index_column_is_undef() {
         [1.0, 1.0, 1.0]
     );
 }
+#[test]
+fn rands_accepts_a_named_seed_value() {
+    assert_eq!(
+        cube_extents(
+            "a = rands(0, 1, 5, 42);\n\
+             b = rands(0, 1, 5, seed_value = 42);\n\
+             cube([a[0] == b[0] ? 1 : 2, a[4] == b[4] ? 1 : 2, 1]);",
+        ),
+        [1.0, 1.0, 1.0]
+    );
+}
