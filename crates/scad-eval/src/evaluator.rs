@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use brepscad_kernel_api::{BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform};
+use brepscad_kernel_api::{
+    BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
+};
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
@@ -2155,10 +2157,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let mut shapes = children.iter().map(|child| child.shape);
                 let mut result = shapes.next().expect("checked non-empty");
                 for shape in shapes {
-                    result = self
-                        .kernel
-                        .boolean(op, result, shape)
-                        .map_err(|error| boolean_failure(name.as_str(), &source_range, &children, error))?;
+                    result = self.kernel.boolean(op, result, shape).map_err(|error| {
+                        boolean_failure(name.as_str(), &source_range, &children, error)
+                    })?;
                 }
 
                 Ok(Node {
