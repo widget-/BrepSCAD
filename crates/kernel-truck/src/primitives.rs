@@ -62,14 +62,28 @@ pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelRes
         ));
     }
 
-    let vertices: Vec<Vertex> = points
+    let scale = points
         .iter()
-        .map(|[x, y, z]| builder::vertex(Point3::new(*x, *y, *z)))
-        .collect();
-    let mut edges: HashMap<(usize, usize), Edge> = HashMap::new();
-    let mut uses: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
-    let mut built_faces = Vec::with_capacity(faces.len());
+        .flatten()
+        .fold(1.0_f64, |scale, value| scale.max(value.abs()));
+    let weld_epsilon = (scale * 1.0e-9).max(1.0e-9);
+    let mut welded = Vec::new();
+    let mut remap = Vec::with_capacity(points.len());
+    let mut seen = HashMap::new();
+    for point in points {
+        let key = (
+            (point[0] / weld_epsilon).round() as i64,
+            (point[1] / weld_epsilon).round() as i64,
+            (point[2] / weld_epsilon).round() as i64,
+        );
+        let index = *seen.entry(key).or_insert_with(|| {
+            welded.push(*point);
+            welded.len() - 1
+        });
+        remap.push(index);
+    }
 
+    let mut welded_faces = Vec::with_capacity(faces.len());
     for face in faces {
         if face.len() < 3 {
             return Err(KernelError::Backend(
@@ -77,6 +91,44 @@ pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelRes
             ));
         }
         if face.iter().any(|index| *index >= points.len()) {
+            return Err(KernelError::Backend(
+                "polyhedron face index out of range".to_owned(),
+            ));
+        }
+        let mut remapped = Vec::with_capacity(face.len());
+        for index in face {
+            let index = remap[*index];
+            if remapped.last().copied() != Some(index) {
+                remapped.push(index);
+            }
+        }
+        if remapped.len() > 1 && remapped.first() == remapped.last() {
+            remapped.pop();
+        }
+        if remapped.len() >= 3
+            && remapped
+                .iter()
+                .all(|index| remapped.iter().filter(|other| *other == index).count() == 1)
+        {
+            welded_faces.push(remapped);
+        }
+    }
+    if welded.len() < 4 || welded_faces.len() < 4 {
+        return Err(KernelError::Backend(
+            "polyhedron needs at least four points and four faces".to_owned(),
+        ));
+    }
+
+    let vertices: Vec<Vertex> = welded
+        .iter()
+        .map(|[x, y, z]| builder::vertex(Point3::new(*x, *y, *z)))
+        .collect();
+    let mut edges: HashMap<(usize, usize), Edge> = HashMap::new();
+    let mut uses: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
+    let mut built_faces = Vec::with_capacity(welded_faces.len());
+
+    for face in &welded_faces {
+        if face.iter().any(|index| *index >= welded.len()) {
             return Err(KernelError::Backend(
                 "polyhedron face index out of range".to_owned(),
             ));
@@ -371,4 +423,21 @@ pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid
     let shell: Shell = faces.into_iter().collect();
     Solid::try_new(vec![shell])
         .map_err(|error| KernelError::Backend(format!("sphere shell failed: {error:?}")))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn welds_coincident_vertices_before_shell_validation() {
+        let points = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ];
+        let faces = vec![vec![4, 2, 1], vec![0, 1, 3], vec![0, 3, 2], vec![1, 2, 3]];
+        assert!(polyhedron(&points, &faces).is_ok());
+    }
 }
