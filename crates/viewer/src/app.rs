@@ -12,11 +12,11 @@ use brepscad_kernel_truck::TruckKernel;
 use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
 use eframe::egui;
 use egui::containers::scroll_area::ScrollSource;
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 
 use crate::camera::Camera;
 use crate::mesh::{combine_evaluation, combine_parts};
-use crate::picking::{PickPart, nearest_triangle};
+use crate::picking::{PickPart, nearest_scene, nearest_triangle};
 use crate::renderer::MeshRenderer;
 
 const SAMPLE: &str = include_str!("../../../assets/sample.scad");
@@ -352,14 +352,51 @@ impl ViewerApp {
 
     fn pick_part(&self, ndc: Vec2, aspect: f32) -> Option<(usize, usize)> {
         let (origin, direction) = self.camera.ray(ndc, aspect);
-        let triangle = nearest_triangle(&self.pick_mesh, origin, direction)?;
-        self.pick_parts
-            .iter()
-            .find(|part| {
-                triangle >= part.triangle_start
-                    && triangle < part.triangle_start + part.triangle_count
-            })
-            .map(|part| (part.shape_index, part.part_index))
+
+        // Analytic hits are exact; mesh hits stay the fallback for parts that
+        // have no scene (sketches, kernels without ray casting).
+        let scene = if self.analytic_preview {
+            self.nearest_part_scene(origin, direction)
+        } else {
+            None
+        };
+        let mesh = nearest_triangle(&self.pick_mesh, origin, direction).and_then(
+            |(triangle, distance)| {
+                self.pick_parts
+                    .iter()
+                    .find(|part| {
+                        triangle >= part.triangle_start
+                            && triangle < part.triangle_start + part.triangle_count
+                    })
+                    .map(|part| (distance, part.shape_index, part.part_index))
+            },
+        );
+
+        match (scene, mesh) {
+            (Some(scene), Some(mesh)) if mesh.0 < scene.0 => Some((mesh.1, mesh.2)),
+            (Some(scene), _) => Some((scene.1, scene.2)),
+            (None, Some(mesh)) => Some((mesh.1, mesh.2)),
+            (None, None) => None,
+        }
+    }
+
+    /// Nearest analytic hit across the parts, when they carry scenes.
+    fn nearest_part_scene(&self, origin: Vec3, direction: Vec3) -> Option<(f32, usize, usize)> {
+        let mut best: Option<(f32, usize, usize)> = None;
+        for (shape_index, shape) in self.evaluation.shapes.iter().enumerate() {
+            for (part_index, part) in shape.parts.iter().enumerate() {
+                let Some(scene) = &part.scene else {
+                    continue;
+                };
+                let Some(distance) = nearest_scene(scene, origin, direction) else {
+                    continue;
+                };
+                if best.is_none_or(|(nearest, _, _)| distance < nearest) {
+                    best = Some((distance, shape_index, part_index));
+                }
+            }
+        }
+        best
     }
 
     fn shapes_ui(&mut self, ui: &mut egui::Ui) {

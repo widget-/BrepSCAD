@@ -35,6 +35,8 @@ struct PartContext<'a, K: Kernel> {
     root_mesh: &'a Mesh,
     tolerance: f64,
     cache: &'a mut MeshCache,
+    /// Build an analytic scene per leaf, for exact picking.
+    analytic: bool,
 }
 
 pub(crate) fn collect_parts<K: Kernel>(
@@ -44,6 +46,7 @@ pub(crate) fn collect_parts<K: Kernel>(
     kernel: &mut K,
     tolerance: f64,
     cache: &mut MeshCache,
+    analytic: bool,
 ) -> Result<(Vec<Part>, TreeNode), EvalError> {
     let mut parts = Vec::new();
     let mut context = PartContext {
@@ -52,6 +55,7 @@ pub(crate) fn collect_parts<K: Kernel>(
         root_mesh,
         tolerance,
         cache,
+        analytic,
     };
     let tree = collect_parts_inner(node, &mut context, &BTreeMap::new(), &mut parts)?;
     Ok((parts, tree))
@@ -99,11 +103,17 @@ fn collect_parts_inner<K: Kernel>(
             }
         };
         let part_index = parts.len();
+        let scene = if context.analytic {
+            context.kernel.raycast_scene(node.shape, context.tolerance)
+        } else {
+            None
+        };
         parts.push(Part {
             module: node.module.clone(),
             source_range: node.source_range.clone(),
             parameters,
             mesh,
+            scene,
         });
         Ok(TreeNode {
             module: node.module.clone(),

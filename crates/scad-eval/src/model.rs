@@ -43,6 +43,9 @@ pub struct Part {
     pub source_range: Range<usize>,
     pub parameters: Vec<Parameter>,
     pub mesh: Mesh,
+    /// Analytic scene for this operand, used for exact picking when the
+    /// evaluation asked for one.
+    pub scene: Option<brepscad_raycast::Scene>,
 }
 
 /// A numeric literal reachable from a shape or part's source range.

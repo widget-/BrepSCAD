@@ -1,6 +1,7 @@
-//! CPU ray picking against operand meshes.
+//! CPU ray picking against operand meshes and analytic part scenes.
 
 use brepscad_kernel_api::Mesh;
+use brepscad_raycast::{Ray, Scene};
 use glam::Vec3;
 
 #[derive(Debug, Clone, Copy)]
@@ -11,7 +12,7 @@ pub(crate) struct PickPart {
     pub(crate) triangle_count: usize,
 }
 
-pub(crate) fn nearest_triangle(mesh: &Mesh, origin: Vec3, direction: Vec3) -> Option<usize> {
+pub(crate) fn nearest_triangle(mesh: &Mesh, origin: Vec3, direction: Vec3) -> Option<(usize, f32)> {
     let mut nearest: Option<(f32, usize)> = None;
 
     for (index, triangle) in mesh.indices.chunks_exact(3).enumerate() {
@@ -22,7 +23,16 @@ pub(crate) fn nearest_triangle(mesh: &Mesh, origin: Vec3, direction: Vec3) -> Op
         }
     }
 
-    nearest.map(|(_, index)| index)
+    nearest.map(|(distance, index)| (index, distance))
+}
+
+/// Distance to the nearest hit in an analytic part scene.
+pub(crate) fn nearest_scene(scene: &Scene, origin: Vec3, direction: Vec3) -> Option<f32> {
+    let ray = Ray::new(
+        origin.to_array().map(f64::from),
+        direction.to_array().map(f64::from),
+    );
+    scene.cast(&ray).map(|hit| hit.distance as f32)
 }
 
 fn ray_triangle(mesh: &Mesh, triangle: &[u32], origin: Vec3, direction: Vec3) -> Option<f32> {
@@ -76,7 +86,8 @@ mod tests {
     fn ray_hits_a_triangle() {
         let mesh = triangle_mesh();
         let hit = nearest_triangle(&mesh, Vec3::new(0.2, 0.2, 1.0), Vec3::new(0.0, 0.0, -1.0));
-        assert_eq!(hit, Some(0));
+        assert_eq!(hit.map(|(index, _)| index), Some(0));
+        assert!((hit.unwrap().1 - 1.0).abs() < 1e-6, "distance to z = 0");
     }
 
     #[test]
@@ -84,5 +95,33 @@ mod tests {
         let mesh = triangle_mesh();
         let hit = nearest_triangle(&mesh, Vec3::new(2.0, 2.0, 1.0), Vec3::new(0.0, 0.0, -1.0));
         assert_eq!(hit, None);
+    }
+
+    #[test]
+    fn scene_cast_reports_the_distance() {
+        use brepscad_raycast::{Face, Surface, TrimRegion};
+
+        let face = Face::new(
+            Surface::Plane {
+                origin: [0.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                u_axis: [1.0, 0.0, 0.0],
+                v_axis: [0.0, 1.0, 0.0],
+            },
+            TrimRegion::new(vec![vec![
+                [-1.0, -1.0],
+                [1.0, -1.0],
+                [1.0, 1.0],
+                [-1.0, 1.0],
+            ]]),
+            ([-1.0, -1.0, 0.0], [1.0, 1.0, 0.0]),
+        );
+        let scene = Scene::new(vec![face]);
+
+        let hit = nearest_scene(&scene, Vec3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!((hit.expect("hit") - 3.0).abs() < 1e-6);
+
+        let miss = nearest_scene(&scene, Vec3::new(5.0, 0.0, 3.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!(miss.is_none(), "outside the trim region");
     }
 }

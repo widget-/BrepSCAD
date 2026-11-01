@@ -93,6 +93,7 @@ mod tests {
                         source_range: 0..1,
                         parameters: Vec::new(),
                         mesh,
+                        scene: None,
                     })
                     .collect(),
                 tree: TreeNode {
@@ -149,12 +150,14 @@ mod tests {
                         source_range: 0..1,
                         parameters: Vec::new(),
                         mesh: triangle_mesh(),
+                        scene: None,
                     },
                     Part {
                         module: "cylinder".to_owned(),
                         source_range: 2..3,
                         parameters: Vec::new(),
                         mesh: triangle_mesh(),
+                        scene: None,
                     },
                 ],
                 tree: TreeNode {

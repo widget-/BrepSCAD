@@ -293,7 +293,15 @@ fn evaluate_with_context<K: Kernel>(
                 scenes.push(scene);
             }
         }
-        let (parts, tree) = collect_parts(&root, root.shape, &mesh, kernel, tolerance, cache)?;
+        let (parts, tree) = collect_parts(
+            &root,
+            root.shape,
+            &mesh,
+            kernel,
+            tolerance,
+            cache,
+            analytic_scene,
+        )?;
         shapes.push(EvaluatedShape {
             mesh,
             source_range: root.source_range,
