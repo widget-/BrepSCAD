@@ -28,7 +28,7 @@ fn divide_plane_test() {
         Point3::new(1.0, 1.0, 0.0),
         Point3::new(1.0, 3.0, 0.0),
     ]);
-    let edge = vec![
+    let edge = [
         parabola(&v[0], &v[1], Point3::new(-4.0, 2.0, 0.0)),
         parabola(&v[0], &v[1], Point3::new(4.0, 2.0, 0.0)),
         line(&v[0], &v[1]),
@@ -37,12 +37,12 @@ fn divide_plane_test() {
         parabola(&v[4], &v[5], Point3::new(1.0, 2.0, 0.0)),
         parabola(&v[4], &v[5], Point3::new(3.0, 2.0, 0.0)),
     ];
-    let wire: Vec<Wire<_, _>> = vec![
-        vec![edge[1].clone(), edge[0].inverse()].into(),
-        vec![edge[2].clone(), edge[0].inverse()].into(),
-        vec![edge[1].clone(), edge[2].inverse()].into(),
-        vec![edge[3].clone(), edge[4].inverse()].into(),
-        vec![edge[5].clone(), edge[6].inverse()].into(),
+    let wire = [
+        wire![edge[1].clone(), edge[0].inverse()],
+        wire![edge[2].clone(), edge[0].inverse()],
+        wire![edge[1].clone(), edge[2].inverse()],
+        wire![edge[3].clone(), edge[4].inverse()],
+        wire![edge[5].clone(), edge[6].inverse()],
     ];
     let face = Face::new(
         vec![wire[0].clone(), wire[3].clone(), wire[4].clone()],
@@ -89,13 +89,13 @@ fn divide_plane_test() {
 
 type AlternativeIntersection = crate::alternative::Alternative<
     NurbsCurve<Vector4>,
-    IntersectionCurve<PolylineCurve<Point3>, AlternativeSurface>,
+    IntersectionCurve<PolylineCurve<Point3>, AlternativeSurface, AlternativeSurface>,
 >;
 type AlternativeSurface = crate::alternative::Alternative<BSplineSurface<Point3>, Plane>;
 
 crate::impl_from!(
     NurbsCurve<Vector4>,
-    IntersectionCurve<PolylineCurve<Point3>, AlternativeSurface>
+    IntersectionCurve<PolylineCurve<Point3>, AlternativeSurface, AlternativeSurface>
 );
 crate::impl_from!(BSplineSurface<Point3>, Plane);
 
@@ -198,7 +198,7 @@ fn independent_intersection() {
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
         ..
-    } = create_loops_stores(&shell0, &poly_shell0, &shell1, &poly_shell1, TOL).unwrap();
+    } = create_loops_stores(&shell0, &poly_shell0, &shell1, &poly_shell1).unwrap();
     let [and0, or0, unknown0] = divide_faces(&shell0, &loops_store0, TOL)
         .unwrap()
         .and_or_unknown();

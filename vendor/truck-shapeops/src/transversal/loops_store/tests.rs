@@ -1,15 +1,14 @@
 use super::*;
 use std::fmt::Debug;
-use truck_geometry::prelude::*;
 const TOL: f64 = 0.01;
 
 crate::impl_from!(
     NurbsCurve<Vector4>,
-    IntersectionCurve<PolylineCurve, BSplineSurface<Point3>>
+    IntersectionCurve<PolylineCurve, BSplineSurface<Point3>, BSplineSurface<Point3>>
 );
 type AlternativeIntersection = crate::alternative::Alternative<
     NurbsCurve<Vector4>,
-    IntersectionCurve<PolylineCurve, BSplineSurface<Point3>>,
+    IntersectionCurve<PolylineCurve, BSplineSurface<Point3>, BSplineSurface<Point3>>,
 >;
 
 struct DebugDisplay<'a, T, Format> {
@@ -17,7 +16,7 @@ struct DebugDisplay<'a, T, Format> {
     format: Format,
 }
 
-impl<'a, P: Debug, C: Debug> Debug for DebugDisplay<'a, Loops<P, C>, WireDisplayFormat> {
+impl<P: Debug, C: Debug> Debug for DebugDisplay<'_, Loops<P, C>, WireDisplayFormat> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Loops")
             .field(
@@ -32,7 +31,7 @@ impl<'a, P: Debug, C: Debug> Debug for DebugDisplay<'a, Loops<P, C>, WireDisplay
     }
 }
 
-impl<'a, P: Debug, C: Debug> Debug for DebugDisplay<'a, LoopsStore<P, C>, WireDisplayFormat> {
+impl<P: Debug, C: Debug> Debug for DebugDisplay<'_, LoopsStore<P, C>, WireDisplayFormat> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list()
             .entries(self.entity.0.iter().map(|loops| DebugDisplay {
@@ -130,7 +129,7 @@ fn independent_intersection() {
         geom_loops_store0,
         geom_loops_store1,
         ..
-    } = create_loops_stores(&geom_shell0, &poly_shell0, &geom_shell1, &poly_shell1, TOL).unwrap();
+    } = create_loops_stores(&geom_shell0, &poly_shell0, &geom_shell1, &poly_shell1).unwrap();
 
     // check the topology
     let vertex_format = VertexDisplayFormat::AsPoint;
@@ -363,7 +362,7 @@ fn rotated_intersection() {
         geom_loops_store0,
         geom_loops_store1,
         ..
-    } = create_loops_stores(&geom_shell0, &poly_shell0, &geom_shell1, &poly_shell1, TOL).unwrap();
+    } = create_loops_stores(&geom_shell0, &poly_shell0, &geom_shell1, &poly_shell1).unwrap();
 
     let vertex_format = VertexDisplayFormat::AsPoint;
     let edge_id_format = EdgeDisplayFormat::VerticesTupleAndID { vertex_format };
@@ -612,7 +611,7 @@ fn crossing_edges() {
         geom_loops_store0,
         geom_loops_store1,
         ..
-    } = create_loops_stores(&geom_shell0, &poly_shell0, &geom_shell1, &poly_shell1, TOL).unwrap();
+    } = create_loops_stores(&geom_shell0, &poly_shell0, &geom_shell1, &poly_shell1).unwrap();
 
     let vertex_format = VertexDisplayFormat::AsPoint;
     let edge_id_format = EdgeDisplayFormat::VerticesTupleAndID { vertex_format };

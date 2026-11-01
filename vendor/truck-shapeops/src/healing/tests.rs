@@ -325,6 +325,7 @@ fn test_split_closed_face_cylinder_with_hole() {
     enum Curve {
         Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
+        #[allow(clippy::enum_variant_names)]
         PCurve(PCurve<ParameterCurve, Surface>),
     }
     impl From<PCurve<Line<Point2>, Surface>> for Curve {
@@ -1525,8 +1526,8 @@ fn step_import() {
         let path = [STEP_DIRECTORY, file_name].concat();
         let step_string = std::fs::read_to_string(path).unwrap();
         let table = Table::from_step(&step_string).unwrap();
-        table.shell.values().cloned().for_each(|step_shell| {
-            let mut cshell = table.to_compressed_shell(&step_shell).unwrap();
+        table.shell.values().for_each(|step_shell| {
+            let mut cshell = table.to_compressed_shell(step_shell).unwrap();
             cshell.robust_split_closed_edges_and_faces(0.05);
             truck_topology::Shell::extract(cshell).unwrap();
         });

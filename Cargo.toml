@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor/truck-shapeops"]
+exclude = ["vendor/truck-*"]
 members = [
     "crates/cli",
     "crates/kernel-api",
@@ -31,4 +31,12 @@ brepscad-eval = { path = "crates/scad-eval" }
 brepscad-syntax = { path = "crates/scad-syntax" }
 
 [patch.crates-io]
+truck-base = { path = "vendor/truck-base" }
+truck-derivers = { path = "vendor/truck-derivers" }
+truck-geotrait = { path = "vendor/truck-geotrait" }
+truck-geometry = { path = "vendor/truck-geometry" }
+truck-topology = { path = "vendor/truck-topology" }
+truck-polymesh = { path = "vendor/truck-polymesh" }
+truck-meshalgo = { path = "vendor/truck-meshalgo" }
+truck-modeling = { path = "vendor/truck-modeling" }
 truck-shapeops = { path = "vendor/truck-shapeops" }
