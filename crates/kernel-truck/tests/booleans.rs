@@ -147,3 +147,19 @@ fn union_with_an_empty_solid_returns_the_other_operand() {
     assert_close(min, [-1.0, -1.0, -1.0]);
     assert_close(max, [1.0, 1.0, 1.0]);
 }
+
+#[test]
+fn coplanar_overlapping_union_keeps_both_operands() {
+    let mut kernel = TruckKernel::new();
+    let a = cube(&mut kernel, [2.0, 2.0, 2.0], [0.0, 0.0, 0.0]);
+    let b = cube(&mut kernel, [2.0, 2.0, 2.0], [1.0, 0.0, 0.0]);
+    let union = kernel.boolean(BooleanOp::Union, a, b).expect("union");
+    let mesh = kernel.tessellate(union, 0.05).expect("mesh");
+    let (min, max) = mesh_bounds(&mesh);
+
+    // Master shapeops classifies coplanar face pairs as "inside" and returns a
+    // union that stops at x = 1, so the adapter rejects the result and falls
+    // back. Either way, the union has to contain both cubes.
+    assert!(min[0] <= -1.0 + 1.0e-6, "min = {min:?}");
+    assert!(max[0] >= 2.0 - 1.0e-6, "max = {max:?}");
+}

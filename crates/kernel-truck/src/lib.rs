@@ -54,6 +54,26 @@ fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
     found.then_some((min, max))
 }
 
+/// True when `outer`'s bounds contain `inner`'s. Master shapeops can return a
+/// union that silently drops one operand (coplanar face pairs are classified as
+/// "inside" and removed), so the adapter checks that a union really contains
+/// what it was given before accepting it.
+fn solid_covers(outer: &Solid, inner: &Solid) -> bool {
+    let (Some((outer_min, outer_max)), Some((inner_min, inner_max))) =
+        (solid_bounds(outer), solid_bounds(inner))
+    else {
+        return false;
+    };
+    (0..3).all(|axis| {
+        let slack = 1.0e-6 * inner_max[axis].abs().max(1.0);
+        outer_min[axis] <= inner_min[axis] + slack && outer_max[axis] >= inner_max[axis] - slack
+    })
+}
+
+fn union_covers(result: &Solid, a: &Solid, b: &Solid) -> bool {
+    solid_covers(result, a) && solid_covers(result, b)
+}
+
 fn disjoint(a: &Solid, b: &Solid) -> bool {
     let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
         return false;
@@ -227,10 +247,14 @@ impl TruckKernel {
             return Ok(result);
         }
 
-        // Exact geometry first.
+        // Exact geometry first. A union must contain both operands: master
+        // shapeops can return an amputated result (coplanar face pairs get
+        // classified as inside and dropped), which is worse than failing.
         for tolerance in BOOLEAN_TOLERANCES {
             if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
-                return Ok(self.insert(OwnedShape::Solid(result)));
+                if op != BooleanOp::Union || union_covers(&result, &a, &b) {
+                    return Ok(self.insert(OwnedShape::Solid(result)));
+                }
             }
         }
 
@@ -265,7 +289,9 @@ impl TruckKernel {
             for tolerance in BOOLEAN_TOLERANCES {
                 if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
                     result = builder::translated(&result, -offset);
-                    return Ok(self.insert(OwnedShape::Solid(result)));
+                    if op != BooleanOp::Union || union_covers(&result, &a, &b) {
+                        return Ok(self.insert(OwnedShape::Solid(result)));
+                    }
                 }
             }
         }
