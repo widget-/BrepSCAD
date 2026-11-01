@@ -522,3 +522,58 @@ mod tests {
         assert!(hits.is_empty());
     }
 }
+
+#[cfg(test)]
+mod circle_tests {
+    use super::*;
+
+    /// Full-circle NURBS (degree 2, 9 control points) extruded along z.
+    fn circle_wall() -> SplineSurface {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let unit = [
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [-1.0, 1.0],
+            [-1.0, 0.0],
+            [-1.0, -1.0],
+            [0.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 0.0],
+        ];
+        let weights = [1.0, s, 1.0, s, 1.0, s, 1.0, s, 1.0];
+        let mut control = Vec::new();
+        for index in 0..unit.len() {
+            let [x, y] = unit[index];
+            let weight = weights[index];
+            control.push([x * weight, y * weight, -weight, weight]);
+            control.push([x * weight, y * weight, weight, weight]);
+        }
+        // 9 control points, degree 2 → 12 knots; quarter arcs at 1, 2, 3.
+        let knots_u = vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+        let knots_v = vec![0.0, 0.0, 1.0, 1.0];
+
+        SplineSurface::new(2, 1, knots_u, knots_v, control).expect("circle wall")
+    }
+
+    #[test]
+    fn wall_hits_away_from_the_seam() {
+        let surface = circle_wall();
+        for y in [-0.9_f64, -0.5, 0.0, 0.5, 0.9] {
+            let ray = Ray::new([2.0, y, 0.3], [-1.0, 0.0, 0.0]);
+            let mut hits = Vec::new();
+            surface.intersect(&ray, &mut hits);
+            let nearest = hits
+                .iter()
+                .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            let hit = nearest.unwrap_or_else(|| panic!("y = {y}: no hit"));
+            let expected = 2.0 - (1.0 - y * y).sqrt();
+            assert!(
+                (hit.distance - expected).abs() < 1e-6,
+                "y = {y}: distance {} expected {expected}, uv {:?}",
+                hit.distance,
+                hit.uv
+            );
+        }
+    }
+}

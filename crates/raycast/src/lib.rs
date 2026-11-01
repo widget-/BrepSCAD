@@ -92,6 +92,13 @@ impl Face {
         self.flip = flip;
         self
     }
+
+    /// Attach tessellated coverage. The CPU caster keeps using the surface; the
+    /// GPU tracer, which has no spline intersection yet, renders the triangles.
+    pub fn with_triangles(mut self, triangles: Vec<[[f64; 3]; 3]>) -> Self {
+        self.triangles = triangles;
+        self
+    }
 }
 
 /// A nearest-hit result in a [`Scene`].

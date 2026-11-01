@@ -1,6 +1,6 @@
 //! The analytic ray-caster must agree with the tessellated preview mesh.
 
-use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Transform};
+use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_kernel_truck::TruckKernel;
 use brepscad_raycast::{Ray, Scene};
 
@@ -211,4 +211,43 @@ fn boolean_scene_uses_the_trim_loops_of_the_result() {
     assert_eq!(hit.normal, [0.0, 0.0, 1.0]);
 
     check_against_mesh(&scene, &mesh, 1.0e-6);
+}
+
+#[test]
+fn spline_walls_are_extracted_and_match_the_mesh() {
+    let mut kernel = TruckKernel::new();
+    let sketch = kernel
+        .sketch(Sketch::Circle { radius: 1.0 })
+        .expect("circle");
+    let solid = kernel.extrude(sketch, 2.0).expect("extrude");
+    let scene = kernel.raycast_scene(solid, 0.01).expect("scene");
+    let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+    let spline_faces = scene
+        .faces()
+        .iter()
+        .filter(|face| matches!(face.surface, Some(brepscad_raycast::Surface::Spline(_))))
+        .count();
+    assert!(
+        spline_faces > 0,
+        "an extruded circle has B-spline walls, got {} faces",
+        scene.faces().len()
+    );
+
+    // Rays across the lateral surface must agree with the tessellated reference,
+    // which also proves the trim loops land on the patch's own parameters.
+    for x in [-0.9_f64, -0.4, 0.0, 0.4, 0.9] {
+        let ray = Ray::new([2.0, x, 0.3], [-1.0, 0.0, 0.0]);
+        let scene_hit = scene.cast(&ray).map(|hit| hit.distance);
+        let mesh_hit = mesh_distance(&mesh, &ray);
+        match (scene_hit, mesh_hit) {
+            (Some(analytic), Some(reference)) => assert!(
+                (analytic - reference).abs() < 0.02,
+                "x = {x}: scene {analytic}, mesh {reference}"
+            ),
+            (None, Some(reference)) => panic!("x = {x}: scene missed, mesh hit at {reference}"),
+            (Some(analytic), None) => panic!("x = {x}: scene hit at {analytic}, mesh missed"),
+            (None, None) => {}
+        }
+    }
 }

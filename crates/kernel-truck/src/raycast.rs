@@ -1,9 +1,9 @@
 //! Build a neutral ray-casting scene from a Truck solid.
 //!
-//! Only surfaces the ray caster models are exported: planes and the surfaces of
-//! revolution of a straight line (cylinders and cones). Faces with any other
-//! surface are dropped, so a caller that needs full coverage has to fall back to
-//! the tessellated mesh.
+//! Planes, surfaces of revolution of a straight line (cylinders and cones) and
+//! tensor-product B-spline/NURBS patches are exported as exact surfaces. Only
+//! faces with a surface the caster cannot model (hyperboloids, degenerate
+//! patches) fall back to their tessellation.
 
 use std::f64::consts::TAU;
 
@@ -15,9 +15,11 @@ use truck_modeling::*;
 const TRIM_TOLERANCE: f64 = 1.0e-3;
 /// Distance below which a generator line is treated as meeting the axis.
 const CONE_AXIS_TOLERANCE: f64 = 1.0e-6;
+/// Newton trials when projecting a wire point onto a spline patch.
+const TRIM_SEARCH_TRIALS: usize = 100;
 
 /// Surface parameters of a point, matching the exported [`RaycastSurface`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Parameterization {
     Plane {
         origin: Point3,
@@ -29,10 +31,13 @@ enum Parameterization {
         axis: Vector3,
         u_reference: Vector3,
     },
+    /// The patch's own `(u, v)`, projected back through Truck's parameter
+    /// search so trims line up with the caster's parameterisation.
+    Spline { surface: std::sync::Arc<Surface> },
 }
 
 impl Parameterization {
-    fn map(&self, point: Point3) -> [f64; 2] {
+    fn map(&self, point: Point3) -> Option<[f64; 2]> {
         match self {
             Self::Plane {
                 origin,
@@ -40,7 +45,7 @@ impl Parameterization {
                 v_axis,
             } => {
                 let local = point - origin;
-                [local.dot(*u_axis), local.dot(*v_axis)]
+                Some([local.dot(*u_axis), local.dot(*v_axis)])
             }
             Self::Revolved {
                 origin,
@@ -50,8 +55,17 @@ impl Parameterization {
                 let local = point - origin;
                 let height = local.dot(*axis);
                 let radial = local - height * *axis;
-                [revolved_angle(*axis, *u_reference, radial), height]
+                Some([revolved_angle(*axis, *u_reference, radial), height])
             }
+            Self::Spline { surface } => match **surface {
+                Surface::BSplineSurface(ref patch) => patch
+                    .search_parameter(point, None, TRIM_SEARCH_TRIALS)
+                    .map(|(u, v)| [u, v]),
+                Surface::NurbsSurface(ref patch) => patch
+                    .search_parameter(point, None, TRIM_SEARCH_TRIALS)
+                    .map(|(u, v)| [u, v]),
+                _ => None,
+            },
         }
     }
 
@@ -63,13 +77,21 @@ impl Parameterization {
 pub(crate) fn scene_from_solid(solid: &Solid, tolerance: f64) -> Scene {
     let mut faces = Vec::new();
     for face in solid.face_iter() {
-        if let Some(analytic) = analytic_face(face) {
-            faces.push(analytic);
-        } else if let Some(triangles) = tessellated_face(face, tolerance) {
-            // The surface is a B-spline or NURBS patch; cover it with its
-            // tessellation so the scene still represents the whole solid.
-            faces.push(RaycastFace::from_triangles(triangles).with_flip(!face.orientation()));
+        let Some(mut analytic) = analytic_face(face) else {
+            if let Some(triangles) = tessellated_face(face, tolerance) {
+                faces.push(RaycastFace::from_triangles(triangles).with_flip(!face.orientation()));
+            }
+            continue;
+        };
+        // The GPU tracer has no spline intersection yet, so spline faces keep
+        // tessellated coverage for the shader. The CPU caster still uses the
+        // exact surface, because `Scene::cast` prefers it when present.
+        if matches!(analytic.surface, Some(RaycastSurface::Spline(_))) {
+            if let Some(triangles) = tessellated_face(face, tolerance) {
+                analytic = analytic.with_triangles(triangles);
+            }
         }
+        faces.push(analytic);
     }
     Scene::new(faces)
 }
@@ -101,13 +123,31 @@ fn analytic_face(face: &Face) -> Option<RaycastFace> {
     let (surface, parameters) = classify(&face.surface())?;
 
     let mut loops = Vec::new();
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut sampled = false;
     for wire in face.absolute_boundaries() {
-        if let Some(polygon) = wire_loop(wire, &parameters) {
-            loops.push(polygon);
+        let Some((polygon, points)) = wire_loop(wire, &parameters) else {
+            continue;
+        };
+        for point in &points {
+            sampled = true;
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
+            }
         }
+        loops.push(polygon);
     }
-    if loops.is_empty() {
+    if loops.is_empty() || !sampled {
         return None;
+    }
+    // The boundary samples trace the real extent; a face bounded by closed
+    // edges has all of its vertices on the seam, so topology vertices alone
+    // would collapse the box and cull honest hits.
+    for axis in 0..3 {
+        min[axis] -= TRIM_TOLERANCE;
+        max[axis] += TRIM_TOLERANCE;
     }
 
     let trims = if parameters.periodic() {
@@ -116,7 +156,7 @@ fn analytic_face(face: &Face) -> Option<RaycastFace> {
         TrimRegion::new(loops)
     };
 
-    Some(RaycastFace::new(surface, trims, face_bounds(face)?).with_flip(!face.orientation()))
+    Some(RaycastFace::new(surface, trims, (min, max)).with_flip(!face.orientation()))
 }
 
 fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
@@ -216,12 +256,67 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
                 },
             ))
         }
-        _ => None,
+        Surface::BSplineSurface(patch) => {
+            let spline = spline_from(
+                patch.degrees(),
+                patch.knot_vecs(),
+                patch
+                    .control_points()
+                    .iter()
+                    .flatten()
+                    .map(|point| [point.x, point.y, point.z, 1.0]),
+            )?;
+            Some((
+                RaycastSurface::Spline(std::sync::Arc::new(spline)),
+                Parameterization::Spline {
+                    surface: std::sync::Arc::new(surface.clone()),
+                },
+            ))
+        }
+        Surface::NurbsSurface(patch) => {
+            let spline = spline_from(
+                patch.degrees(),
+                patch.knot_vecs(),
+                patch
+                    .control_points()
+                    .iter()
+                    .flatten()
+                    .map(|point| [point.x, point.y, point.z, point.w]),
+            )?;
+            Some((
+                RaycastSurface::Spline(std::sync::Arc::new(spline)),
+                Parameterization::Spline {
+                    surface: std::sync::Arc::new(surface.clone()),
+                },
+            ))
+        }
     }
 }
 
-fn wire_loop(wire: &Wire, parameters: &Parameterization) -> Option<Vec<[f64; 2]>> {
+/// Convert a Truck patch into the caster's neutral spline surface.
+fn spline_from(
+    degrees: (usize, usize),
+    knots: &(KnotVec, KnotVec),
+    control: impl Iterator<Item = [f64; 4]>,
+) -> Option<brepscad_raycast::SplineSurface> {
+    brepscad_raycast::SplineSurface::new(
+        degrees.0,
+        degrees.1,
+        knots.0.iter().copied().collect(),
+        knots.1.iter().copied().collect(),
+        control.collect(),
+    )
+}
+
+/// A projected loop: the polygon in surface parameters plus the boundary
+/// samples it came from, used to bound the face.
+type ProjectedLoop = (Vec<[f64; 2]>, Vec<[f64; 3]>);
+
+/// Project a wire into surface parameters, returning the polygon and the
+/// sampled boundary points it came from.
+fn wire_loop(wire: &Wire, parameters: &Parameterization) -> Option<ProjectedLoop> {
     let mut polygon: Vec<[f64; 2]> = Vec::new();
+    let mut points: Vec<[f64; 3]> = Vec::new();
     let mut previous_angle: Option<f64> = None;
 
     for edge in wire.iter() {
@@ -229,7 +324,10 @@ fn wire_loop(wire: &Wire, parameters: &Parameterization) -> Option<Vec<[f64; 2]>
         let range = curve.range_tuple();
         let polyline = PolylineCurve::from_curve(&curve, range, TRIM_TOLERANCE);
         for point in polyline.iter() {
-            let mut uv = parameters.map(*point);
+            let Some(mut uv) = parameters.map(*point) else {
+                continue;
+            };
+            points.push(position(*point));
             if parameters.periodic() {
                 // Keep a loop that crosses the seam continuous.
                 uv[0] = match previous_angle {
@@ -249,7 +347,7 @@ fn wire_loop(wire: &Wire, parameters: &Parameterization) -> Option<Vec<[f64; 2]>
             polygon.pop();
         }
     }
-    (polygon.len() >= 3).then_some(polygon)
+    (polygon.len() >= 3).then_some((polygon, points))
 }
 
 fn push_distinct(polygon: &mut Vec<[f64; 2]>, uv: [f64; 2]) {
@@ -271,21 +369,6 @@ fn unwrap_angle(angle: f64, previous: f64) -> f64 {
         angle += TAU;
     }
     angle
-}
-
-fn face_bounds(face: &Face) -> Option<([f64; 3], [f64; 3])> {
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    let mut found = false;
-    for vertex in face.vertex_iter() {
-        let point = vertex.point();
-        found = true;
-        for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
-            min[axis] = min[axis].min(value);
-            max[axis] = max[axis].max(value);
-        }
-    }
-    found.then_some((min, max))
 }
 
 /// Parameters of the closest points on an axis line and a generator line.
