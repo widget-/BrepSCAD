@@ -139,7 +139,9 @@ vendor/
   `$children` holds the child count.
 - `for` loops over ranges, vectors, strings, scalars, and `undef`, with
   multiple bindings, `$` loop variables, and block or single-statement bodies.
-  `undef` yields no iterations and scalars yield one, matching OpenSCAD.
+  Bindings are evaluated sequentially, so later bindings can use earlier loop
+  variables. `undef` yields no iterations and scalars yield one, matching
+  OpenSCAD.
 - `if` / `else` with boolean or numeric truthiness.
 - `$fn` switches between faceted and analytic geometry at 33 segments.
   `$fa=12`, `$fs=2`, `$fn=0`, `$t=0`, `$preview=false`, and `PI` are initialized

@@ -100,7 +100,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `module` declarations | ✔ | |
 | `function` declarations | ✔ | |
 | Built-in functions | ◐ | Math/trig and hyperbolic functions, `min`/`max`, `norm`/`cross`/`len`/`concat`, `str`/`chr`/`ord` (`chr` accepts code-point lists), type predicates, `lookup`, `search`, `rands` (`seed_value`), `is_undef`, `is_nan`, `is_function`, `version`, and `version_num`. |
-| `for` / `if` | ✔ | `for` supports range/scalar/list/string/undef bindings and `$` loop variables. |
+| `for` / `if` | ✔ | `for` supports range/scalar/list/string/undef bindings and `$` loop variables; later bindings can see earlier loop variables. |
 | `echo` / `assert` | ✔ | Module and expression forms; assertion failures abort evaluation and `echo` messages are collected. |
 | Statement modifiers | ◐ | `*` disables a subtree; `#`, `%`, and `!` are currently parsed but ignored. |
 | `let` statement | ✔ | |

@@ -328,3 +328,13 @@ fn chr_accepts_code_point_lists() {
         [2.0, 8.0, 1.0]
     );
 }
+#[test]
+fn comprehension_bindings_are_evaluated_sequentially() {
+    assert_eq!(
+        cube_extents(
+            "v = [for (i = [0:2], j = [0:i]) i * 10 + j];\n\
+             cube([len(v), v[0] + 1, v[5]]);",
+        ),
+        [6.0, 1.0, 22.0]
+    );
+}

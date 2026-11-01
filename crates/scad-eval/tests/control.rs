@@ -152,3 +152,15 @@ fn for_supports_special_variable_bindings() {
     assert!((mins[0] + 0.5).abs() < 1.0e-6, "mins = {mins:?}");
     assert!((mins[1] - 1.5).abs() < 1.0e-6, "mins = {mins:?}");
 }
+#[test]
+fn for_bindings_are_evaluated_sequentially() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "for (i = [0:2], j = [0:i]) translate([i * 2, j * 2, 0]) cube(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("sequential bindings");
+
+    assert_eq!(evaluation.shapes.len(), 6);
+}

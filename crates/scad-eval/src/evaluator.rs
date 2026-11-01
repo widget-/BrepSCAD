@@ -1077,7 +1077,7 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn for_bindings(
         &mut self,
-        bindings: &[(String, Vec<Value>)],
+        bindings: &[(String, SyntaxElement)],
         index: usize,
         body: &SyntaxNode,
         parent: Transform,
@@ -1088,14 +1088,14 @@ impl<K: Kernel> Evaluator<'_, K> {
             return Ok(());
         }
 
-        let (name, values) = &bindings[index];
+        let (name, expression) = &bindings[index];
+        let value = self.element_value(expression.clone())?;
+        let values = loop_values(name, value)?;
         let mut outcome = Ok(());
         for value in values {
             let env_parent = self.current_env();
             let env = Env::child(env_parent.clone(), env_parent);
-            env.variables
-                .borrow_mut()
-                .insert(name.clone(), value.clone());
+            env.variables.borrow_mut().insert(name.clone(), value);
             self.scopes.push(env);
             outcome = self.for_bindings(bindings, index + 1, body, parent, nodes);
             self.scopes.pop();
@@ -2913,7 +2913,7 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn for_comprehension_values(
         &mut self,
-        bindings: &[(String, Vec<Value>)],
+        bindings: &[(String, SyntaxElement)],
         index: usize,
         body: &SyntaxElement,
         values: &mut Vec<Value>,
@@ -2923,13 +2923,13 @@ impl<K: Kernel> Evaluator<'_, K> {
             return Ok(());
         }
 
-        let (name, items) = &bindings[index];
+        let (name, expression) = &bindings[index];
+        let value = self.element_value(expression.clone())?;
+        let items = loop_values(name, value)?;
         for value in items {
             let env_parent = self.current_env();
             let env = Env::child(env_parent.clone(), env_parent);
-            env.variables
-                .borrow_mut()
-                .insert(name.clone(), value.clone());
+            env.variables.borrow_mut().insert(name.clone(), value);
             self.scopes.push(env);
             let result = self.for_comprehension_values(bindings, index + 1, body, values);
             self.scopes.pop();
@@ -2941,7 +2941,7 @@ impl<K: Kernel> Evaluator<'_, K> {
     fn comprehension_bindings(
         &mut self,
         arg_list: &SyntaxNode,
-    ) -> Result<Vec<(String, Vec<Value>)>, EvalError> {
+    ) -> Result<Vec<(String, SyntaxElement)>, EvalError> {
         let mut bindings = Vec::new();
         for element in arg_list.children_with_tokens() {
             match element.kind() {
@@ -2953,10 +2953,10 @@ impl<K: Kernel> Evaluator<'_, K> {
                     };
                     let name = first_ident(&child)
                         .ok_or_else(|| EvalError::Parse("missing binding name".to_owned()))?;
-                    let value = self.expression_after_eq(&child)?.ok_or_else(|| {
+                    let value = expression_element_after_eq(&child)?.ok_or_else(|| {
                         EvalError::Parse(format!("missing value for binding {name}"))
                     })?;
-                    bindings.push((name.clone(), loop_values(&name, value)?));
+                    bindings.push((name, value));
                 }
                 _ => {
                     return Err(EvalError::Expression(
@@ -3525,6 +3525,19 @@ fn is_comprehension(node: &SyntaxNode) -> bool {
             .is_some_and(|inner| is_comprehension(&inner)),
         _ => false,
     }
+}
+
+fn expression_element_after_eq(node: &SyntaxNode) -> Result<Option<SyntaxElement>, EvalError> {
+    let mut after_eq = false;
+    for element in node.children_with_tokens() {
+        match element.kind() {
+            SyntaxKind::EQ => after_eq = true,
+            kind if kind.is_trivia() => {}
+            _ if after_eq => return Ok(Some(element)),
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 fn comprehension_arguments(node: &SyntaxNode) -> Result<SyntaxNode, EvalError> {
