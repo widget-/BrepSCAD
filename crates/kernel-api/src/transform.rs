@@ -78,6 +78,40 @@ impl Transform {
             .compose(Self::from_rotation_x(x))
     }
 
+    /// Rotation of `angle` radians around `axis`.
+    pub fn from_rotation_axis(axis: [f64; 3], angle: f64) -> Option<Self> {
+        let [x, y, z] = axis;
+        let length_squared = x * x + y * y + z * z;
+        if !length_squared.is_finite() || length_squared == 0.0 {
+            return None;
+        }
+        let inverse = length_squared.sqrt().recip();
+        let [x, y, z] = [x * inverse, y * inverse, z * inverse];
+        let (sin, cos) = angle.sin_cos();
+        let one_minus_cos = 1.0 - cos;
+        Some(Self::from_rows([
+            [
+                one_minus_cos * x * x + cos,
+                one_minus_cos * x * y - sin * z,
+                one_minus_cos * x * z + sin * y,
+                0.0,
+            ],
+            [
+                one_minus_cos * x * y + sin * z,
+                one_minus_cos * y * y + cos,
+                one_minus_cos * y * z - sin * x,
+                0.0,
+            ],
+            [
+                one_minus_cos * x * z - sin * y,
+                one_minus_cos * y * z + sin * x,
+                one_minus_cos * z * z + cos,
+                0.0,
+            ],
+            [0.0, 0.0, 0.0, 1.0],
+        ]))
+    }
+
     /// Builds a transform from row-major values, the order OpenSCAD's
     /// `multmatrix` uses.
     pub fn from_rows(rows: [[f64; 4]; 4]) -> Self {
@@ -212,5 +246,18 @@ mod tests {
         let mut not_finite = Transform::IDENTITY;
         not_finite.cols[0][0] = f64::NAN;
         assert!(!not_finite.is_finite());
+    }
+
+    #[test]
+    fn axis_angle_matches_axis_rotations() {
+        let z = Transform::from_rotation_axis([0.0, 0.0, 2.0], std::f64::consts::FRAC_PI_2)
+            .expect("axis rotation");
+        let expected = Transform::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        for column in 0..4 {
+            for row in 0..4 {
+                assert!((z.cols[column][row] - expected.cols[column][row]).abs() < 1.0e-12);
+            }
+        }
+        assert!(Transform::from_rotation_axis([0.0, 0.0, 0.0], 1.0).is_none());
     }
 }

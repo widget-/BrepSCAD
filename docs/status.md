@@ -147,11 +147,14 @@ vendor/
   builds polyhedral frustums and cones. `polyhedron` accepts `triangles` as an
   alias for `faces`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude` with optional
-  `center` and ignored `convexity`.
+  `center` and ignored `convexity`. `square` accepts `center`; `polygon`
+  accepts `paths` and ignores `convexity`.
 - `rotate_extrude` with optional sweep and start angles and ignored
   `convexity`.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`;
-  `translate` accepts 2D vectors and pads Z with zero.
+  `translate` accepts 2D vectors and pads Z with zero. `rotate` accepts a
+  number, an Euler vector, or `a=`/`v=` axis-angle. `multmatrix` accepts
+  3x3, 3x4, 4x3, and 4x4 row-major matrices.
 - `hull` and `minkowski` for convex 3D children. Minkowski sums use the convex
   hull of pairwise vertex sums; 2D and non-convex Minkowski are not supported.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
@@ -410,12 +413,13 @@ For headless UI snapshots, see
 ## Recommended next steps
 
 A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
-evaluation succeeds on 88 files (all pure definitions), with 5 kernel boolean
-failures, 7 BOSL2 assertion failures, 3 language errors from standalone library
-files, 1 MCAD test-module error, and 5 other evaluation errors. The arithmetic,
-built-in, primitive, color/render, loop, search, and empty-boolean gaps from the
-previous pass are fixed; the remaining failures are mostly library-context,
-kernel, and deeper BOSL2 math/semantics issues.
+evaluation succeeds on 89 files (88 with no geometry, plus BOSL2
+`examples/lsystems.scad`), with 6 kernel boolean failures, 3 BOSL2 assertion
+failures, 3 language errors from standalone library files, 1 geometry error,
+and 7 other evaluation errors. The arithmetic, built-in, primitive,
+color/render, loop, search, and empty-boolean gaps from the previous pass are
+fixed; the remaining failures are mostly library-context, kernel, and deeper
+BOSL2 math/semantics issues.
 
 “ok” here only means the file evaluated without an error; nearly all are pure
 library files with no top-level geometry. BOSL2’s module surface is now partly

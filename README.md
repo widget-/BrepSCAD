@@ -108,8 +108,8 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `$fn`, `$fa`, `$fs` | ◐ | OpenSCAD defaults `$fn=0`, `$fa=12`, `$fs=2`; `PI` is available. `$fn` ≤32 facets; ≥33 or unset uses analytic geometry. `$fa`/`$fs` only sample profiles. |
 | `cube`, `cylinder`, `sphere` | ✔ | `cylinder` accepts `h`, `r`/`d`, `r1`/`r2`, `d1`/`d2`, positional `center`, and builds frustums/cones. `sphere` is faceted. |
 | `polyhedron` | ✔ | |
-| `square`, `circle`, `polygon` | ✔ | |
-| `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `translate` accepts 2D or 3D vectors; `rotate` vector form only; `resize` `newsize` only, no `auto`. |
+| `square`, `circle`, `polygon` | ✔ | `square` accepts `center`; `polygon` accepts `paths` and ignores `convexity`. |
+| `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `translate` accepts 2D or 3D vectors; `rotate` accepts an angle, Euler vector, or `a=`/`v=` axis-angle; `multmatrix` accepts 3x3, 3x4, 4x3, and 4x4 matrices; `resize` `newsize` only, no `auto`. |
 | `linear_extrude` | ◐ | `height`, `center`, and ignored `convexity`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
 | `rotate_extrude` | ◐ | `angle`, `start`, and ignored `convexity`; profile must lie at `x >= 0`. |
 | `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. Zero-child booleans produce no geometry. |

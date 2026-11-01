@@ -351,3 +351,12 @@ fn extrusions_accept_convexity() {
     .expect("linear extrude");
     assert_eq!(evaluation.shapes.len(), 1);
 }
+#[test]
+fn polygon_accepts_multiple_paths() {
+    let source = "linear_extrude(1) polygon(points=[[0,0],[1,0],[1,1],[0,1],[2,0],[3,0],[3,1],[2,1]], paths=[[0,1,2,3],[4,5,6,7]]);";
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("polygon paths");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 2.0).abs() < 1.0e-6, "volume = {volume}");
+}

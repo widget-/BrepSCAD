@@ -1303,9 +1303,9 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "square" => {
-                args.ensure_known("square", &["size"])?;
-                if args.positional.len() > 1 {
-                    return Err(bad_args("square", "expected one size"));
+                args.ensure_known("square", &["size", "center"])?;
+                if args.positional.len() > 2 {
+                    return Err(bad_args("square", "expected size and optional center"));
                 }
                 let size = args
                     .argument("size", 0)
@@ -1314,7 +1314,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if size.iter().any(|value| *value <= 0.0) {
                     return Err(bad_args("square", "dimensions must be positive"));
                 }
-                let local = self.centering_offset([size[0] / 2.0, size[1] / 2.0, 0.0]);
+                let center = match args.named.get("center").or_else(|| args.positional.get(1)) {
+                    None | Some(Value::Undef) => None,
+                    Some(value) => Some(value.as_boolean("square")?),
+                };
+                let local = self.placement_offset([size[0] / 2.0, size[1] / 2.0, 0.0], center);
                 let world = parent.compose(local);
                 let profile = profile::square(size);
                 let profile = profile::transform(&profile, world);
@@ -1366,7 +1370,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "polygon" => {
-                args.ensure_known("polygon", &["points"])?;
+                args.ensure_known("polygon", &["points", "paths", "convexity"])?;
                 if args.positional.len() > 1 {
                     return Err(bad_args("polygon", "expected one point list"));
                 }
@@ -1377,9 +1381,68 @@ impl<K: Kernel> Evaluator<'_, K> {
                 if points.len() < 3 {
                     return Err(bad_args("polygon", "expected at least three points"));
                 }
-                let profile = profile::polygon(&points);
+                let paths = match args.named.get("paths") {
+                    None | Some(Value::Undef) => None,
+                    Some(value) => {
+                        let Value::List(paths) = value else {
+                            return Err(bad_args(
+                                "polygon",
+                                "paths must be a list of point indices",
+                            ));
+                        };
+                        let mut result = Vec::with_capacity(paths.len());
+                        for path in paths {
+                            let Value::List(indices) = path else {
+                                return Err(bad_args(
+                                    "polygon",
+                                    "each path must be a list of point indices",
+                                ));
+                            };
+                            let mut path_indices = Vec::with_capacity(indices.len());
+                            for index in indices {
+                                let index = index.as_number("polygon")?;
+                                if !index.is_finite()
+                                    || index < 0.0
+                                    || index.fract() != 0.0
+                                    || index as usize >= points.len()
+                                {
+                                    return Err(bad_args("polygon", "invalid point index"));
+                                }
+                                path_indices.push(index as usize);
+                            }
+                            result.push(path_indices);
+                        }
+                        Some(result)
+                    }
+                };
+
+                let (profile, shape) = match paths {
+                    None => {
+                        let profile = profile::polygon(&points);
+                        let shape = self.kernel.sketch(Sketch::Polygon { points })?;
+                        (profile, shape)
+                    }
+                    Some(paths) => {
+                        if paths.is_empty() {
+                            return Err(bad_args("polygon", "paths cannot be empty"));
+                        }
+                        let mut profile = Vec::new();
+                        for path in &paths {
+                            if path.len() < 3 {
+                                return Err(bad_args(
+                                    "polygon",
+                                    "each path needs at least three points",
+                                ));
+                            }
+                            let path_points =
+                                path.iter().map(|index| points[*index]).collect::<Vec<_>>();
+                            profile.extend(profile::polygon(&path_points));
+                        }
+                        let shape = self.kernel.sketch_profile(&profile::to_regions(&profile))?;
+                        (profile, shape)
+                    }
+                };
                 let profile = profile::transform(&profile, parent);
-                let shape = self.kernel.sketch(Sketch::Polygon { points })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,
@@ -1710,41 +1773,36 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "translate" | "rotate" | "scale" | "multmatrix" | "mirror" => {
-                let first = match name.as_str() {
-                    "rotate" => "a",
-                    "multmatrix" => "m",
-                    _ => "v",
-                };
-                args.ensure_known(name.as_str(), &[first])?;
-                let argument = args.one(name.as_str(), first)?;
-                let local = match name.as_str() {
-                    "translate" => {
-                        let vector = match argument {
-                            Value::List(values) if values.len() == 2 => [
-                                values[0].as_number("translate")?,
-                                values[1].as_number("translate")?,
-                                0.0,
-                            ],
-                            _ => argument.as_vector3("translate")?,
-                        };
-                        Transform::from_translation(vector)
+                let local = if name == "rotate" {
+                    self.rotate_transform(&args)?
+                } else {
+                    let first = match name.as_str() {
+                        "multmatrix" => "m",
+                        _ => "v",
+                    };
+                    args.ensure_known(name.as_str(), &[first])?;
+                    let argument = args.one(name.as_str(), first)?;
+                    match name.as_str() {
+                        "translate" => {
+                            let vector = match argument {
+                                Value::List(values) if values.len() == 2 => [
+                                    values[0].as_number("translate")?,
+                                    values[1].as_number("translate")?,
+                                    0.0,
+                                ],
+                                _ => argument.as_vector3("translate")?,
+                            };
+                            Transform::from_translation(vector)
+                        }
+                        "multmatrix" => argument.as_matrix("multmatrix")?,
+                        "mirror" => {
+                            let normal = argument.as_vector3("mirror")?;
+                            Transform::from_mirror(normal).ok_or_else(|| {
+                                bad_args("mirror", "normal must be non-zero and finite")
+                            })?
+                        }
+                        _ => Transform::from_scale(argument.as_scale("scale")?),
                     }
-                    "rotate" => {
-                        let [x, y, z] = argument.as_vector3("rotate")?;
-                        Transform::from_rotation_xyz([
-                            x.to_radians(),
-                            y.to_radians(),
-                            z.to_radians(),
-                        ])
-                    }
-                    "multmatrix" => argument.as_matrix("multmatrix")?,
-                    "mirror" => {
-                        let normal = argument.as_vector3("mirror")?;
-                        Transform::from_mirror(normal).ok_or_else(|| {
-                            bad_args("mirror", "normal must be non-zero and finite")
-                        })?
-                    }
-                    _ => Transform::from_scale(argument.as_scale("scale")?),
                 };
                 let combined = parent.compose(local);
 
@@ -1999,6 +2057,41 @@ impl<K: Kernel> Evaluator<'_, K> {
 
     fn centering_offset(&self, translation: [f64; 3]) -> Transform {
         self.placement_offset(translation, None)
+    }
+
+    fn rotate_transform(&self, args: &Arguments) -> Result<Transform, EvalError> {
+        args.ensure_known("rotate", &["a", "v"])?;
+        if args.positional.len() > 2 {
+            return Err(bad_args("rotate", "expected an angle and optional axis"));
+        }
+        let angle = match args.named.get("a").or_else(|| args.positional.first()) {
+            None | Some(Value::Undef) => None,
+            Some(value) => Some(value),
+        };
+        let axis = match args.named.get("v").or_else(|| args.positional.get(1)) {
+            None | Some(Value::Undef) => None,
+            Some(value) => Some(value),
+        };
+        if let Some(axis) = axis {
+            let angle = angle
+                .ok_or_else(|| bad_args("rotate", "expected an angle"))?
+                .as_number("rotate")?;
+            let axis = axis.as_vector3("rotate")?;
+            return Transform::from_rotation_axis(axis, angle.to_radians())
+                .ok_or_else(|| bad_args("rotate", "axis must be non-zero and finite"));
+        }
+        match angle {
+            Some(Value::Number(angle)) => Ok(Transform::from_rotation_z(angle.to_radians())),
+            Some(value) => {
+                let [x, y, z] = value.as_vector3("rotate")?;
+                Ok(Transform::from_rotation_xyz([
+                    x.to_radians(),
+                    y.to_radians(),
+                    z.to_radians(),
+                ]))
+            }
+            None => Ok(Transform::IDENTITY),
+        }
     }
 
     fn placement_offset(&self, translation: [f64; 3], center: Option<bool>) -> Transform {

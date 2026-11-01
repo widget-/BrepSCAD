@@ -192,19 +192,22 @@ impl Value {
 
     pub(crate) fn as_matrix(&self, module: &str) -> Result<Transform, EvalError> {
         let Self::List(rows) = self else {
-            return Err(bad_args(module, "expected a 4x3 or 4x4 matrix"));
+            return Err(bad_args(module, "expected a 3x3, 3x4, 4x3, or 4x4 matrix"));
         };
-        if !(rows.len() == 3 || rows.len() == 4) {
-            return Err(bad_args(module, "expected a 4x3 or 4x4 matrix"));
+        if !(3..=4).contains(&rows.len()) {
+            return Err(bad_args(module, "expected a 3x3, 3x4, 4x3, or 4x4 matrix"));
         }
 
         let mut matrix = [[0.0; 4]; 4];
+        for (index, row) in matrix.iter_mut().enumerate() {
+            row[index] = 1.0;
+        }
         for (row, values) in rows.iter().take(3).enumerate() {
             let Self::List(values) = values else {
-                return Err(bad_args(module, "expected a 4x3 or 4x4 matrix"));
+                return Err(bad_args(module, "expected a 3x3, 3x4, 4x3, or 4x4 matrix"));
             };
-            if values.len() != 4 {
-                return Err(bad_args(module, "expected a 4x3 or 4x4 matrix"));
+            if !(3..=4).contains(&values.len()) {
+                return Err(bad_args(module, "expected a 3x3, 3x4, 4x3, or 4x4 matrix"));
             }
             for (column, value) in values.iter().enumerate() {
                 matrix[row][column] = value.as_number(module)?;

@@ -272,3 +272,46 @@ fn translate_accepts_two_dimensional_vectors() {
     assert!((min[1] - 1.5).abs() < 1e-6);
     assert!((max[2] - 0.5).abs() < 1e-6);
 }
+#[test]
+fn rotate_accepts_number_axis_and_euler_forms() {
+    let mut kernel = TruckKernel::new();
+    for source in [
+        "rotate(a = 90) translate([1, 0, 0]) cube(1);",
+        "rotate(a = [0, 0, 90]) translate([1, 0, 0]) cube(1);",
+        "rotate(a = 90, v = [0, 0, 1]) translate([1, 0, 0]) cube(1);",
+    ] {
+        let evaluation = evaluate(source, &mut kernel, 0.01).expect("rotate");
+        let (min, max) = bounds(&evaluation.shapes[0].mesh);
+        assert!((min[0] + 0.5).abs() < 1e-6, "min_x = {}", min[0]);
+        assert!((max[0] - 0.5).abs() < 1e-6, "max_x = {}", max[0]);
+        assert!((min[1] - 0.5).abs() < 1e-6, "min_y = {}", min[1]);
+        assert!((max[1] - 1.5).abs() < 1e-6, "max_y = {}", max[1]);
+    }
+}
+
+#[test]
+fn square_accepts_center() {
+    let mut kernel = TruckKernel::new();
+    let corner = evaluate("square(2, center = false);", &mut kernel, 0.01).expect("corner square");
+    let (min, max) = bounds(&corner.shapes[0].mesh);
+    assert!((min[0] - 0.0).abs() < 1e-6 && (max[0] - 2.0).abs() < 1e-6);
+    assert!((min[1] - 0.0).abs() < 1e-6 && (max[1] - 2.0).abs() < 1e-6);
+
+    let centered =
+        evaluate("square(2, center = true);", &mut kernel, 0.01).expect("centered square");
+    let (min, max) = bounds(&centered.shapes[0].mesh);
+    assert!((min[0] + 1.0).abs() < 1e-6 && (max[0] - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn multmatrix_accepts_3x3() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "multmatrix([[1, 0, 0], [0, 1, 0], [0, 0, 1]]) cube(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("3x3 multmatrix");
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((max[0] - min[0] - 1.0).abs() < 1e-6);
+}
