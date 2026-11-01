@@ -2615,24 +2615,26 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             "cross" => {
                 let [left, right] = two_values(name, args)?;
-                let numbers = |value: &Value| -> Result<[f64; 3], EvalError> {
+                let values = |value: &Value| -> Result<Vec<f64>, EvalError> {
                     let Value::List(values) = value else {
                         return Err(bad_args(name, "expected two vectors"));
                     };
-                    match values.as_slice() {
-                        [x, y, z] => {
-                            Ok([x.as_number(name)?, y.as_number(name)?, z.as_number(name)?])
-                        }
-                        _ => Err(bad_args(name, "expected two 3-element vectors")),
+                    if !matches!(values.len(), 2 | 3) {
+                        return Err(bad_args(name, "expected two 2D or 3D vectors"));
                     }
+                    values.iter().map(|value| value.as_number(name)).collect()
                 };
-                let left = numbers(left)?;
-                let right = numbers(right)?;
-                Ok(Value::List(vec![
-                    Value::Number(left[1] * right[2] - left[2] * right[1]),
-                    Value::Number(left[2] * right[0] - left[0] * right[2]),
-                    Value::Number(left[0] * right[1] - left[1] * right[0]),
-                ]))
+                let left = values(left)?;
+                let right = values(right)?;
+                match (left.as_slice(), right.as_slice()) {
+                    ([x1, y1], [x2, y2]) => Ok(Value::Number(x1 * y2 - y1 * x2)),
+                    ([x1, y1, z1], [x2, y2, z2]) => Ok(Value::List(vec![
+                        Value::Number(y1 * z2 - z1 * y2),
+                        Value::Number(z1 * x2 - x1 * z2),
+                        Value::Number(x1 * y2 - y1 * x2),
+                    ])),
+                    _ => Err(bad_args(name, "expected two vectors of the same dimension")),
+                }
             }
             "len" => match single_value(name, args)? {
                 Value::List(values) => Ok(Value::Number(values.len() as f64)),
@@ -2693,6 +2695,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let Value::List(rows) = table else {
                     return Err(bad_args(name, "expected a table of key/value rows"));
                 };
+                let mut entries = Vec::with_capacity(rows.len());
                 for row in rows {
                     let Value::List(values) = row else {
                         return Err(bad_args(name, "expected a table of key/value rows"));
@@ -2700,8 +2703,31 @@ impl<K: Kernel> Evaluator<'_, K> {
                     let [stored, value, ..] = values.as_slice() else {
                         return Err(bad_args(name, "expected a table of key/value rows"));
                     };
-                    if stored.as_number(name)? == key {
-                        return Ok(value.clone());
+                    entries.push((stored.as_number(name)?, value.clone()));
+                }
+                entries.sort_by(|left, right| left.0.total_cmp(&right.0));
+                if entries.is_empty() {
+                    return Ok(Value::Undef);
+                }
+                if key <= entries[0].0 {
+                    return Ok(entries[0].1.clone());
+                }
+                let last = entries.len() - 1;
+                if key >= entries[last].0 {
+                    return Ok(entries[last].1.clone());
+                }
+                for pair in entries.windows(2) {
+                    let (left_key, left_value) = &pair[0];
+                    let (right_key, right_value) = &pair[1];
+                    if key == *left_key {
+                        return Ok(left_value.clone());
+                    }
+                    if key == *right_key {
+                        return Ok(right_value.clone());
+                    }
+                    if key > *left_key && key < *right_key {
+                        let amount = (key - left_key) / (right_key - left_key);
+                        return Ok(interpolate_value(left_value, right_value, amount));
                     }
                 }
                 Ok(Value::Undef)
@@ -3842,6 +3868,21 @@ fn rands_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
         }
     }
     Ok(Value::List(values))
+}
+
+fn interpolate_value(left: &Value, right: &Value, amount: f64) -> Value {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            Value::Number(left + (right - left) * amount)
+        }
+        (Value::List(left), Value::List(right)) if left.len() == right.len() => Value::List(
+            left.iter()
+                .zip(right)
+                .map(|(left, right)| interpolate_value(left, right, amount))
+                .collect(),
+        ),
+        _ => Value::Undef,
+    }
 }
 
 fn random_bounds(name: &str, value: &Value) -> Result<Vec<f64>, EvalError> {

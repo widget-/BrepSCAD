@@ -123,17 +123,24 @@ fn str_formats_nested_strings_with_quotes() {
 }
 
 #[test]
-fn lookup_finds_values_and_returns_undef_for_missing_keys() {
+fn lookup_interpolates_and_clamps_outside_the_table() {
     assert_eq!(
         cube_extents(
             "table = [[1, \"a\"], [2, \"b\"]];\n\
              cube([\n\
                  lookup(2, table) == \"b\" ? 1 : 2,\n\
-                 is_undef(lookup(3, table)) ? 1 : 2,\n\
-                 1\n\
+                 lookup(3, table) == \"b\" ? 1 : 2,\n\
+                 lookup(0, table) == \"a\" ? 1 : 2\n\
              ]);",
         ),
         [1.0; 3]
+    );
+    assert_eq!(
+        cube_extents(
+            "v = lookup(0.5, [[0, 0], [1, 10]]);\n\
+             cube([v, lookup(0.25, [[0, 0], [0.5, 10], [1, 0]]), 1]);",
+        ),
+        [5.0, 5.0, 1.0]
     );
 }
 

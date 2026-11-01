@@ -87,9 +87,10 @@ vendor/
   `atan2`, `pow`, `min`, `max`, `norm`, `cross`, `len`, `concat`, `str`, `chr`,
   `ord`, `lookup`, `search`, `rands`, `is_num`, `is_nan`, `is_bool`, `is_list`,
   `is_string`, `is_undef`, `is_function`, `version`, and `version_num`.
-  `chr` accepts a number or a list of code points, `rands` accepts a
-  `seed_value` named argument, and `min`/`max` return `undef` for empty or
-  non-numeric inputs.
+  `chr` accepts a number or a list of code points, `lookup` interpolates
+  between numeric table keys and clamps outside the table, `cross` accepts 2D
+  vectors and returns a scalar, `rands` accepts a `seed_value` named argument,
+  and `min`/`max` return `undef` for empty or non-numeric inputs.
 - `undef` is a value: it is false in conditions, propagates through arithmetic,
   compares equal to itself, and is detected by `is_undef`. Strings, vectors,
   and matrices follow OpenSCAD truthiness (empty is false).
@@ -422,7 +423,8 @@ A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
 evaluation succeeds on 89 files (88 with no geometry, plus BOSL2
 `examples/lsystems.scad`), with 9 kernel boolean failures, 1 BOSL2 assertion
 failure, 3 language errors from standalone library files, 2 geometry errors,
-and 4 other evaluation errors. The arithmetic, built-in, primitive,
+4 other evaluation errors, and 1 timeout (`spring_handle.scad`, which is
+functionally correct at reduced size but too slow at its default size). The arithmetic, built-in, primitive,
 color/render, loop, search, and empty-boolean gaps from the previous pass are
 fixed; the remaining failures are mostly library-context, kernel, and deeper
 BOSL2 math/semantics issues.

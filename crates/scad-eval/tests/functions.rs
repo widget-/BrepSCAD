@@ -258,3 +258,15 @@ fn min_and_max_without_numbers_are_undef() {
         [1.0; 3]
     );
 }
+#[test]
+fn cross_accepts_two_dimensional_vectors() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "v = cross([1, 0], [0, 1]); cube([v + 1, 1, 1]);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("2D cross");
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((max[0] - min[0] - 2.0).abs() < 1e-6);
+}
