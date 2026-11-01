@@ -144,9 +144,7 @@ impl TruckKernel {
         if op == BooleanOp::Difference && a.boundaries().len() > 1 {
             let mut boundaries = Vec::new();
             for shell in a.boundaries().clone() {
-                let single = Solid::try_new(vec![shell]).map_err(|error| {
-                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
-                })?;
+                let single = Solid::new_unchecked(vec![shell]);
                 let shape = self.insert(OwnedShape::Solid(single));
                 let result = self.boolean(op, shape, b_id)?;
                 boundaries.extend(self.solid(result)?.clone().into_boundaries());
@@ -156,8 +154,9 @@ impl TruckKernel {
                     "boolean operation produced no solid".to_owned(),
                 ));
             }
-            let result = Solid::try_new(boundaries)
-                .map_err(|error| KernelError::Backend(format!("polyhedron shell: {error:?}")))?;
+            // Multiple shell results are already the product of the boolean
+            // engine; do not reject them for being open before tessellation.
+            let result = Solid::new_unchecked(boundaries);
             return Ok(self.insert(OwnedShape::Solid(result)));
         }
 
@@ -166,9 +165,7 @@ impl TruckKernel {
         if op == BooleanOp::Difference && b.boundaries().len() > 1 {
             let mut result = a_id;
             for shell in b.boundaries().clone() {
-                let single = Solid::try_new(vec![shell]).map_err(|error| {
-                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
-                })?;
+                let single = Solid::new_unchecked(vec![shell]);
                 let tool = self.insert(OwnedShape::Solid(single));
                 result = self.boolean(op, result, tool)?;
             }

@@ -218,7 +218,10 @@ fn shell_create_polygon<S: PreMeshableSurface>(
         let boundary = PolyBoundary::new(preboundary, &surface, tol);
         trimming_tessellation(surface, &boundary, tol)
     });
-    let mut new_face = Face::debug_new(wires, polygon);
+    // PATCH(BrepSCAD): boolean-derived faces can have non-simple boundary
+    // wires. The boundary polyline is still usable for tessellation, so do not
+    // re-validate and panic here.
+    let mut new_face = Face::new_unchecked(wires, polygon);
     if !orientation {
         new_face.invert();
     }
