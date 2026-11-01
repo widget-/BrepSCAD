@@ -396,7 +396,18 @@ fn revolve_face(face: &Face, start: f64, angle: f64) -> Solid {
             Matrix4::from_axis_angle(Vector3::unit_z(), Rad(start)),
         )
     };
-    let mut solid = builder::rsweep(&profile, Point3::origin(), Vector3::unit_z(), Rad(angle));
+    let division = if angle.abs() >= std::f64::consts::TAU - 1.0e-9 {
+        2
+    } else {
+        1
+    };
+    let mut solid = builder::rsweep(
+        &profile,
+        Point3::origin(),
+        Vector3::unit_z(),
+        Rad(angle),
+        division,
+    );
     if angle > 0.0 {
         solid.not();
     }

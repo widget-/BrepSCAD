@@ -14,7 +14,7 @@ pub(crate) fn profile_face(region: &ProfileRegion) -> KernelResult<Face> {
     for hole in &region.holes {
         wires.push(contour_wire(hole)?);
     }
-    builder::try_attach_plane(&wires)
+    builder::try_attach_plane(wires)
         .map_err(|error| KernelError::Backend(format!("profile face: {error:?}")))
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelRes
 
         let wire: Wire = wire_edges.into_iter().collect();
         built_faces.push(
-            builder::try_attach_plane(&[wire])
+            builder::try_attach_plane(vec![wire])
                 .map_err(|error| KernelError::Backend(format!("polyhedron face: {error:?}")))?,
         );
     }
@@ -232,8 +232,9 @@ pub(crate) fn circle(radius: f64) -> KernelResult<Face> {
         Point3::origin(),
         Vector3::unit_z(),
         Rad(std::f64::consts::TAU),
+        2,
     );
-    builder::try_attach_plane(&[wire])
+    builder::try_attach_plane(vec![wire])
         .map_err(|error| KernelError::Backend(format!("circle failed: {error:?}")))
 }
 
@@ -267,7 +268,7 @@ pub(crate) fn polygon(points: &[[f64; 2]]) -> KernelResult<Face> {
         .map(|index| builder::line(&vertices[index], &vertices[(index + 1) % vertices.len()]))
         .collect();
     let wire: Wire = edges.into_iter().collect();
-    builder::try_attach_plane(&[wire])
+    builder::try_attach_plane(vec![wire])
         .map_err(|error| KernelError::Backend(format!("polygon failed: {error:?}")))
 }
 
@@ -288,16 +289,25 @@ pub(crate) fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
         ));
     }
 
-    let vertex = builder::vertex(Point3::new(radius, 0.0, -height / 2.0));
-    let circle = builder::rsweep(
-        &vertex,
-        Point3::origin(),
-        Vector3::unit_z(),
-        Rad(std::f64::consts::TAU),
-    );
-    let disk = builder::try_attach_plane(&[circle])
-        .map_err(|error| KernelError::Backend(format!("{error:?}")))?;
-    Ok(builder::tsweep(&disk, Vector3::new(0.0, 0.0, height)))
+    // Use a closed polyhedral approximation for booleans. Master shapeops is
+    // much more predictable on planar faces than on near-tangent analytic
+    // cylinder surfaces.
+    const SEGMENTS: usize = 64;
+    let mut points = Vec::with_capacity(SEGMENTS * 2);
+    for z in [-height / 2.0, height / 2.0] {
+        for index in 0..SEGMENTS {
+            let angle = std::f64::consts::TAU * index as f64 / SEGMENTS as f64;
+            points.push([radius * angle.cos(), radius * angle.sin(), z]);
+        }
+    }
+    let mut faces = Vec::with_capacity(SEGMENTS + 2);
+    faces.push((0..SEGMENTS).rev().collect::<Vec<_>>());
+    faces.push((SEGMENTS..SEGMENTS * 2).collect::<Vec<_>>());
+    for index in 0..SEGMENTS {
+        let next = (index + 1) % SEGMENTS;
+        faces.push(vec![index, next, SEGMENTS + next, SEGMENTS + index]);
+    }
+    polyhedron(&points, &faces)
 }
 
 const SPHERE_SEGMENTS: usize = 32;
@@ -383,7 +393,7 @@ pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid
         .into_iter()
         .collect();
         faces.push(
-            builder::try_attach_plane(&[wire])
+            builder::try_attach_plane(vec![wire])
                 .map_err(|error| KernelError::Backend(format!("sphere cap failed: {error:?}")))?,
         );
 
@@ -395,7 +405,7 @@ pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid
         .into_iter()
         .collect();
         faces.push(
-            builder::try_attach_plane(&[wire])
+            builder::try_attach_plane(vec![wire])
                 .map_err(|error| KernelError::Backend(format!("sphere cap failed: {error:?}")))?,
         );
     }
@@ -409,7 +419,7 @@ pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid
             ]
             .into_iter()
             .collect();
-            faces.push(builder::try_attach_plane(&[wire]).map_err(|error| {
+            faces.push(builder::try_attach_plane(vec![wire]).map_err(|error| {
                 KernelError::Backend(format!("sphere facet failed: {error:?}"))
             })?);
 
@@ -420,7 +430,7 @@ pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid
             ]
             .into_iter()
             .collect();
-            faces.push(builder::try_attach_plane(&[wire]).map_err(|error| {
+            faces.push(builder::try_attach_plane(vec![wire]).map_err(|error| {
                 KernelError::Backend(format!("sphere facet failed: {error:?}"))
             })?);
         }
