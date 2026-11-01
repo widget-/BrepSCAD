@@ -152,8 +152,8 @@ vendor/
   builds polyhedral frustums and cones. `polyhedron` accepts `triangles` as an
   alias for `faces`.
 - `square`, `circle`, `polygon` sketches and `linear_extrude` with optional
-  `center` and ignored `convexity`. `square` accepts `center`; `polygon`
-  accepts `paths` and ignores `convexity`.
+  `center`, `twist`, `scale`, and `slices`, plus ignored `convexity`. Multiple
+  2D children are unioned; twist/scale require a single contour without holes.
 - `rotate_extrude` with optional sweep and start angles and ignored
   `convexity`.
 - `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize`;
@@ -163,7 +163,7 @@ vendor/
 - `hull` and `minkowski` for convex 3D children. Minkowski sums use the convex
   hull of pairwise vertex sums; 2D and non-convex Minkowski are not supported.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
-  and `linear_extrude` turns exactly one 2D child into a solid.
+  and `linear_extrude` unions multiple 2D children into a solid.
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
 - User module call arguments are merged into the returned part parameters, so
   values passed at the call site remain visible in the properties panel.
@@ -380,8 +380,9 @@ For headless UI snapshots, see
     and there is no curve intersection support
   - `$fa`/`$fs` do not affect geometry; they only sample 2D profiles
   - empty 2D boolean or offset results are reported as errors
-  - `linear_extrude` supports `height` and `center` and ignores `convexity`;
-    no twist, scale, or slices
+  - `linear_extrude` supports `height`, `center`, `twist`, `scale`, and
+    `slices`, and ignores `convexity`. Twist/scale require a single contour
+    without holes.
   - `rotate_extrude` requires `x >= 0`, ignores `convexity`, and has no
     negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
@@ -419,9 +420,9 @@ For headless UI snapshots, see
 
 A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
 evaluation succeeds on 89 files (88 with no geometry, plus BOSL2
-`examples/lsystems.scad`), with 6 kernel boolean failures, 1 BOSL2 assertion
-failure, 3 language errors from standalone library files, 1 geometry error,
-and 9 other evaluation errors. The arithmetic, built-in, primitive,
+`examples/lsystems.scad`), with 9 kernel boolean failures, 1 BOSL2 assertion
+failure, 3 language errors from standalone library files, 2 geometry errors,
+and 4 other evaluation errors. The arithmetic, built-in, primitive,
 color/render, loop, search, and empty-boolean gaps from the previous pass are
 fixed; the remaining failures are mostly library-context, kernel, and deeper
 BOSL2 math/semantics issues.
@@ -447,8 +448,7 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
      after intentional compatibility improvements.
 3. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
-   - `linear_extrude` twist, scale, and slices.
-   - `rotate_extrude` negative-side profiles.
+   - `linear_extrude` negative-side profiles.
 4. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.

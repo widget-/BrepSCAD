@@ -360,3 +360,52 @@ fn polygon_accepts_multiple_paths() {
     let volume = signed_volume(&evaluation.shapes[0].mesh);
     assert!((volume - 2.0).abs() < 1.0e-6, "volume = {volume}");
 }
+#[test]
+fn linear_extrude_supports_twist_scale_and_slices() {
+    let mut kernel = TruckKernel::new();
+
+    let twisted = evaluate(
+        "linear_extrude(height = 2, twist = 90, slices = 8) square(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("twisted extrusion");
+    let volume = signed_volume(&twisted.shapes[0].mesh);
+    assert!((volume - 2.0).abs() < 0.2, "twisted volume = {volume}");
+
+    let scaled = evaluate(
+        "linear_extrude(height = 2, scale = 2) square(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("scaled extrusion");
+    let (min, max) = bounds(&scaled.shapes[0].mesh);
+    assert!((max[0] - min[0] - 2.0).abs() < 0.01);
+    assert!((max[1] - min[1] - 2.0).abs() < 0.01);
+    let volume = signed_volume(&scaled.shapes[0].mesh);
+    let expected = 2.0 / 3.0 * (1.0 + 2.0 + 4.0);
+    assert!((volume - expected).abs() < 0.05, "scaled volume = {volume}");
+
+    let cone = evaluate(
+        "linear_extrude(height = 2, scale = 0) square(1);",
+        &mut kernel,
+        0.01,
+    )
+    .expect("cone extrusion");
+    let volume = signed_volume(&cone.shapes[0].mesh);
+    assert!((volume - 2.0 / 3.0).abs() < 0.05, "cone volume = {volume}");
+}
+#[test]
+fn linear_extrude_unions_multiple_2d_children() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "linear_extrude(height = 1) { square(1); translate([2, 0]) square(1); }",
+        &mut kernel,
+        0.01,
+    )
+    .expect("multi-child extrusion");
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    assert!((max[0] - min[0] - 3.0).abs() < 0.01);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 2.0).abs() < 0.02, "volume = {volume}");
+}

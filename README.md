@@ -110,7 +110,7 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 | `polyhedron` | ✔ | |
 | `square`, `circle`, `polygon` | ✔ | `square` accepts `center`; `polygon` accepts `paths` and ignores `convexity`. |
 | `translate`, `rotate`, `scale`, `multmatrix`, `mirror`, `resize` | ◐ | `translate` accepts 2D or 3D vectors; `rotate` accepts an angle, Euler vector, or `a=`/`v=` axis-angle; `multmatrix` accepts 3x3, 3x4, 4x3, and 4x4 matrices; `resize` `newsize` only, no `auto`. |
-| `linear_extrude` | ◐ | `height`, `center`, and ignored `convexity`; default centered on Z, `center=false` starts at z=0; no twist, scale, or slices. |
+| `linear_extrude` | ◐ | `height`, `center`, `twist`, `scale`, and `slices`; `convexity` is ignored. Multiple 2D children are unioned. Twist/scale require one contour without holes. |
 | `rotate_extrude` | ◐ | `angle`, `start`, and ignored `convexity`; profile must lie at `x >= 0`. |
 | `difference`, `union`, `intersection` | ◐ | 2D CSG is polygonal; 3D booleans can fail on near-coincident or tangent geometry. Zero-child booleans produce no geometry. |
 | `offset` | ✔ | |

@@ -8,6 +8,7 @@ use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, T
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
+use crate::extrude;
 use crate::hull;
 use crate::model::{EvaluatedShape, Evaluation, Parameter};
 use crate::parameters::{collect_parameters, first_ident, parse_number, text_range_to_range};
@@ -1591,7 +1592,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                 })
             }
             "linear_extrude" => {
-                args.ensure_known("linear_extrude", &["height", "center", "convexity"])?;
+                args.ensure_known(
+                    "linear_extrude",
+                    &[
+                        "height",
+                        "center",
+                        "convexity",
+                        "twist",
+                        "slices",
+                        "scale",
+                        "segments",
+                    ],
+                )?;
                 if args.positional.len() > 2 {
                     return Err(bad_args("linear_extrude", "expected height and center"));
                 }
@@ -1603,6 +1615,39 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .argument("center", 1)
                     .map(|value| value.as_boolean("linear_extrude"))
                     .transpose()?;
+                let twist = match args.named.get("twist") {
+                    None | Some(Value::Undef) => 0.0,
+                    Some(value) => value.as_number("linear_extrude")?,
+                };
+                let scale = match args.named.get("scale") {
+                    None | Some(Value::Undef) => [1.0, 1.0],
+                    Some(value) => value.as_size2("linear_extrude")?,
+                };
+                let slices = match args.named.get("slices") {
+                    None | Some(Value::Undef) => {
+                        if twist.abs() > f64::EPSILON {
+                            ((twist.abs() / 15.0).ceil() as usize).max(2)
+                        } else {
+                            2
+                        }
+                    }
+                    Some(value) => {
+                        let value = value.as_number("linear_extrude")?;
+                        if value < 2.0 || value.fract() != 0.0 {
+                            return Err(bad_args(
+                                "linear_extrude",
+                                "slices must be an integer of at least 2",
+                            ));
+                        }
+                        value as usize
+                    }
+                };
+                if !twist.is_finite() {
+                    return Err(bad_args("linear_extrude", "twist must be finite"));
+                }
+                if scale.iter().any(|value| !value.is_finite()) {
+                    return Err(bad_args("linear_extrude", "scale must be finite"));
+                }
 
                 let transform_parameters = node
                     .children()
@@ -1619,14 +1664,55 @@ impl<K: Kernel> Evaluator<'_, K> {
                         evaluator.statement(child, Transform::IDENTITY)
                     }
                 })?;
-                if children.len() != 1 {
-                    return Err(bad_args("linear_extrude", "expected exactly one 2D child"));
-                }
-                if children[0].dimension != Dimension::TwoD {
+                if children.is_empty() {
                     return Err(bad_args("linear_extrude", "expected a 2D child"));
                 }
+                if children
+                    .iter()
+                    .any(|child| child.dimension != Dimension::TwoD)
+                {
+                    return Err(bad_args("linear_extrude", "expected 2D children"));
+                }
 
-                let shape = self.kernel.extrude(children[0].shape, height)?;
+                let mut profile = children[0]
+                    .profile
+                    .clone()
+                    .ok_or_else(|| bad_args("linear_extrude", "missing 2D profile"))?;
+                for child in &children[1..] {
+                    let clip = child
+                        .profile
+                        .as_ref()
+                        .ok_or_else(|| bad_args("linear_extrude", "missing 2D profile"))?;
+                    profile = profile::boolean(BooleanOp::Union, &profile, clip)?;
+                }
+                if profile.is_empty() {
+                    return Err(bad_args(
+                        "linear_extrude",
+                        "2D children produced empty geometry",
+                    ));
+                }
+                let source = if children.len() == 1 {
+                    children[0].shape
+                } else {
+                    self.kernel.sketch_profile(&profile::to_regions(&profile))?
+                };
+
+                let shape = if twist.abs() > f64::EPSILON
+                    || (scale[0] - 1.0).abs() > f64::EPSILON
+                    || (scale[1] - 1.0).abs() > f64::EPSILON
+                {
+                    let (points, faces) = extrude::loft(&profile, height, twist, scale, slices)
+                        .ok_or_else(|| {
+                            bad_args(
+                                "linear_extrude",
+                                "twist/scale requires a single contour without holes",
+                            )
+                        })?;
+                    self.kernel
+                        .primitive(Primitive::Polyhedron { points, faces })?
+                } else {
+                    self.kernel.extrude(source, height)?
+                };
                 let local = match center {
                     Some(true) => Transform::IDENTITY,
                     Some(false) => Transform::from_translation([0.0, 0.0, height / 2.0]),
