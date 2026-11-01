@@ -80,6 +80,7 @@ enum OwnedShape {
 #[derive(Debug, Default)]
 pub struct TruckKernel {
     shapes: Vec<OwnedShape>,
+    boolean_shapes: std::collections::HashSet<u64>,
 }
 
 impl TruckKernel {
@@ -116,6 +117,102 @@ impl TruckKernel {
                 "operation requires a sketch, not a solid".to_owned(),
             )),
         }
+    }
+    fn boolean_impl(
+        &mut self,
+        op: BooleanOp,
+        a_id: ShapeId,
+        b_id: ShapeId,
+    ) -> KernelResult<ShapeId> {
+        let a = self.solid(a_id)?.clone();
+        let b = self.solid(b_id)?.clone();
+
+        if op == BooleanOp::Union && disjoint(&a, &b) {
+            let mut boundaries = a.boundaries().clone();
+            boundaries.extend(b.boundaries().iter().cloned());
+            if let Ok(result) = Solid::try_new(boundaries) {
+                return Ok(self.insert(OwnedShape::Solid(result)));
+            }
+        }
+
+        if op == BooleanOp::Difference && disjoint(&a, &b) {
+            return Ok(self.insert(OwnedShape::Solid(a)));
+        }
+
+        // A compound solid can be produced by a disjoint union. Subtract from
+        // each shell independently, then recombine the surviving shells.
+        if op == BooleanOp::Difference && a.boundaries().len() > 1 {
+            let mut boundaries = Vec::new();
+            for shell in a.boundaries().clone() {
+                let single = Solid::try_new(vec![shell]).map_err(|error| {
+                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
+                })?;
+                let shape = self.insert(OwnedShape::Solid(single));
+                let result = self.boolean(op, shape, b_id)?;
+                boundaries.extend(self.solid(result)?.clone().into_boundaries());
+            }
+            if boundaries.is_empty() {
+                return Err(KernelError::Backend(
+                    "boolean operation produced no solid".to_owned(),
+                ));
+            }
+            let result = Solid::try_new(boundaries)
+                .map_err(|error| KernelError::Backend(format!("polyhedron shell: {error:?}")))?;
+            return Ok(self.insert(OwnedShape::Solid(result)));
+        }
+
+        // Subtracting a compound tool is equivalent to subtracting its shells
+        // one after another.
+        if op == BooleanOp::Difference && b.boundaries().len() > 1 {
+            let mut result = a_id;
+            for shell in b.boundaries().clone() {
+                let single = Solid::try_new(vec![shell]).map_err(|error| {
+                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
+                })?;
+                let tool = self.insert(OwnedShape::Solid(single));
+                result = self.boolean(op, result, tool)?;
+            }
+            return Ok(result);
+        }
+
+        // Exact geometry first.
+        for tolerance in BOOLEAN_TOLERANCES {
+            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
+                return Ok(self.insert(OwnedShape::Solid(result)));
+            }
+        }
+
+        // Degenerate corner cuts often need a tiny tool nudge. Try that before
+        // the more expensive translated-operand fallbacks.
+        if op == BooleanOp::Difference {
+            for nudge in BOOLEAN_NUDGES {
+                let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
+                let nudged = builder::translated(&b, offset);
+                for tolerance in BOOLEAN_TOLERANCES {
+                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance) {
+                        return Ok(self.insert(OwnedShape::Solid(result)));
+                    }
+                }
+            }
+        }
+
+        // Geometry-preserving translated-operand retries, as a last resort for
+        // numerical degeneracies that are not corner-cut specific.
+        for &shift in BOOLEAN_SHIFTS.iter().filter(|shift| **shift != [0.0; 3]) {
+            let offset = Vector3::new(shift[0], shift[1], shift[2]);
+            let shifted_a = builder::translated(&a, offset);
+            let shifted_b = builder::translated(&b, offset);
+            for tolerance in BOOLEAN_TOLERANCES {
+                if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
+                    result = builder::translated(&result, -offset);
+                    return Ok(self.insert(OwnedShape::Solid(result)));
+                }
+            }
+        }
+
+        Err(KernelError::Backend(
+            "boolean operation returned no solid at any tolerance".to_owned(),
+        ))
     }
 }
 
@@ -212,6 +309,7 @@ impl Kernel for TruckKernel {
     }
 
     fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
+        let inherited_boolean = self.boolean_shapes.contains(&shape.0);
         let shape = self.shape(shape)?;
         let matrix = matrix4(transform);
         let transformed = match shape {
@@ -232,102 +330,28 @@ impl Kernel for TruckKernel {
                     .collect(),
             ),
         };
-        Ok(self.insert(transformed))
+        let result = self.insert(transformed);
+        if inherited_boolean {
+            self.boolean_shapes.insert(result.0);
+        }
+        Ok(result)
     }
 
     fn boolean(&mut self, op: BooleanOp, a_id: ShapeId, b_id: ShapeId) -> KernelResult<ShapeId> {
-        let a = self.solid(a_id)?.clone();
-        let b = self.solid(b_id)?.clone();
-
-        if op == BooleanOp::Union && disjoint(&a, &b) {
-            let mut boundaries = a.boundaries().clone();
-            boundaries.extend(b.boundaries().iter().cloned());
-            if let Ok(result) = Solid::try_new(boundaries) {
-                return Ok(self.insert(OwnedShape::Solid(result)));
-            }
-        }
-
-        if op == BooleanOp::Difference && disjoint(&a, &b) {
-            return Ok(self.insert(OwnedShape::Solid(a)));
-        }
-
-        // A compound solid can be produced by a disjoint union. Subtract from
-        // each shell independently, then recombine the surviving shells.
-        if op == BooleanOp::Difference && a.boundaries().len() > 1 {
-            let mut boundaries = Vec::new();
-            for shell in a.boundaries().clone() {
-                let single = Solid::try_new(vec![shell]).map_err(|error| {
-                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
-                })?;
-                let shape = self.insert(OwnedShape::Solid(single));
-                let result = self.boolean(op, shape, b_id)?;
-                boundaries.extend(self.solid(result)?.clone().into_boundaries());
-            }
-            if boundaries.is_empty() {
-                return Err(KernelError::Backend(
-                    "boolean operation produced no solid".to_owned(),
-                ));
-            }
-            let result = Solid::try_new(boundaries)
-                .map_err(|error| KernelError::Backend(format!("polyhedron shell: {error:?}")))?;
-            return Ok(self.insert(OwnedShape::Solid(result)));
-        }
-
-        // Subtracting a compound tool is equivalent to subtracting its shells
-        // one after another.
-        if op == BooleanOp::Difference && b.boundaries().len() > 1 {
-            let mut result = a_id;
-            for shell in b.boundaries().clone() {
-                let single = Solid::try_new(vec![shell]).map_err(|error| {
-                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
-                })?;
-                let tool = self.insert(OwnedShape::Solid(single));
-                result = self.boolean(op, result, tool)?;
-            }
-            return Ok(result);
-        }
-
-        // Exact geometry first.
-        for tolerance in BOOLEAN_TOLERANCES {
-            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
-                return Ok(self.insert(OwnedShape::Solid(result)));
-            }
-        }
-
-        // Degenerate corner cuts often need a tiny tool nudge. Try that before
-        // the more expensive translated-operand fallbacks.
-        if op == BooleanOp::Difference {
-            for nudge in BOOLEAN_NUDGES {
-                let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
-                let nudged = builder::translated(&b, offset);
-                for tolerance in BOOLEAN_TOLERANCES {
-                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance) {
-                        return Ok(self.insert(OwnedShape::Solid(result)));
-                    }
-                }
-            }
-        }
-
-        // Geometry-preserving translated-operand retries, as a last resort for
-        // numerical degeneracies that are not corner-cut specific.
-        for &shift in BOOLEAN_SHIFTS.iter().filter(|shift| **shift != [0.0; 3]) {
-            let offset = Vector3::new(shift[0], shift[1], shift[2]);
-            let shifted_a = builder::translated(&a, offset);
-            let shifted_b = builder::translated(&b, offset);
-            for tolerance in BOOLEAN_TOLERANCES {
-                if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
-                    result = builder::translated(&result, -offset);
-                    return Ok(self.insert(OwnedShape::Solid(result)));
-                }
-            }
-        }
-
-        Err(KernelError::Backend(
-            "boolean operation returned no solid at any tolerance".to_owned(),
-        ))
+        let result = self.boolean_impl(op, a_id, b_id)?;
+        self.boolean_shapes.insert(result.0);
+        Ok(result)
     }
 
     fn tessellate(&self, shape: ShapeId, tolerance: f64) -> KernelResult<Mesh> {
+        // Boolean-derived analytic surfaces can trigger pathological recursive
+        // subdivision in master Truck. Keep the analytic B-rep and use a
+        // display-quality tolerance only for those results.
+        let tolerance = if self.boolean_shapes.contains(&shape.0) {
+            tolerance.max(0.05)
+        } else {
+            tolerance
+        };
         let mut mesh = match self.shape(shape)? {
             OwnedShape::Solid(solid) => solid.triangulation(tolerance).to_polygon(),
             OwnedShape::Face(face) => tessellate_face(face, tolerance),
