@@ -370,12 +370,28 @@ impl<C> LoopsStore<Point3, C> {
                 let curve = self[loops_index][wire_index][edge_index].curve();
                 let (pt, t, _) =
                     curve_surface_projection(&curve, None, another_surface, None, v.point(), 100)?;
-                v.set_point(pt);
                 let edge = self[loops_index][wire_index][edge_index].absolute_clone();
-                let edge_id = edge.id();
-                let (edge0, edge1) = edge.cut_with_parameter(v, t)?;
-                let new_wire: Wire<_, _> = vec![edge0, edge1].into();
-                self.swap_edge_into_wire(edge_id, &new_wire);
+                let (front, back) = edge.curve().range_tuple();
+                // PATCH(BrepSCAD): the projected parameter can land on, or a
+                // rounding error outside, the curve's range when the
+                // intersection endpoint coincides with an existing vertex.
+                // Cutting there is rejected by `cut_with_parameter`, which
+                // fails the whole boolean; snap to the existing vertex instead.
+                if t <= front || front.near(&t) {
+                    let old_vertex = edge.absolute_front().clone();
+                    v.set_point(old_vertex.point());
+                    self.change_vertex(&old_vertex, v, emap);
+                } else if back <= t || back.near(&t) {
+                    let old_vertex = edge.absolute_back().clone();
+                    v.set_point(old_vertex.point());
+                    self.change_vertex(&old_vertex, v, emap);
+                } else {
+                    v.set_point(pt);
+                    let edge_id = edge.id();
+                    let (edge0, edge1) = edge.cut_with_parameter(v, t)?;
+                    let new_wire: Wire<_, _> = vec![edge0, edge1].into();
+                    self.swap_edge_into_wire(edge_id, &new_wire);
+                }
             }
         }
         Some(())
