@@ -4,6 +4,7 @@
 //! tessellation needed by the walking-skeleton slice.
 
 mod primitives;
+mod raycast;
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -111,6 +112,18 @@ impl TruckKernel {
             OwnedShape::Face(_) | OwnedShape::Faces(_) => Err(KernelError::Backend(
                 "operation requires a solid, not a sketch".to_owned(),
             )),
+        }
+    }
+
+    /// Ray-casting scene for a solid shape.
+    ///
+    /// Faces with an analytic surface the caster models (planes, revolved
+    /// lines) are exported exactly; the rest are covered by their tessellation
+    /// at `tolerance`.
+    pub fn raycast_scene(&self, id: ShapeId, tolerance: f64) -> Option<brepscad_raycast::Scene> {
+        match self.shape(id).ok()? {
+            OwnedShape::Solid(solid) => Some(raycast::scene_from_solid(solid, tolerance)),
+            OwnedShape::Face(_) | OwnedShape::Faces(_) => None,
         }
     }
 
@@ -448,7 +461,7 @@ fn mesh_bounds(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
     Some((min, max))
 }
 
-fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
+pub(crate) fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
     let shell: Shell = vec![face.clone()].into_iter().collect();
     let meshed = shell.triangulation(tolerance);
     let mut mesh = PolygonMesh::default();

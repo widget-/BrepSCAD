@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 brepscad-kernel-api.workspace = true
+brepscad-raycast.workspace = true
 
 truck-meshalgo.workspace = true
 truck-modeling.workspace = true

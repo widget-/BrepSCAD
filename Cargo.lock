@@ -244,10 +244,15 @@ name = "brepscad-kernel-truck"
 version = "0.1.0"
 dependencies = [
  "brepscad-kernel-api",
+ "brepscad-raycast",
  "truck-meshalgo",
  "truck-modeling",
  "truck-shapeops",
 ]
+
+[[package]]
+name = "brepscad-raycast"
+version = "0.1.0"
 
 [[package]]
 name = "brepscad-syntax"

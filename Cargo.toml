@@ -5,6 +5,7 @@ members = [
     "crates/cli",
     "crates/kernel-api",
     "crates/kernel-truck",
+    "crates/raycast",
     "crates/scad-eval",
     "crates/scad-syntax",
     "crates/viewer",
@@ -27,6 +28,7 @@ clipper2-rust = "1.2"
 
 brepscad-kernel-api = { path = "crates/kernel-api" }
 brepscad-kernel-truck = { path = "crates/kernel-truck" }
+brepscad-raycast = { path = "crates/raycast" }
 brepscad-eval = { path = "crates/scad-eval" }
 brepscad-syntax = { path = "crates/scad-syntax" }
 

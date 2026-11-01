@@ -24,6 +24,7 @@ crates/
   cli/          CLI entry point (package `brepscad`)
   kernel-api/   kernel trait, ShapeId, capabilities, neutral mesh, matrix transform
   kernel-truck/ Truck B-rep adapter
+  raycast/      analytic ray casting over trimmed B-rep faces
   scad-eval/    evaluator and operand/parameter provenance
   scad-syntax/  lossless rowan CST, lexer, parser, text edits
   viewer/       eframe/egui/wgpu viewer
@@ -216,6 +217,9 @@ vendor/
     from the B-rep, so curved faces shade smoothly without mesh-derived
     smoothing
   - axis-aligned bounds for solids and sketches
+  - analytic ray casting: planes and surfaces of revolution of a straight line
+    (cylinders, cones) are exported as trimmed analytic faces, and B-spline or
+    NURBS faces are covered by their tessellation in the same scene
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed
@@ -322,6 +326,13 @@ vendor/
 - `linear_extrude` centers the extruded solid on Z by default. `center=false`
   starts it at `z = 0`; `center=true` forces centering even with the legacy
   option enabled.
+- Ray casting is a separate, backend-neutral layer. `brepscad-raycast` models
+  trimmed planes and revolved lines with trim loops in surface parameter space;
+  `TruckKernel::raycast_scene` classifies each face and falls back to covering
+  B-spline/NURBS faces with their tessellation, because Truck builds extruded
+  circles (the sides of `cylinder`) as homotopy B-spline surfaces rather than
+  revolved lines. Making those faces analytic needs either revolved
+  construction in the kernel or a spline ray tracer.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement. The retry ladder
   (nudges and translated operands) is bounded by a 500 ms wall-clock budget, so
@@ -432,6 +443,8 @@ For headless UI snapshots, see
   step. The model also feeds `prism_stack()` tapered prisms whose caps collapse
   to a knife edge, which produces self-intersecting polyhedron faces and
   coincident faces between solids.
+- Ray casting exists in the kernel but is not wired into the viewer yet:
+  picking and selection still use mesh triangles.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight
@@ -465,7 +478,12 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
 `prismoid`, `rect_tube`, and `torus` render through it. `cuboid(chamfer=)` and
 `cuboid(rounding=)` also render; non-convex Minkowski sums remain limited.
 
-1. **Remaining library and kernel gaps**
+1. **Finish the ray-casting layer**
+   - Move picking onto `raycast_scene`, falling back to meshes for sketches.
+   - Make cylinder sides analytic: build them from a revolved line, or add a
+     spline ray tracer with parameter-space trimming.
+   - Prototype the preview path as a compute shader over the same scene data.
+2. **Remaining library and kernel gaps**
    - Make Truck booleans deterministic: topology IDs hash `Arc` pointers, so
      results depend on the process address layout. A stable per-entity ID would
      make runs reproducible and make failures debuggable.
@@ -477,27 +495,27 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
    - Extend `hull`/`minkowski` to 2D and non-convex uses.
    - Treat standalone BOSL2 files that expect `std.scad` as an expected corpus
      category rather than a language gap.
-2. **Keep the pinned corpus green**
+3. **Keep the pinned corpus green**
    - Run `scripts/fetch-scad-corpus.sh` and then
      `scripts/check-scad-corpus.sh .corpus` after language changes.
    - Use parse-only runs for syntax coverage and `--evaluate` to separate
      language errors from geometry and kernel gaps.
    - Refresh `corpus/baseline-parse.tsv` and `corpus/baseline-evaluate.tsv` only
      after intentional compatibility improvements.
-3. **Finish the 2D/extrusion layer**
+4. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` negative-side profiles.
-4. **Native intrinsics**
+5. **Native intrinsics**
    - Start with the common BOSL2 `cuboid(rounding=)` case.
    - Always fall back to ordinary evaluation.
    - Version intrinsics by source path/content hash.
-5. **Kernel adapters**
+6. **Kernel adapters**
    - Add OCCT and SolidCore behind feature flags/crates.
    - Build the conformance harness before claiming capabilities.
-6. **Product surface**
+7. **Product surface**
    - Recent-file handling.
    - Export, undo/redo, and session persistence.
-7. **Selection polish**
+8. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
 
