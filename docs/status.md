@@ -35,10 +35,14 @@ docs/
   notes/        dated session snapshots
   research.md   prior art, source-first architecture, kernel trade-offs
   kernels.md    OCCT / SolidCore / Truck capability matrix
+  editor-lsp-plan.md editor and language-server plan
 scripts/
-  screenshot-viewer.sh
+  fetch-scad-corpus.sh   fetch the pinned BOSL2 + MCAD corpus
+  check-scad-corpus.sh   compatibility runs over a .scad tree
+  screenshot-viewer.sh   headless UI snapshots
 vendor/
-  truck-shapeops/ patched Truck boolean crate
+  README.md     which Truck crates are vendored and what changed in each
+  truck-*/      Truck master stack, patched for boolean robustness
 ```
 
 ## What works
