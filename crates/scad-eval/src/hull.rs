@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use brepscad_kernel_api::Polyhedron;
+
 type Point = [f64; 3];
 
 #[derive(Clone, Copy)]
@@ -107,6 +109,55 @@ pub(crate) fn convex_hull(points: &[Point]) -> Option<(Vec<Point>, Vec<Vec<usize
 /// Returns the vertex set of the Minkowski sum for convex point sets.
 /// Pairwise sums are sufficient for convex shapes; the caller is responsible
 /// for only using this with convex geometry.
+/// True when every face plane supports the whole vertex set, i.e. the solid is
+/// the intersection of its own face half-spaces.
+///
+/// Faces with holes do not need special handling: the inner walls of a hole
+/// always have vertices on both sides of their plane, so a holed solid fails
+/// this test — which is correct, it is not convex.
+pub(crate) fn is_convex(polyhedron: &Polyhedron) -> bool {
+    if polyhedron.vertices.is_empty() || polyhedron.faces.is_empty() {
+        return false;
+    }
+    let scale = bounding_scale(&polyhedron.vertices);
+    let epsilon = (scale * 1.0e-9).max(1.0e-9);
+
+    for face in &polyhedron.faces {
+        if face.len() < 3 {
+            return false;
+        }
+        let mut normal = [0.0; 3];
+        for index in 0..face.len() {
+            let a = polyhedron.vertices[face[index]];
+            let b = polyhedron.vertices[face[(index + 1) % face.len()]];
+            normal[0] += (a[1] - b[1]) * (a[2] + b[2]);
+            normal[1] += (a[2] - b[2]) * (a[0] + b[0]);
+            normal[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        let length = dot(normal, normal).sqrt();
+        if length <= epsilon * epsilon {
+            continue;
+        }
+        let normal = [normal[0] / length, normal[1] / length, normal[2] / length];
+        let anchor = polyhedron.vertices[face[0]];
+
+        let mut above = false;
+        let mut below = false;
+        for vertex in &polyhedron.vertices {
+            let side = dot(normal, subtract(*vertex, anchor));
+            if side > epsilon {
+                above = true;
+            } else if side < -epsilon {
+                below = true;
+            }
+            if above && below {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 pub(crate) fn minkowski_points(groups: &[Vec<Point>]) -> Option<Vec<Point>> {
     let mut groups = groups.iter();
     let first = groups.next()?;

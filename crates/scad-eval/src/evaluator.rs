@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use brepscad_kernel_api::{
-    BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform,
+    BooleanOp, Kernel, KernelError, Mesh, Polyhedron, Primitive, ShapeId, Sketch, Transform,
 };
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
@@ -2234,8 +2234,15 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let shape = if name == "hull" {
                     let mut points = Vec::new();
                     for child in &children {
-                        let mesh = self.kernel.tessellate(child.shape, self.tolerance)?;
-                        points.extend(mesh.positions);
+                        // Vertices from the topology are the exact hull inputs;
+                        // tessellating would only re-derive them approximately.
+                        match self.kernel.polyhedron(child.shape) {
+                            Some(polyhedron) => points.extend(polyhedron.vertices),
+                            None => {
+                                let mesh = self.kernel.tessellate(child.shape, self.tolerance)?;
+                                points.extend(mesh.positions);
+                            }
+                        }
                     }
                     let (points, faces) = hull::convex_hull(&points)
                         .ok_or_else(|| bad_args("hull", "degenerate hull"))?;
@@ -2244,11 +2251,30 @@ impl<K: Kernel> Evaluator<'_, K> {
                 } else if children.len() == 1 {
                     children[0].shape
                 } else {
-                    let mut groups = Vec::new();
-                    for child in &children {
-                        let mesh = self.kernel.tessellate(child.shape, self.tolerance)?;
-                        groups.push(mesh.positions);
-                    }
+                    // Convex polytopes need only their vertices, and taking them
+                    // from the topology makes the sum exact instead of dependent
+                    // on the display tolerance.
+                    let polyhedra: Option<Vec<Polyhedron>> = children
+                        .iter()
+                        .map(|child| self.kernel.polyhedron(child.shape))
+                        .collect();
+                    let groups = match polyhedra
+                        .filter(|polyhedra| polyhedra.iter().all(hull::is_convex))
+                    {
+                        Some(polyhedra) => polyhedra
+                            .into_iter()
+                            .map(|polyhedron| polyhedron.vertices)
+                            .collect::<Vec<_>>(),
+                        None => {
+                            let mut groups = Vec::new();
+                            for child in &children {
+                                let mesh = self.kernel.tessellate(child.shape, self.tolerance)?;
+                                groups.push(mesh.positions);
+                            }
+                            groups
+                        }
+                    };
+
                     let points = hull::minkowski_points(&groups)
                         .ok_or_else(|| bad_args("minkowski", "empty Minkowski sum"))?;
                     let (points, faces) = hull::convex_hull(&points)

@@ -78,6 +78,18 @@ impl Mesh {
     }
 }
 
+/// A solid given as a closed polyhedron: shared vertices and one index loop per
+/// face, in the order the B-rep boundary walks it.
+///
+/// Only planar-faced solids have one. `hull` and convex `minkowski` need nothing
+/// more than this, and taking it from the topology avoids tessellating shapes
+/// whose result never depends on the display tolerance.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Polyhedron {
+    pub vertices: Vec<[f64; 3]>,
+    pub faces: Vec<Vec<usize>>,
+}
+
 /// Runtime capability flags used by the UI to enable or grey out operations.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
@@ -179,6 +191,14 @@ pub trait Kernel {
         _tolerance: f64,
     ) -> Result<([f64; 3], [f64; 3]), KernelError> {
         Err(KernelError::Unsupported("bounds"))
+    }
+
+    /// The solid as a polyhedron, when every face is planar.
+    ///
+    /// Backends that cannot answer, or shapes with any curved or non-simple
+    /// face, return `None`.
+    fn polyhedron(&self, _shape: ShapeId) -> Option<Polyhedron> {
+        None
     }
 }
 

@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use brepscad_kernel_api::{
-    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ProfileRegion, ShapeId, Sketch,
-    Transform,
+    BooleanOp, Capabilities, Kernel, KernelError, Mesh, Polyhedron, Primitive, ProfileRegion,
+    ShapeId, Sketch, Transform,
 };
 use primitives::{cuboid, cylinder, polyhedron, sphere};
 use truck_meshalgo::prelude::*;
@@ -447,6 +447,88 @@ impl Kernel for TruckKernel {
         let mesh = self.tessellate(shape, tolerance)?;
         mesh_bounds(&mesh).ok_or_else(|| KernelError::Backend("shape has no geometry".to_owned()))
     }
+
+    fn polyhedron(&self, shape: ShapeId) -> Option<Polyhedron> {
+        polyhedron_of(self.solid(shape).ok()?)
+    }
+}
+
+/// Read a solid's topology as a polyhedron, when every face is a single planar
+/// loop. Curved faces, and faces with holes, have no such representation.
+fn polyhedron_of(solid: &Solid) -> Option<Polyhedron> {
+    let mut vertices: Vec<[f64; 3]> = Vec::new();
+    let mut lookup: HashMap<[u64; 3], usize> = HashMap::new();
+    let mut faces: Vec<Vec<usize>> = Vec::new();
+
+    for face in solid.face_iter() {
+        let Surface::Plane(_) = face.surface() else {
+            return None;
+        };
+        // Outer loops only: inner boundaries (holes) carry no information the
+        // hull or a face-plane test needs, and a convex solid has none.
+        let wire = face.absolute_boundaries().first().cloned()?;
+
+        // Wire edges are not guaranteed to be stored in traversal order, so
+        // chain them by their endpoints instead of trusting the stored front.
+        let corners = loop_corners(&wire)?;
+
+        let mut polygon = Vec::new();
+        for point in corners {
+            // The same corner is the same `Vertex` object, so the coordinates
+            // are bit-identical and need no tolerance.
+            let key = [point.x.to_bits(), point.y.to_bits(), point.z.to_bits()];
+            let index = *lookup.entry(key).or_insert_with(|| {
+                vertices.push([point.x, point.y, point.z]);
+                vertices.len() - 1
+            });
+            polygon.push(index);
+        }
+        if polygon.len() < 3 {
+            return None;
+        }
+        faces.push(polygon);
+    }
+
+    (!faces.is_empty()).then_some(Polyhedron { vertices, faces })
+}
+
+/// Walk a wire's edges into a closed corner loop, without relying on the order
+/// the edges happen to be stored in.
+fn loop_corners(wire: &Wire) -> Option<Vec<Point3>> {
+    let same = |a: Point3, b: Point3| (a - b).magnitude() < 1.0e-9;
+    let edges: Vec<(Point3, Point3)> = wire
+        .iter()
+        .filter_map(|edge| {
+            let front = edge.absolute_front().point();
+            let back = edge.absolute_back().point();
+            (!same(front, back)).then_some((front, back))
+        })
+        .collect();
+    if edges.len() < 3 {
+        return None;
+    }
+
+    let mut used = vec![false; edges.len()];
+    used[0] = true;
+    let start = edges[0].0;
+    let mut current = edges[0].1;
+    let mut corners = Vec::with_capacity(edges.len());
+    corners.push(start);
+
+    for _ in 1..edges.len() {
+        let (index, front, back) = edges
+            .iter()
+            .enumerate()
+            .find(|(index, (front, back))| {
+                !used[*index] && (same(*front, current) || same(*back, current))
+            })
+            .map(|(index, (front, back))| (index, *front, *back))?;
+        used[index] = true;
+        corners.push(current);
+        current = if same(front, current) { back } else { front };
+    }
+
+    same(current, start).then_some(corners)
 }
 
 fn mesh_bounds(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
@@ -1333,6 +1415,47 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let error = kernel.sketch_profile(&[]).expect_err("empty profile");
         assert!(matches!(error, KernelError::Backend(message) if message.contains("region")));
+    }
+
+    #[test]
+    fn polytopes_expose_their_topology() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let polyhedron = kernel.polyhedron(cube).expect("cube is a polyhedron");
+        assert_eq!(polyhedron.vertices.len(), 8);
+        assert_eq!(polyhedron.faces.len(), 6);
+        assert!(
+            polyhedron.faces.iter().all(|face| face.len() == 4),
+            "every cube face is a quad"
+        );
+
+        let cutter = kernel
+            .primitive(Primitive::Cuboid {
+                size: [1.0, 1.0, 4.0],
+            })
+            .expect("cutter");
+        let cut = kernel
+            .boolean(BooleanOp::Difference, cube, cutter)
+            .expect("cut");
+        assert!(
+            kernel.polyhedron(cut).is_some(),
+            "a cut with planar faces stays a polyhedron"
+        );
+
+        let cylinder = kernel
+            .primitive(Primitive::Cylinder {
+                radius: 1.0,
+                height: 2.0,
+            })
+            .expect("cylinder");
+        assert!(
+            kernel.polyhedron(cylinder).is_none(),
+            "curved faces have no polyhedron"
+        );
     }
 
     #[test]
