@@ -272,9 +272,14 @@ Deferred edit commands: Duplicate Line, Move Line Up/Down, Go to Line,
 Find/Replace (Phase 6), and a command palette.
 
 Keep `Evaluate` as the primary action in the toolbar row, along with the legacy
-centering checkbox, evaluation spinner, elapsed time, current path, and modified
-marker. Remove the permanent `Open…`, `Save`, and `Save As…` buttons; those move
-under File.
+centering checkbox and the analytic preview checkbox, evaluation spinner,
+elapsed time, current path, and modified marker. Remove the permanent `Open…`,
+`Save`, and `Save As…` buttons; those move under File.
+
+The two preview toggles are only in the toolbar for now. When the menu bar
+lands, both move into a **View** menu ("Legacy OpenSCAD centering" and
+"Analytic preview"), each as a checkable item with its hover text as the
+description; the toolbar keeps `Evaluate` and the status readouts.
 
 Use `ui.add_enabled(...)` for unavailable actions. Show the shortcut text next
 to menu items using `Modifiers::COMMAND` and platform-appropriate labels ("Ctrl"

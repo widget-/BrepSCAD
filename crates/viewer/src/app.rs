@@ -37,6 +37,7 @@ struct EvaluationResult {
     source: String,
     source_path: Option<PathBuf>,
     legacy_centering: bool,
+    analytic_preview: bool,
 }
 
 struct EvaluationJob {
@@ -61,6 +62,8 @@ pub(crate) struct ViewerApp {
     evaluation: Evaluation,
     mesh_cache: MeshCache,
     legacy_centering: bool,
+    /// Draw with the analytic ray tracer; the mesh path is the fallback.
+    analytic_preview: bool,
     mesh: Mesh,
     pick_mesh: Mesh,
     pick_parts: Vec<PickPart>,
@@ -83,29 +86,13 @@ impl ViewerApp {
             .expect("the viewer requires the wgpu backend");
 
         let mut mesh_cache = MeshCache::new();
-        let (evaluation, error) = evaluate_source(SAMPLE, None, &mut mesh_cache, false);
-        let adapter = render_state.adapter.get_info();
-        eprintln!(
-            "[gpu-probe] {:?} {:?} {:?} limits: complete={} buf={} tex={}",
-            adapter.backend,
-            adapter.name,
-            adapter.device_type,
-            render_state.device.limits().max_compute_workgroup_size_x,
-            render_state
-                .device
-                .limits()
-                .max_storage_buffers_per_shader_stage,
-            render_state
-                .device
-                .limits()
-                .max_storage_textures_per_shader_stage
-        );
+        let (evaluation, error) = evaluate_source(SAMPLE, None, &mut mesh_cache, false, true);
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
         camera.fit(&mesh);
         let mut renderer = MeshRenderer::new(&render_state.device, &mesh);
-        renderer.set_analytic(analytic_preview_enabled());
+        renderer.set_analytic(true);
 
         Self {
             source: SAMPLE.to_owned(),
@@ -114,6 +101,7 @@ impl ViewerApp {
             evaluation,
             mesh_cache,
             legacy_centering: false,
+            analytic_preview: true,
             mesh,
             pick_mesh,
             pick_parts,
@@ -139,6 +127,7 @@ impl ViewerApp {
         let source = self.source.clone();
         let source_path = self.current_path.clone();
         let legacy_centering = self.legacy_centering;
+        let analytic_preview = self.analytic_preview;
         let mut cache = std::mem::take(&mut self.mesh_cache);
         let (sender, receiver) = mpsc::channel();
 
@@ -149,6 +138,7 @@ impl ViewerApp {
                 source_path.as_deref(),
                 &mut cache,
                 legacy_centering,
+                analytic_preview,
             );
             let _ = sender.send(EvaluationResult {
                 evaluation,
@@ -158,6 +148,7 @@ impl ViewerApp {
                 source,
                 source_path,
                 legacy_centering,
+                analytic_preview,
             });
         });
 
@@ -175,7 +166,8 @@ impl ViewerApp {
                 self.last_eval_ms = result.elapsed.as_secs_f64() * 1000.0;
                 let current = result.source == self.source
                     && result.source_path == self.current_path
-                    && result.legacy_centering == self.legacy_centering;
+                    && result.legacy_centering == self.legacy_centering
+                    && result.analytic_preview == self.analytic_preview;
 
                 if current {
                     if result.error.is_none() {
@@ -186,6 +178,7 @@ impl ViewerApp {
                             self.renderer.set_mesh(&render_state.device, &mesh);
                             self.renderer
                                 .set_scene(&render_state.device, result.evaluation.scene.as_ref());
+                            self.renderer.set_analytic(self.analytic_preview);
                             self.mesh = mesh;
                             self.pick_mesh = pick_mesh;
                             self.pick_parts = pick_parts;
@@ -493,6 +486,17 @@ impl eframe::App for ViewerApp {
                 legacy.on_hover_text(
                     "Place cubes and squares at the origin, and cylinder/extrusion bases at z = 0",
                 );
+                let analytic = ui.checkbox(
+                    &mut self.analytic_preview,
+                    "Analytic preview (experimental)",
+                );
+                if analytic.changed() {
+                    self.renderer.set_analytic(self.analytic_preview);
+                    self.pending_evaluate = true;
+                }
+                analytic.on_hover_text(
+                    "Ray-cast the preview from the B-rep surfaces instead of the tessellated mesh",
+                );
                 ui.label("Ctrl+Enter");
                 if self.evaluation_job.is_some() {
                     ui.separator();
@@ -686,13 +690,14 @@ fn evaluate_source(
     source_path: Option<&Path>,
     cache: &mut MeshCache,
     legacy_centering: bool,
+    analytic: bool,
 ) -> (Evaluation, Option<String>) {
     let mut kernel = TruckKernel::new();
     let options = EvaluationOptions {
         tolerance: 0.01,
         legacy_centering,
         library_paths: brepscad_eval::environment_library_paths(),
-        analytic_scene: analytic_preview_enabled(),
+        analytic_scene: analytic,
     };
     let result = match source_path {
         Some(path) => evaluate_source_with_path(source, path, &mut kernel, options, cache),
@@ -709,12 +714,6 @@ fn evaluate_source(
             Some(error.to_string()),
         ),
     }
-}
-
-/// The analytic preview is opt-in: it costs an extra pass over the B-rep and a
-/// compute dispatch per frame.
-fn analytic_preview_enabled() -> bool {
-    std::env::var_os("BREPSCAD_ANALYTIC_PREVIEW").is_some()
 }
 
 fn line_number(source: &str, offset: usize) -> usize {
@@ -767,10 +766,13 @@ mod tests {
 
     #[test]
     fn built_in_sample_evaluates() {
-        let (evaluation, error) = evaluate_source(SAMPLE, None, &mut MeshCache::default(), false);
+        let (evaluation, error) =
+            evaluate_source(SAMPLE, None, &mut MeshCache::default(), false, true);
         assert!(error.is_none(), "{error:?}");
         assert_eq!(evaluation.shapes.len(), 1);
         assert_eq!(evaluation.shapes[0].parts.len(), 2);
+        let scene = evaluation.scene.as_ref().expect("analytic scene");
+        assert!(!scene.faces().is_empty(), "the sample should produce faces");
     }
 
     #[test]
@@ -784,6 +786,7 @@ mod tests {
             "include \"part.scad\";\n",
             Some(&main),
             &mut MeshCache::default(),
+            false,
             false,
         );
 
