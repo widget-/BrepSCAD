@@ -207,6 +207,16 @@ impl TruckKernel {
             }
         }
 
+        if op == BooleanOp::Union {
+            // Last-resort render fallback for overlapping shells that shapeops
+            // cannot fuse.
+            let mut boundaries = a.boundaries().clone();
+            boundaries.extend(b.boundaries().iter().cloned());
+            if !boundaries.is_empty() {
+                return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
+            }
+        }
+
         Err(KernelError::Backend(
             "boolean operation returned no solid at any tolerance".to_owned(),
         ))

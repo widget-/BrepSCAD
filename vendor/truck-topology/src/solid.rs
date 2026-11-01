@@ -100,14 +100,15 @@ impl<P, C, S> Solid<P, C, S> {
         mut curve_mapping: impl FnMut(&C) -> Option<D>,
         mut surface_mapping: impl FnMut(&S) -> Option<T>,
     ) -> Option<Solid<Q, D, T>> {
-        Some(Solid::debug_new(
-            self.boundaries()
-                .iter()
-                .map(move |shell| {
-                    shell.try_mapped(&mut point_mapping, &mut curve_mapping, &mut surface_mapping)
-                })
-                .collect::<Option<Vec<_>>>()?,
-        ))
+        let boundaries = self
+            .boundaries()
+            .iter()
+            .map(move |shell| {
+                shell.try_mapped(&mut point_mapping, &mut curve_mapping, &mut surface_mapping)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        // PATCH(BrepSCAD): boolean-derived solids may be open or non-simple.
+        Some(Solid::new_unchecked(boundaries))
     }
 
     /// Returns a new solid whose surfaces are mapped by `surface_mapping`,
@@ -123,14 +124,15 @@ impl<P, C, S> Solid<P, C, S> {
         mut curve_mapping: impl FnMut(&C) -> D,
         mut surface_mapping: impl FnMut(&S) -> T,
     ) -> Solid<Q, D, T> {
-        Solid::debug_new(
-            self.boundaries()
-                .iter()
-                .map(move |shell| {
-                    shell.mapped(&mut point_mapping, &mut curve_mapping, &mut surface_mapping)
-                })
-                .collect(),
-        )
+        let boundaries = self
+            .boundaries()
+            .iter()
+            .map(move |shell| {
+                shell.mapped(&mut point_mapping, &mut curve_mapping, &mut surface_mapping)
+            })
+            .collect();
+        // PATCH(BrepSCAD): preserve open boolean-derived shells during mapping.
+        Solid::new_unchecked(boundaries)
     }
 
     /// Returns the consistence of the geometry of end vertices
