@@ -71,6 +71,18 @@ fn include_loads_assignments_and_module_definitions() {
 }
 
 #[test]
+fn root_assignments_see_included_assignments() {
+    let dir = TempDir::new();
+    dir.write("lib.scad", "size = 2;\n");
+    let main = dir.write(
+        "main.scad",
+        "include \"lib.scad\";\nvalue = size;\ncube(value);\n",
+    );
+
+    assert_eq!(evaluate_file_extents(&main), [2.0; 3]);
+}
+
+#[test]
 fn include_emits_top_level_geometry() {
     let dir = TempDir::new();
     dir.write("part.scad", "cube(3);\n");

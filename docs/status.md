@@ -105,7 +105,9 @@ vendor/
   their highlight, background, and root-only presentation semantics are not yet
   implemented.
 - `include` evaluates another source file in place, sharing assignments and
-  definitions. `use` imports only module and function definitions from the used
+  definitions. Included-file assignments are applied in source order before the
+  including file's own assignments, so root constants can reference included
+  constants. `use` imports only module and function definitions from the used
   file's own hidden scope, so used library code does not see caller variables or
   overrides. Quoted paths resolve relative to the including file; angle-bracket
   paths also search `OPENSCADPATH` and `--library-path` directories. Cycles and
@@ -415,9 +417,9 @@ For headless UI snapshots, see
 
 A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
 evaluation succeeds on 89 files (88 with no geometry, plus BOSL2
-`examples/lsystems.scad`), with 6 kernel boolean failures, 3 BOSL2 assertion
-failures, 3 language errors from standalone library files, 1 geometry error,
-and 7 other evaluation errors. The arithmetic, built-in, primitive,
+`examples/lsystems.scad`), with 6 kernel boolean failures, 1 BOSL2 assertion
+failure, 3 language errors from standalone library files, 1 geometry error,
+and 9 other evaluation errors. The arithmetic, built-in, primitive,
 color/render, loop, search, and empty-boolean gaps from the previous pass are
 fixed; the remaining failures are mostly library-context, kernel, and deeper
 BOSL2 math/semantics issues.

@@ -821,6 +821,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         parent: Transform,
     ) -> Result<Vec<Node>, EvalError> {
         self.register_declarations_deep(root)?;
+        self.apply_included_assignments_deep(root)?;
         self.apply_assignments(root)?;
         let mut nodes = Vec::new();
         for statement in root.children() {
@@ -885,6 +886,55 @@ impl<K: Kernel> Evaluator<'_, K> {
                     evaluator.register_declarations_deep(&child)
                 }
             })?;
+        }
+        Ok(())
+    }
+
+    fn apply_included_assignments_deep(&mut self, root: &SyntaxNode) -> Result<(), EvalError> {
+        for statement in root.children() {
+            if statement.kind() != SyntaxKind::INCLUDE {
+                continue;
+            }
+            let (request, angle) = include_path(&statement)
+                .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
+            let path = self.resolve_source(&request, angle)?;
+            let source = std::fs::read_to_string(&path).map_err(|error| {
+                EvalError::Source(format!("failed to read {}: {error}", path.display()))
+            })?;
+            let parsed = parse(&source);
+            if !parsed.errors().is_empty() {
+                return Err(parse_error(&path, &parsed));
+            }
+            let child = parsed.syntax();
+            self.with_source_file(path, |evaluator| {
+                evaluator.apply_source_assignments_in_order(&child)
+            })?;
+        }
+        Ok(())
+    }
+
+    fn apply_source_assignments_in_order(&mut self, root: &SyntaxNode) -> Result<(), EvalError> {
+        for statement in root.children() {
+            match statement.kind() {
+                SyntaxKind::ASSIGNMENT => self.assignment(statement)?,
+                SyntaxKind::INCLUDE => {
+                    let (request, angle) = include_path(&statement)
+                        .ok_or_else(|| EvalError::Source("missing include path".to_owned()))?;
+                    let path = self.resolve_source(&request, angle)?;
+                    let source = std::fs::read_to_string(&path).map_err(|error| {
+                        EvalError::Source(format!("failed to read {}: {error}", path.display()))
+                    })?;
+                    let parsed = parse(&source);
+                    if !parsed.errors().is_empty() {
+                        return Err(parse_error(&path, &parsed));
+                    }
+                    let child = parsed.syntax();
+                    self.with_source_file(path, |evaluator| {
+                        evaluator.apply_source_assignments_in_order(&child)
+                    })?;
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
