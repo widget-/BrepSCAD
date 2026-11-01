@@ -119,6 +119,12 @@ pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelRes
         ));
     }
 
+    if signed_volume(&welded, &welded_faces) < 0.0 {
+        for face in &mut welded_faces {
+            face.reverse();
+        }
+    }
+
     let vertices: Vec<Vertex> = welded
         .iter()
         .map(|[x, y, z]| builder::vertex(Point3::new(*x, *y, *z)))
@@ -424,6 +430,24 @@ pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid
     Solid::try_new(vec![shell])
         .map_err(|error| KernelError::Backend(format!("sphere shell failed: {error:?}")))
 }
+fn signed_volume(points: &[[f64; 3]], faces: &[Vec<usize>]) -> f64 {
+    let mut volume = 0.0;
+    for face in faces {
+        let Some(first) = face.first() else {
+            continue;
+        };
+        let origin = points[*first];
+        for index in 1..face.len().saturating_sub(1) {
+            let left = points[face[index]];
+            let right = points[face[index + 1]];
+            volume += origin[0] * (left[1] * right[2] - left[2] * right[1])
+                - origin[1] * (left[0] * right[2] - left[2] * right[0])
+                + origin[2] * (left[0] * right[1] - left[1] * right[0]);
+        }
+    }
+    volume / 6.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

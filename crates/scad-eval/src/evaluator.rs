@@ -451,6 +451,102 @@ impl<K: Kernel> Evaluator<'_, K> {
         self.call_children(node, parent)
     }
 
+    fn boolean_child_groups(
+        &mut self,
+        name: &str,
+        block: Option<SyntaxNode>,
+        node: &SyntaxNode,
+        parent: Transform,
+    ) -> Result<Vec<Vec<Node>>, EvalError> {
+        let mut groups = Vec::new();
+        if let Some(block) = block {
+            for child in block.children() {
+                groups.push(self.statement(child, parent)?);
+            }
+        } else {
+            let child = single_child_statement(node)
+                .ok_or_else(|| bad_args(name, "expected a block or child"))?;
+            groups.push(self.statement(child, parent)?);
+        }
+        Ok(groups)
+    }
+
+    fn union_nodes(&mut self, name: &str, mut nodes: Vec<Node>) -> Result<Node, EvalError> {
+        if nodes.is_empty() {
+            return Err(bad_args(name, "group produced no geometry"));
+        }
+        if nodes.len() == 1 {
+            return Ok(nodes.remove(0));
+        }
+        let dimension = nodes[0].dimension;
+        if nodes.iter().any(|node| node.dimension != dimension) {
+            return Err(bad_args(name, "cannot mix 2D and 3D children"));
+        }
+        if dimension == Dimension::TwoD {
+            let mut profile = nodes[0]
+                .profile
+                .clone()
+                .ok_or_else(|| bad_args(name, "missing 2D profile"))?;
+            for node in &nodes[1..] {
+                let clip = node
+                    .profile
+                    .as_ref()
+                    .ok_or_else(|| bad_args(name, "missing 2D profile"))?;
+                profile = profile::boolean(BooleanOp::Union, &profile, clip)?;
+            }
+            if profile.is_empty() {
+                return Err(bad_args(name, "2D union produced empty geometry"));
+            }
+            let shape = self.kernel.sketch_profile(&profile::to_regions(&profile))?;
+            let first = nodes.remove(0);
+            let Node {
+                module,
+                source_range,
+                parameters,
+                world,
+                ..
+            } = first;
+            Ok(Node {
+                shape,
+                module,
+                source_range,
+                parameters,
+                transform_parameters: None,
+                world,
+                dimension: Dimension::TwoD,
+                profile: Some(profile),
+                children: nodes,
+            })
+        } else {
+            let first = nodes.remove(0);
+            let Node {
+                module,
+                source_range,
+                parameters,
+                world,
+                shape: first_shape,
+                ..
+            } = first;
+            let mut result = first_shape;
+            let mut children = Vec::new();
+            for node in nodes {
+                result = self.kernel.boolean(BooleanOp::Union, result, node.shape)?;
+                children.push(node);
+            }
+            Ok(Node {
+                shape: result,
+                module,
+                source_range,
+                parameters,
+                transform_parameters: None,
+                world,
+                dimension: Dimension::ThreeD,
+                profile: None,
+                children,
+            })
+        }
+    }
+
     fn call_children(
         &mut self,
         node: SyntaxNode,
@@ -1995,14 +2091,16 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             "difference" | "union" | "intersection" => {
                 args.ensure_empty(name.as_str())?;
-                let children = self.with_special_overrides(&args, |evaluator| match block {
-                    Some(block) => evaluator.block(block, parent),
-                    None => {
-                        let child = single_child_statement(&node)
-                            .ok_or_else(|| bad_args(name.as_str(), "expected a block or child"))?;
-                        evaluator.statement(child, parent)
-                    }
+                let groups = self.with_special_overrides(&args, |evaluator| {
+                    evaluator.boolean_child_groups(name.as_str(), block, &node, parent)
                 })?;
+                let mut children = Vec::new();
+                for group in groups {
+                    if group.is_empty() {
+                        continue;
+                    }
+                    children.push(self.union_nodes(name.as_str(), group)?);
+                }
                 if children.is_empty() {
                     return Err(bad_args(name.as_str(), "expected at least one child"));
                 }

@@ -362,3 +362,20 @@ fn children_see_special_variables_set_in_the_module_body() {
     assert_eq!(evaluation.shapes.len(), 1);
     assert_eq!(extents(&evaluation.shapes[0].mesh), [1.0, 1.0, 1.0]);
 }
+#[test]
+fn intersection_unions_shapes_emitted_by_one_child() {
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(
+        "module pair() { square(1); translate([2, 0]) square(1); }\n\
+         linear_extrude(1) intersection() {\n\
+             pair();\n\
+             translate([1, 0]) square(2, center = true);\n\
+         }",
+        &mut kernel,
+        0.01,
+    )
+    .expect("grouped intersection");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 1.0).abs() < 0.01, "volume = {volume}");
+}

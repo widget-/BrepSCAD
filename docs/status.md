@@ -166,6 +166,8 @@ vendor/
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` unions multiple 2D children into a solid.
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
+  Each direct boolean child is grouped: a module call that emits several shapes
+  is implicitly unioned before it is used as an operand.
 - User module call arguments are merged into the returned part parameters, so
   values passed at the call site remain visible in the properties panel.
 - 2D booleans run on polygonal profiles (clipper2-rust); results may contain
@@ -297,9 +299,9 @@ vendor/
   revolves around Z. `start` rotates the profile about Z before sweeping.
   Positive sweeps are flipped to keep outward orientation; profiles are
   required to lie at `x >= 0`.
-- `polyhedron` builds shared edges from the input points and faces, then relies
-  on `Solid::try_new` to validate the shell. Faces must be planar and the input
-  must be closed and consistently wound; no repair is attempted.
+- `polyhedron` welds coincident vertices and reorients inverted shells by signed
+  volume before building shared edges. Faces must still be planar, closed, and
+  consistently wound after welding.
 - 2D CSG is a profile operation above the kernel: outer contours and holes are
   clipped with `clipper2-rust`, then rebuilt into one or more kernel faces.
   Analytic sketch faces remain the fast path for non-boolean extrusions;
@@ -398,10 +400,15 @@ For headless UI snapshots, see
   not supported. It asks the kernel for bounds, which are tessellation-derived,
   so it is slower than a matrix-only transform.
 - Truck booleans try exact tolerances `0.05`, `0.02`, then `0.01`, then a tiny
-  difference-only corner nudge, then translated-operand retries. Some
-  configurations still fail. The vendored shapeops patch prevents malformed
-  wires from panicking the application.
-- Truck booleans can still fail on touching or coincident faces.
+  difference-only corner nudge, then translated-operand retries. Disjoint
+  unions combine their shells directly, and difference can subtract from or by
+  a multi-shell compound shell by shell. Overlapping unions that Truck cannot
+  fuse still fail. The vendored shapeops patch prevents malformed wires from
+  panicking the application.
+- Truck booleans can still fail on touching or coincident faces. In particular,
+  `opengrid-bin-generator/opengrid-bin.scad` still fails in
+  `bin_snap_connector`'s difference; `$overlap` values through 0.5 and small
+  outer-volume offsets do not avoid the failure.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight

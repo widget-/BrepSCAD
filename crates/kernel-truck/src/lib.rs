@@ -33,6 +33,28 @@ const BOOLEAN_NUDGES: [[f64; 3]; 6] = [
     [-2.0e-5, 0.0, 0.0],
 ];
 
+fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut found = false;
+    for vertex in solid.vertex_iter() {
+        let point = vertex.point();
+        found = true;
+        for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
+        }
+    }
+    found.then_some((min, max))
+}
+
+fn disjoint(a: &Solid, b: &Solid) -> bool {
+    let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
+        return false;
+    };
+    (0..3).any(|axis| a_max[axis] < b_min[axis] - 1.0e-6 || b_max[axis] < a_min[axis] - 1.0e-6)
+}
+
 fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
     catch_unwind(AssertUnwindSafe(|| match op {
         BooleanOp::Union => truck_shapeops::or(a, b, tolerance),
@@ -213,9 +235,57 @@ impl Kernel for TruckKernel {
         Ok(self.insert(transformed))
     }
 
-    fn boolean(&mut self, op: BooleanOp, a: ShapeId, b: ShapeId) -> KernelResult<ShapeId> {
-        let a = self.solid(a)?.clone();
-        let b = self.solid(b)?.clone();
+    fn boolean(&mut self, op: BooleanOp, a_id: ShapeId, b_id: ShapeId) -> KernelResult<ShapeId> {
+        let a = self.solid(a_id)?.clone();
+        let b = self.solid(b_id)?.clone();
+
+        if op == BooleanOp::Union && disjoint(&a, &b) {
+            let mut boundaries = a.boundaries().clone();
+            boundaries.extend(b.boundaries().iter().cloned());
+            if let Ok(result) = Solid::try_new(boundaries) {
+                return Ok(self.insert(OwnedShape::Solid(result)));
+            }
+        }
+
+        if op == BooleanOp::Difference && disjoint(&a, &b) {
+            return Ok(self.insert(OwnedShape::Solid(a)));
+        }
+
+        // A compound solid can be produced by a disjoint union. Subtract from
+        // each shell independently, then recombine the surviving shells.
+        if op == BooleanOp::Difference && a.boundaries().len() > 1 {
+            let mut boundaries = Vec::new();
+            for shell in a.boundaries().clone() {
+                let single = Solid::try_new(vec![shell]).map_err(|error| {
+                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
+                })?;
+                let shape = self.insert(OwnedShape::Solid(single));
+                let result = self.boolean(op, shape, b_id)?;
+                boundaries.extend(self.solid(result)?.clone().into_boundaries());
+            }
+            if boundaries.is_empty() {
+                return Err(KernelError::Backend(
+                    "boolean operation produced no solid".to_owned(),
+                ));
+            }
+            let result = Solid::try_new(boundaries)
+                .map_err(|error| KernelError::Backend(format!("polyhedron shell: {error:?}")))?;
+            return Ok(self.insert(OwnedShape::Solid(result)));
+        }
+
+        // Subtracting a compound tool is equivalent to subtracting its shells
+        // one after another.
+        if op == BooleanOp::Difference && b.boundaries().len() > 1 {
+            let mut result = a_id;
+            for shell in b.boundaries().clone() {
+                let single = Solid::try_new(vec![shell]).map_err(|error| {
+                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
+                })?;
+                let tool = self.insert(OwnedShape::Solid(single));
+                result = self.boolean(op, result, tool)?;
+            }
+            return Ok(result);
+        }
 
         // Exact geometry first.
         for tolerance in BOOLEAN_TOLERANCES {
@@ -957,6 +1027,24 @@ mod tests {
             matches!(error, KernelError::Backend(ref message) if message.contains("range")),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn polyhedron_reorients_inverted_shells() {
+        let mut kernel = TruckKernel::new();
+        let points = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let faces = vec![vec![1, 2, 0], vec![3, 1, 0], vec![2, 3, 0], vec![3, 2, 1]];
+        let solid = kernel
+            .primitive(Primitive::Polyhedron { points, faces })
+            .expect("inverted polyhedron");
+        let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+        let volume = signed_volume(&mesh);
+        assert!(volume > 0.0, "volume = {volume}");
     }
 
     #[test]
