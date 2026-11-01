@@ -42,19 +42,17 @@ impl<P, C, S> FacesClassification<P, C, S> {
         let components = unknown.connected_components();
         for comp in components {
             let boundary = comp.extract_boundaries();
-            if and_boundary
-                .iter()
-                .flatten()
-                .any(|edge| edge.id() == boundary[0][0].id())
-            {
+            // PATCH(BrepSCAD): a component whose faces share all their edges
+            // has no boundary of its own. It cannot be matched against the
+            // and/or boundaries, so leave it classified as unknown.
+            let Some(edge) = boundary.first().and_then(|wire| wire.iter().next()) else {
+                continue;
+            };
+            if and_boundary.iter().flatten().any(|other| other.id() == edge.id()) {
                 comp.iter().for_each(|face| {
                     *self.status.get_mut(&face.id()).unwrap() = ShapesOpStatus::And;
                 })
-            } else if or_boundary
-                .iter()
-                .flatten()
-                .any(|edge| edge.id() == boundary[0][0].id())
-            {
+            } else if or_boundary.iter().flatten().any(|other| other.id() == edge.id()) {
                 comp.iter().for_each(|face| {
                     *self.status.get_mut(&face.id()).unwrap() = ShapesOpStatus::Or;
                 })

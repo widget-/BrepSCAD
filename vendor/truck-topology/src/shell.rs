@@ -566,7 +566,10 @@ impl<P, C, S> Shell<P, C, S> {
                     .map(|wire| wire.sub_try_mapped(&mut edge_map))
                     .collect::<Option<Vec<_>>>()?;
                 let surface = surface_mapping(&*face.surface.lock())?;
-                let mut new_face = Face::debug_new(wires, surface);
+                // PATCH(BrepSCAD): shapeops can generate boolean faces whose
+                // wires are not strictly simple. Mapping must not panic while
+                // preparing the result shell.
+                let mut new_face = Face::new_unchecked(wires, surface);
                 if !face.orientation() {
                     new_face.invert();
                 }
@@ -660,7 +663,10 @@ impl<P, C, S> Shell<P, C, S> {
                     .map(|wire| wire.sub_mapped(&mut edge_map))
                     .collect();
                 let surface = surface_mapping(&*face.surface.lock());
-                let mut new_face = Face::debug_new(wires, surface);
+                // PATCH(BrepSCAD): boolean-generated wires can be non-simple.
+                // Preserve the mapped face instead of panicking during shell
+                // construction.
+                let mut new_face = Face::new_unchecked(wires, surface);
                 if !face.orientation() {
                     new_face.invert();
                 }

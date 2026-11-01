@@ -24,6 +24,10 @@ const BOOLEAN_SHIFTS: [[f64; 3]; 4] = [
     [-1.0e-4, 2.0e-4, 1.0e-4],
     [2.0e-4, -1.0e-4, 2.0e-4],
 ];
+/// Wall-clock budget for the retry ladder after the exact attempts. Degenerate
+/// models can make individual retries pathologically slow; past this point the
+/// cheap fallbacks are better than an unusable preview.
+const BOOLEAN_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_millis(500);
 const BOOLEAN_NUDGES: [[f64; 3]; 6] = [
     [0.0, 0.0, 2.0e-5],
     [0.0, 0.0, -2.0e-5],
@@ -126,6 +130,34 @@ impl TruckKernel {
     ) -> KernelResult<ShapeId> {
         let a = self.solid(a_id)?.clone();
         let b = self.solid(b_id)?.clone();
+        let started = std::time::Instant::now();
+
+        // Booleans can legitimately produce a solid with no shells: an
+        // intersection that misses, or a subtraction that removes the whole
+        // target. shapeops cannot consume such a solid, so fold it away here
+        // instead of feeding it back into the engine.
+        let a_empty = a.boundaries().is_empty();
+        let b_empty = b.boundaries().is_empty();
+        if a_empty || b_empty {
+            let surviving = match op {
+                BooleanOp::Union => {
+                    if a_empty {
+                        b_id
+                    } else {
+                        a_id
+                    }
+                }
+                BooleanOp::Difference => a_id,
+                BooleanOp::Intersection => {
+                    if a_empty {
+                        a_id
+                    } else {
+                        b_id
+                    }
+                }
+            };
+            return Ok(surviving);
+        }
 
         if op == BooleanOp::Union && disjoint(&a, &b) {
             let mut boundaries = a.boundaries().clone();
@@ -139,25 +171,33 @@ impl TruckKernel {
             return Ok(self.insert(OwnedShape::Solid(a)));
         }
 
+        // Fusing an already-compound shell set with another solid makes master
+        // shapeops iterate every shell pair and can take minutes on degenerate
+        // models. Keep the shells separate instead; the tessellator renders a
+        // compound, and the cheap disjoint path already covers the exact case.
+        if op == BooleanOp::Union && (a.boundaries().len() > 1 || b.boundaries().len() > 1) {
+            let mut boundaries = a.boundaries().clone();
+            boundaries.extend(b.boundaries().iter().cloned());
+            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
+        }
+
         // A compound solid can be produced by a disjoint union. Subtract from
         // each shell independently, then recombine the surviving shells.
         if op == BooleanOp::Difference && a.boundaries().len() > 1 {
             let mut boundaries = Vec::new();
             for shell in a.boundaries().clone() {
-                let single = Solid::try_new(vec![shell]).map_err(|error| {
-                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
-                })?;
+                let single = Solid::new_unchecked(vec![shell]);
                 let shape = self.insert(OwnedShape::Solid(single));
                 let result = self.boolean(op, shape, b_id)?;
                 boundaries.extend(self.solid(result)?.clone().into_boundaries());
             }
             if boundaries.is_empty() {
-                return Err(KernelError::Backend(
-                    "boolean operation produced no solid".to_owned(),
-                ));
+                // Every shell was consumed by the tool.
+                return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(Vec::new()))));
             }
-            let result = Solid::try_new(boundaries)
-                .map_err(|error| KernelError::Backend(format!("polyhedron shell: {error:?}")))?;
+            // Multiple shell results are already the product of the boolean
+            // engine; do not reject them for being open before tessellation.
+            let result = Solid::new_unchecked(boundaries);
             return Ok(self.insert(OwnedShape::Solid(result)));
         }
 
@@ -166,9 +206,7 @@ impl TruckKernel {
         if op == BooleanOp::Difference && b.boundaries().len() > 1 {
             let mut result = a_id;
             for shell in b.boundaries().clone() {
-                let single = Solid::try_new(vec![shell]).map_err(|error| {
-                    KernelError::Backend(format!("polyhedron shell: {error:?}"))
-                })?;
+                let single = Solid::new_unchecked(vec![shell]);
                 let tool = self.insert(OwnedShape::Solid(single));
                 result = self.boolean(op, result, tool)?;
             }
@@ -182,10 +220,15 @@ impl TruckKernel {
             }
         }
 
+        let over_budget = |started: std::time::Instant| started.elapsed() > BOOLEAN_RETRY_BUDGET;
+
         // Degenerate corner cuts often need a tiny tool nudge. Try that before
         // the more expensive translated-operand fallbacks.
         if op == BooleanOp::Difference {
             for nudge in BOOLEAN_NUDGES {
+                if over_budget(started) {
+                    break;
+                }
                 let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
                 let nudged = builder::translated(&b, offset);
                 for tolerance in BOOLEAN_TOLERANCES {
@@ -199,6 +242,9 @@ impl TruckKernel {
         // Geometry-preserving translated-operand retries, as a last resort for
         // numerical degeneracies that are not corner-cut specific.
         for &shift in BOOLEAN_SHIFTS.iter().filter(|shift| **shift != [0.0; 3]) {
+            if over_budget(started) {
+                break;
+            }
             let offset = Vector3::new(shift[0], shift[1], shift[2]);
             let shifted_a = builder::translated(&a, offset);
             let shifted_b = builder::translated(&b, offset);
@@ -207,6 +253,16 @@ impl TruckKernel {
                     result = builder::translated(&result, -offset);
                     return Ok(self.insert(OwnedShape::Solid(result)));
                 }
+            }
+        }
+
+        if op == BooleanOp::Union {
+            // Last-resort render fallback for overlapping shells that shapeops
+            // cannot fuse.
+            let mut boundaries = a.boundaries().clone();
+            boundaries.extend(b.boundaries().iter().cloned());
+            if !boundaries.is_empty() {
+                return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
             }
         }
 

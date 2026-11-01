@@ -37,12 +37,18 @@ where
         Err(_) => {
             // PATCH(BrepSCAD, PR #110): coplanar or tangent surfaces can make
             // the Jacobian singular. Accept the initial projection when the
-            // points coincide and the normals are parallel.
+            // points coincide and the normals are parallel. Coincident faces
+            // of two solids come out of independent computations, so their
+            // normals are only parallel to within accumulated rounding; the
+            // angular tolerance therefore has to be looser than `TOLERANCE`.
+            const PARALLEL_NORMAL_TOLERANCE: f64 = 1.0e-3;
             let pt0 = surface0.subs(x, y);
             let pt1 = surface1.subs(z, w);
             let n0 = surface0.normal(x, y);
             let n1 = surface1.normal(z, w);
-            if (pt0 - pt1).magnitude() < TOLERANCE && n0.cross(n1).magnitude() < TOLERANCE {
+            if (pt0 - pt1).magnitude() < TOLERANCE
+                && n0.cross(n1).magnitude() < PARALLEL_NORMAL_TOLERANCE
+            {
                 return Some((pt0, Point2::new(x, y), Point2::new(z, w)));
             }
             return None;

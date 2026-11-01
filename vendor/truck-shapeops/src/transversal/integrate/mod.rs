@@ -208,7 +208,7 @@ pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         and_shell = res;
     }
     let boundaries = and_shell.connected_components();
-    // DEBUG: accept open shells while validating the master integration.
+    // Accept open shells produced by master shapeops.
     Some(Solid::new_unchecked(boundaries))
 }
 
@@ -232,7 +232,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         or_shell = res;
     }
     let boundaries = or_shell.connected_components();
-    // DEBUG: accept open shells while validating the master integration.
+    // Accept open shells produced by master shapeops.
     Some(Solid::new_unchecked(boundaries))
 }
 

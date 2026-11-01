@@ -317,7 +317,16 @@ vendor/
   starts it at `z = 0`; `center=true` forces centering even with the legacy
   option enabled.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
-  tolerances instead of raising a fixed clearance requirement.
+  tolerances instead of raising a fixed clearance requirement. The retry ladder
+  (nudges and translated operands) is bounded by a 500 ms wall-clock budget, so
+  a degenerate model reports a failure instead of stalling the UI.
+- Booleans can produce a solid with no shells (an intersection that misses, or a
+  subtraction that removes the whole target). Empty solids are kept as values
+  and folded away at the next boolean instead of being fed back into shapeops,
+  which cannot index an empty shell.
+- A union that involves a multi-shell solid keeps the shells separate instead of
+  asking shapeops to fuse every shell pair; those attempts are the slowest path
+  in the backend and rarely succeed on degenerate input.
 - Backend adapters should remain separate crates behind the common trait.
 - Native fast paths for common library constructs (for example, BOSL2 rounded
   boxes) are intended to avoid mesh-CSG workarounds; `scad-intrinsics` is not
@@ -405,10 +414,18 @@ For headless UI snapshots, see
   a multi-shell compound shell by shell. Overlapping unions that Truck cannot
   fuse still fail. The vendored shapeops patch prevents malformed wires from
   panicking the application.
-- Truck booleans can still fail on touching or coincident faces. In particular,
-  `opengrid-bin-generator/opengrid-bin.scad` still fails in
-  `bin_snap_connector`'s difference; `$overlap` values through 0.5 and small
-  outer-volume offsets do not avoid the failure.
+- Truck booleans can still fail on touching or coincident faces, and master
+  shapeops has no spatial acceleration: an attempt costs one intersection-curve
+  solve per face pair. Results are also not deterministic across runs, because
+  Truck hashes topology IDs by `Arc` pointer address, so `FxHashMap` iteration
+  order follows the process address layout.
+- The opengrid bin generator is the working stress case. Its 1x1 bin and the
+  2x2 bin body render reliably and in under a second. The full 2x2 model
+  (`bin()` plus `snap_grid()`) renders in about a third of runs; the rest either
+  report a boolean failure or stall in a pathological boolean or tessellation
+  step. The model also feeds `prism_stack()` tapered prisms whose caps collapse
+  to a knife edge, which produces self-intersecting polyhedron faces and
+  coincident faces between solids.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight
@@ -443,6 +460,12 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
 `cuboid(rounding=)` also render; non-convex Minkowski sums remain limited.
 
 1. **Remaining library and kernel gaps**
+   - Make Truck booleans deterministic: topology IDs hash `Arc` pointers, so
+     results depend on the process address layout. A stable per-entity ID would
+     make runs reproducible and make failures debuggable.
+   - Give shapeops a cost bound it can actually honour. Bounding the retry
+     ladder is not enough; a single attempt over a large face-pair set, and
+     tessellation of a degenerate boolean face, can still run for minutes.
    - Improve Truck boolean robustness for the MCAD bitmap/hardware models.
    - Render `color` instead of ignoring it.
    - Extend `hull`/`minkowski` to 2D and non-convex uses.

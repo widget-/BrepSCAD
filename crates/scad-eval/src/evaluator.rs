@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
+use brepscad_kernel_api::{BooleanOp, Kernel, KernelError, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_syntax::{NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, parse};
 
 use crate::cache::MeshCache;
@@ -2072,7 +2072,12 @@ impl<K: Kernel> Evaluator<'_, K> {
                     let mut shapes = children.iter().map(|child| child.shape);
                     let mut result = shapes.next().expect("checked non-empty");
                     for shape in shapes {
-                        result = self.kernel.boolean(BooleanOp::Union, result, shape)?;
+                        result = self
+                            .kernel
+                            .boolean(BooleanOp::Union, result, shape)
+                            .map_err(|error| {
+                                boolean_failure(name.as_str(), &source_range, &children, error)
+                            })?;
                     }
                     (result, None)
                 };
@@ -2150,7 +2155,10 @@ impl<K: Kernel> Evaluator<'_, K> {
                 let mut shapes = children.iter().map(|child| child.shape);
                 let mut result = shapes.next().expect("checked non-empty");
                 for shape in shapes {
-                    result = self.kernel.boolean(op, result, shape)?;
+                    result = self
+                        .kernel
+                        .boolean(op, result, shape)
+                        .map_err(|error| boolean_failure(name.as_str(), &source_range, &children, error))?;
                 }
 
                 Ok(Node {
@@ -3518,6 +3526,21 @@ fn cylinder_frustum(
         }
     }
     (points, faces)
+}
+
+fn boolean_failure(
+    name: &str,
+    source_range: &std::ops::Range<usize>,
+    children: &[Node],
+    error: KernelError,
+) -> EvalError {
+    let modules = children
+        .iter()
+        .map(|child| child.module.as_str())
+        .collect::<Vec<_>>();
+    EvalError::Kernel(KernelError::Backend(format!(
+        "{error} (module {name}, source {source_range:?}, children {modules:?})"
+    )))
 }
 
 fn check_assertion(args: &Arguments) -> Result<(), EvalError> {
