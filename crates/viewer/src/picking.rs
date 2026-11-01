@@ -67,6 +67,7 @@ mod tests {
     fn triangle_mesh() -> Mesh {
         Mesh {
             positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: Vec::new(),
             indices: vec![0, 1, 2],
         }
     }

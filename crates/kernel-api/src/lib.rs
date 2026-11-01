@@ -60,12 +60,21 @@ pub enum BooleanOp {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Mesh {
     pub positions: Vec<[f64; 3]>,
+    /// Unit normals parallel to `positions`, taken from the B-rep surfaces the
+    /// triangles were tessellated from. Empty when the backend cannot supply
+    /// them, in which case consumers derive flat normals from the triangles.
+    pub normals: Vec<[f64; 3]>,
     pub indices: Vec<u32>,
 }
 
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
+    }
+
+    /// True when every position has a matching normal.
+    pub fn has_normals(&self) -> bool {
+        !self.positions.is_empty() && self.normals.len() == self.positions.len()
     }
 }
 
@@ -195,8 +204,26 @@ mod tests {
     fn triangle_count_uses_index_triples() {
         let mesh = Mesh {
             positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: Vec::new(),
             indices: vec![0, 1, 2],
         };
         assert_eq!(mesh.triangle_count(), 1);
+    }
+
+    #[test]
+    fn normals_are_only_trusted_when_they_cover_every_position() {
+        let mut mesh = Mesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 3],
+            indices: vec![0, 1, 2],
+        };
+        assert!(mesh.has_normals());
+
+        mesh.normals.pop();
+        assert!(!mesh.has_normals());
+
+        mesh.normals.clear();
+        mesh.positions.clear();
+        assert!(!mesh.has_normals());
     }
 }

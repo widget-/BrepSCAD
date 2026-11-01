@@ -5,6 +5,7 @@
 
 mod primitives;
 
+use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use brepscad_kernel_api::{
@@ -453,7 +454,13 @@ fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
     let mut mesh = PolygonMesh::default();
     for poly_face in meshed.iter() {
         if let Some(part) = poly_face.surface() {
-            mesh.merge(part);
+            // Match `MeshedShape::to_polygon`: a flipped face has to flip its
+            // winding and its normals together.
+            if poly_face.orientation() {
+                mesh.merge(part.clone());
+            } else {
+                mesh.merge(part.inverse());
+            }
         }
     }
     mesh
@@ -513,31 +520,55 @@ fn matrix4(transform: Transform) -> Matrix4 {
 }
 
 fn to_neutral_mesh(mesh: &PolygonMesh) -> Mesh {
-    let positions = mesh
-        .positions()
-        .iter()
-        .map(|point| [point.x, point.y, point.z])
-        .collect();
+    // A polygon mesh stores normals as indices separate from positions, so one
+    // shared corner can carry different normals on different faces. The
+    // neutral mesh indexes positions and normals together, so expand each
+    // corner into a (position, normal) pair and deduplicate those pairs.
+    let mut positions: Vec<[f64; 3]> = Vec::new();
+    let mut normals: Vec<[f64; 3]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut lookup: HashMap<(usize, Option<usize>), u32> = HashMap::new();
+    let mut all_normals = true;
 
-    let mut indices = Vec::new();
-    for face in mesh.tri_faces() {
-        indices.extend(face.iter().map(|vertex| vertex.pos as u32));
-    }
-    for face in mesh.quad_faces() {
-        indices.extend([face[0].pos as u32, face[1].pos as u32, face[2].pos as u32]);
-        indices.extend([face[0].pos as u32, face[2].pos as u32, face[3].pos as u32]);
-    }
-    for face in mesh.other_faces() {
-        for index in 1..face.len().saturating_sub(1) {
-            indices.extend([
-                face[0].pos as u32,
-                face[index].pos as u32,
-                face[index + 1].pos as u32,
-            ]);
+    for face in mesh.faces().face_iter() {
+        if face.len() < 3 {
+            continue;
+        }
+        let mut corners = Vec::with_capacity(face.len());
+        for vertex in face {
+            let key = (vertex.pos, vertex.nor);
+            let index = match lookup.get(&key) {
+                Some(index) => *index,
+                None => {
+                    let index = positions.len() as u32;
+                    let point = mesh.positions()[vertex.pos];
+                    positions.push([point.x, point.y, point.z]);
+                    match vertex.nor.and_then(|nor| mesh.normals().get(nor)) {
+                        Some(normal) if all_normals => {
+                            normals.push([normal.x, normal.y, normal.z]);
+                        }
+                        _ => all_normals = false,
+                    }
+                    lookup.insert(key, index);
+                    index
+                }
+            };
+            corners.push(index);
+        }
+        for corner in 1..corners.len() - 1 {
+            indices.extend([corners[0], corners[corner], corners[corner + 1]]);
         }
     }
 
-    Mesh { positions, indices }
+    if !all_normals {
+        normals.clear();
+    }
+
+    Mesh {
+        positions,
+        normals,
+        indices,
+    }
 }
 
 #[cfg(test)]
@@ -602,6 +633,108 @@ mod tests {
         assert!((min_z + 2.0).abs() < 1e-6, "min_z = {min_z}");
         assert!((max_z - 2.0).abs() < 1e-6, "max_z = {max_z}");
         assert!((max_radial - 0.5).abs() < 1e-6, "max_radial = {max_radial}");
+    }
+
+    #[test]
+    fn tessellation_keeps_the_surface_normals() {
+        let mut kernel = TruckKernel::new();
+        let cylinder = kernel
+            .primitive(Primitive::Cylinder {
+                radius: 0.5,
+                height: 4.0,
+            })
+            .expect("cylinder");
+        let mesh = kernel.tessellate(cylinder, 0.01).expect("tessellation");
+
+        assert_eq!(mesh.normals.len(), mesh.positions.len());
+        for normal in &mesh.normals {
+            let length =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!(
+                (length - 1.0).abs() < 1e-9,
+                "normal {normal:?} is not unit length"
+            );
+        }
+
+        let mut lateral = 0;
+        let mut caps = 0;
+        for (position, normal) in mesh.positions.iter().zip(&mesh.normals) {
+            if normal[2].abs() > 1.0 - 1e-9 {
+                // Cap faces are the only ones with an axial normal.
+                assert!(
+                    position[2].abs() > 1.9,
+                    "cap normal away from a cap: {position:?}"
+                );
+                caps += 1;
+            } else {
+                // A revolved line gives the exact outward radial direction,
+                // which the flat triangle normal would only approximate.
+                assert!(normal[2].abs() < 1e-9, "lateral normal tilts: {normal:?}");
+                let radius = position[0].hypot(position[1]);
+                assert!(radius > 0.0);
+                let radial = [position[0] / radius, position[1] / radius];
+                let dot = normal[0] * radial[0] + normal[1] * radial[1];
+                assert!(
+                    dot > 1.0 - 1e-9,
+                    "normal {normal:?} is not radial at {position:?}"
+                );
+                lateral += 1;
+            }
+        }
+        assert!(
+            lateral > 0 && caps > 0,
+            "lateral = {lateral}, caps = {caps}"
+        );
+    }
+
+    #[test]
+    fn planar_faces_keep_their_exact_normals() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let mesh = kernel.tessellate(cube, 0.01).expect("tessellation");
+
+        assert!(mesh.has_normals());
+        for normal in &mesh.normals {
+            let axis = normal
+                .iter()
+                .filter(|component| component.abs() > 0.5)
+                .count();
+            assert_eq!(axis, 1, "cube normal {normal:?} is not axis aligned");
+        }
+    }
+
+    #[test]
+    fn boolean_results_keep_the_surface_normals() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let cylinder = kernel
+            .primitive(Primitive::Cylinder {
+                radius: 0.5,
+                height: 4.0,
+            })
+            .expect("cylinder");
+        let cut = kernel
+            .boolean(BooleanOp::Difference, cube, cylinder)
+            .expect("difference");
+        let mesh = kernel.tessellate(cut, 0.01).expect("tessellation");
+
+        assert!(mesh.has_normals());
+        for normal in &mesh.normals {
+            let length =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!(
+                (length - 1.0).abs() < 1e-6,
+                "normal {normal:?} is not unit length"
+            );
+        }
     }
 
     #[test]

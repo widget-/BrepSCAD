@@ -94,6 +94,7 @@ mod tests {
                 [1.0, 1.0, 1.0],
                 [-1.0, 1.0, 1.0],
             ],
+            normals: Vec::new(),
             indices: vec![0, 1, 2, 0, 2, 3],
         }
     }

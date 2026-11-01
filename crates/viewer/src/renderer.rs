@@ -295,6 +295,9 @@ impl MeshRenderer {
 
 fn build_mesh_buffers(mesh: &Mesh) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::with_capacity(mesh.triangle_count() * 3);
+    // The kernel fills mesh normals from the B-rep surfaces, so curved faces
+    // shade smoothly. Fall back to the triangle normal when they are absent.
+    let surface_normals = mesh.has_normals();
 
     for triangle in mesh.indices.chunks_exact(3) {
         let indices = [
@@ -309,9 +312,14 @@ fn build_mesh_buffers(mesh: &Mesh) -> (Vec<Vertex>, Vec<u32>) {
         let a = mesh.positions[indices[0]];
         let b = mesh.positions[indices[1]];
         let c = mesh.positions[indices[2]];
-        let normal = triangle_normal(a, b, c);
+        let flat_normal = triangle_normal(a, b, c);
 
-        for position in [a, b, c] {
+        for (corner, position) in [a, b, c].into_iter().enumerate() {
+            let normal = if surface_normals {
+                normalize_or(mesh.normals[indices[corner]], flat_normal)
+            } else {
+                flat_normal
+            };
             vertices.push(Vertex {
                 position: [position[0] as f32, position[1] as f32, position[2] as f32],
                 normal,
@@ -325,6 +333,16 @@ fn build_mesh_buffers(mesh: &Mesh) -> (Vec<Vertex>, Vec<u32>) {
 
     let indices = (0..vertices.len() as u32).collect();
     (vertices, indices)
+}
+
+fn normalize_or(normal: [f64; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let normal = Vec3::new(normal[0] as f32, normal[1] as f32, normal[2] as f32);
+    let length = normal.length();
+    if length > f32::EPSILON {
+        (normal / length).to_array()
+    } else {
+        fallback
+    }
 }
 
 fn triangle_normal(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f32; 3] {
@@ -361,4 +379,49 @@ fn create_index_buffer(device: &wgpu::Device, indices: &[u32]) -> wgpu::Buffer {
         contents: bytemuck::cast_slice(indices),
         usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn triangle_with_normals(normals: Vec<[f64; 3]>) -> Mesh {
+        Mesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals,
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    #[test]
+    fn supplied_normals_are_used_verbatim() {
+        let mesh = triangle_with_normals(vec![[0.0, 0.0, -1.0]; 3]);
+        let (vertices, indices) = build_mesh_buffers(&mesh);
+
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert_eq!(vertices.len(), 3);
+        for vertex in &vertices {
+            assert_eq!(vertex.normal, [0.0, 0.0, -1.0]);
+        }
+    }
+
+    #[test]
+    fn missing_normals_fall_back_to_the_triangle_normal() {
+        let mesh = triangle_with_normals(Vec::new());
+        let (vertices, _) = build_mesh_buffers(&mesh);
+
+        // Counter-clockwise in XY, so the geometric normal points along +Z.
+        for vertex in &vertices {
+            assert_eq!(vertex.normal, [0.0, 0.0, 1.0]);
+        }
+    }
+
+    #[test]
+    fn degenerate_normals_fall_back_per_vertex() {
+        let mesh = triangle_with_normals(vec![[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]);
+        let (vertices, _) = build_mesh_buffers(&mesh);
+
+        assert_eq!(vertices[0].normal, [0.0, 0.0, 1.0]);
+        assert_eq!(vertices[1].normal, [0.0, 0.0, -1.0]);
+    }
 }

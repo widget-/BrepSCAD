@@ -212,7 +212,9 @@ vendor/
   - rotational extrusion of a sketch around Z
   - matrix transforms on faces and solids
   - union, difference, intersection on solids
-  - tessellation to a neutral triangle mesh
+  - tessellation to a neutral triangle mesh with the exact surface normals
+    from the B-rep, so curved faces shade smoothly without mesh-derived
+    smoothing
   - axis-aligned bounds for solids and sketches
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
