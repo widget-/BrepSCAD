@@ -289,25 +289,17 @@ pub(crate) fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
         ));
     }
 
-    // Use a closed polyhedral approximation for booleans. Master shapeops is
-    // much more predictable on planar faces than on near-tangent analytic
-    // cylinder surfaces.
-    const SEGMENTS: usize = 64;
-    let mut points = Vec::with_capacity(SEGMENTS * 2);
-    for z in [-height / 2.0, height / 2.0] {
-        for index in 0..SEGMENTS {
-            let angle = std::f64::consts::TAU * index as f64 / SEGMENTS as f64;
-            points.push([radius * angle.cos(), radius * angle.sin(), z]);
-        }
-    }
-    let mut faces = Vec::with_capacity(SEGMENTS + 2);
-    faces.push((0..SEGMENTS).rev().collect::<Vec<_>>());
-    faces.push((SEGMENTS..SEGMENTS * 2).collect::<Vec<_>>());
-    for index in 0..SEGMENTS {
-        let next = (index + 1) % SEGMENTS;
-        faces.push(vec![index, next, SEGMENTS + next, SEGMENTS + index]);
-    }
-    polyhedron(&points, &faces)
+    let vertex = builder::vertex(Point3::new(radius, 0.0, -height / 2.0));
+    let circle = builder::rsweep(
+        &vertex,
+        Point3::origin(),
+        Vector3::unit_z(),
+        Rad(std::f64::consts::TAU),
+        2,
+    );
+    let disk = builder::try_attach_plane(vec![circle])
+        .map_err(|error| KernelError::Backend(format!("{error:?}")))?;
+    Ok(builder::tsweep(&disk, Vector3::new(0.0, 0.0, height)))
 }
 
 const SPHERE_SEGMENTS: usize = 32;
