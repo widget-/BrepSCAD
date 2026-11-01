@@ -6,10 +6,12 @@
 //! depends on Truck.
 
 mod bvh;
+mod spline;
 mod surface;
 mod trim;
 
 pub use bvh::Node;
+pub use spline::SplineSurface;
 pub use surface::{Surface, SurfaceHit};
 pub use trim::TrimRegion;
 

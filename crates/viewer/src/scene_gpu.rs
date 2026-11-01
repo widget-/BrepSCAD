@@ -144,7 +144,9 @@ fn pack_face(
             packed.params1 = point_and(axis, TAU);
             packed.params2 = point_and(u_reference, 0.0);
         }
-        None => {
+        // Spline faces have no GPU intersection yet, so they ride the
+        // tessellated path like any other unmodelled surface.
+        Some(Surface::Spline(_)) | None => {
             packed.header[0] = KIND_TRIANGLES;
             packed.triangles = [
                 (vertices.len() / 3) as u32,

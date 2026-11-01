@@ -8,6 +8,7 @@
 use std::f64::consts::TAU;
 
 use crate::Ray;
+use crate::spline::SplineSurface;
 
 /// One intersection of a ray with an untrimmed surface.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,12 +51,15 @@ pub enum Surface {
         half_angle_tan: f64,
         u_reference: [f64; 3],
     },
+    /// A tensor-product B-spline or NURBS patch.
+    Spline(std::sync::Arc<SplineSurface>),
 }
 
 impl Surface {
     /// Appends every intersection with the ray, unsorted.
     pub(crate) fn intersect(&self, ray: &Ray, out: &mut Vec<SurfaceHit>) {
         match self {
+            Surface::Spline(surface) => surface.intersect(ray, out),
             Surface::Plane {
                 origin,
                 normal,
