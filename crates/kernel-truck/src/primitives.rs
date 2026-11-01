@@ -289,18 +289,145 @@ pub(crate) fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
         ));
     }
 
-    let vertex = builder::vertex(Point3::new(radius, 0.0, -height / 2.0));
-    let circle = builder::rsweep(
-        &vertex,
+    // Revolving the generator line gives the side as analytic
+    // `Surface::RevolutedCurve` patches. Extruding a disk instead would leave a
+    // homotopy B-spline wall, which the boolean engine subdivides slowly and
+    // the ray caster can only approximate.
+    let bottom = builder::vertex(Point3::new(radius, 0.0, -height / 2.0));
+    let top = builder::vertex(Point3::new(radius, 0.0, height / 2.0));
+    let generator = builder::line(&bottom, &top);
+    let side: Shell = builder::rsweep(
+        &generator,
         Point3::origin(),
         Vector3::unit_z(),
         Rad(std::f64::consts::TAU),
-        2,
+        REVOLVE_DIVISION,
     );
-    let disk = builder::try_attach_plane(vec![circle])
-        .map_err(|error| KernelError::Backend(format!("{error:?}")))?;
-    Ok(builder::tsweep(&disk, Vector3::new(0.0, 0.0, height)))
+
+    // Caps are planes trimmed by the side's own boundary arcs, so the shell
+    // shares its edges and stays closed. Sweeping a radial line instead would
+    // collapse at the axis, where the surface normals are undefined.
+    //
+    // Truck makes no promise about the direction of those arcs, so try the
+    // winding combinations until the shell validates, then make sure the solid
+    // faces outwards.
+    let bottom_ring = boundary_ring(&side, -height / 2.0)
+        .ok_or_else(|| KernelError::Backend("cylinder has no bottom boundary".to_owned()))?;
+    let top_ring = boundary_ring(&side, height / 2.0)
+        .ok_or_else(|| KernelError::Backend("cylinder has no top boundary".to_owned()))?;
+
+    let mut built = None;
+    for reverse_bottom in [false, true] {
+        for reverse_top in [false, true] {
+            let mut faces: Vec<Face> = side.face_iter().cloned().collect();
+            faces.push(cap_face(&bottom_ring, reverse_bottom)?);
+            faces.push(cap_face(&top_ring, reverse_top)?);
+            let shell: Shell = faces.into_iter().collect();
+            if let Ok(solid) = Solid::try_new(vec![shell]) {
+                built = Some(solid);
+                break;
+            }
+        }
+        if built.is_some() {
+            break;
+        }
+    }
+    let mut solid = built
+        .ok_or_else(|| KernelError::Backend("cylinder caps do not close the shell".to_owned()))?;
+    if !faces_outwards(&solid) {
+        solid.not();
+    }
+    Ok(solid)
 }
+
+/// Builds a planar cap from a boundary ring, optionally traversed in reverse.
+fn cap_face(ring: &[Edge], reverse: bool) -> KernelResult<Face> {
+    let edges: Vec<Edge> = if reverse {
+        ring.iter().rev().map(Edge::inverse).collect()
+    } else {
+        ring.to_vec()
+    };
+    builder::try_attach_plane(vec![edges.into()])
+        .map_err(|error| KernelError::Backend(format!("cylinder cap is not planar: {error:?}")))
+}
+
+/// True when the topmost planar face points along +Z.
+fn faces_outwards(solid: &Solid) -> bool {
+    let mut highest: Option<(f64, Vector3)> = None;
+    for face in solid.face_iter() {
+        let Surface::Plane(plane) = face.surface() else {
+            continue;
+        };
+        let mut height = 0.0;
+        let mut count = 0.0;
+        for vertex in face.vertex_iter() {
+            height += vertex.point().z;
+            count += 1.0;
+        }
+        if count == 0.0 {
+            continue;
+        }
+        let centroid_height = height / count;
+        let mut normal = plane.normal();
+        if !face.orientation() {
+            normal = -normal;
+        }
+        if highest
+            .map(|(best, _)| centroid_height > best)
+            .unwrap_or(true)
+        {
+            highest = Some((centroid_height, normal));
+        }
+    }
+    highest.map(|(_, normal)| normal.z > 0.0).unwrap_or(true)
+}
+
+/// Chains the edges of `shell` that lie at height `z` into one closed ring.
+fn boundary_ring(shell: &Shell, z: f64) -> Option<Vec<Edge>> {
+    let at_height = |edge: &Edge| {
+        let front = edge.absolute_front().point();
+        let back = edge.absolute_back().point();
+        (front.z - z).abs() < 1.0e-9 && (back.z - z).abs() < 1.0e-9
+    };
+
+    let mut edges: Vec<Edge> = shell
+        .face_iter()
+        .flat_map(|face| face.absolute_boundaries())
+        .flat_map(|wire| wire.iter())
+        .filter(|edge| at_height(edge))
+        .cloned()
+        .collect();
+    if edges.is_empty() {
+        return None;
+    }
+
+    // Walk the arcs end to end, flipping each one as needed, so the result
+    // satisfies the wire invariant: every edge starts where the last ended.
+    let mut ring: Vec<Edge> = Vec::with_capacity(edges.len());
+    let mut current = edges.remove(0);
+    let start = current.front().clone();
+    loop {
+        let end = current.back().clone();
+        ring.push(current);
+        if end == start {
+            break;
+        }
+        let index = edges
+            .iter()
+            .position(|edge| *edge.front() == end || *edge.back() == end)?;
+        let candidate = edges.remove(index);
+        current = if *candidate.front() == end {
+            candidate
+        } else {
+            candidate.inverse()
+        };
+    }
+    Some(ring)
+}
+
+/// Segments per half turn used to build revolved primitives. The B-rep keeps
+/// one analytic surface patch per segment.
+const REVOLVE_DIVISION: usize = 4;
 
 const SPHERE_SEGMENTS: usize = 32;
 const SPHERE_RINGS: usize = 16;

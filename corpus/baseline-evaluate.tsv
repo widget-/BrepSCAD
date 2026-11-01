@@ -13,7 +13,7 @@ BOSL2/coords.scad	ok-empty
 BOSL2/cubetruss.scad	ok-empty
 BOSL2/distributors.scad	ok-empty
 BOSL2/drawing.scad	ok-empty
-BOSL2/examples/attachments.scad	kernel
+BOSL2/examples/attachments.scad	ok
 BOSL2/examples/boolean_geometry.scad	geometry
 BOSL2/examples/BOSL2logo.scad	kernel
 BOSL2/examples/fractal_tree.scad	eval
@@ -70,12 +70,12 @@ MCAD/2Dshapes.scad	ok-empty
 MCAD/3d_triangle.scad	ok-empty
 MCAD/array.scad	ok-empty
 MCAD/bearing.scad	ok-empty
-MCAD/bitmap/alphabet_block.scad	kernel
+MCAD/bitmap/alphabet_block.scad	ok
 MCAD/bitmap/bitmap.scad	ok-empty
-MCAD/bitmap/height_map.scad	kernel
+MCAD/bitmap/height_map.scad	ok
 MCAD/bitmap/letter_necklace.scad	kernel
 MCAD/bitmap/name_tag.scad	ok-empty
-MCAD/bitmap/test_name_tag.scad	kernel
+MCAD/bitmap/test_name_tag.scad	ok
 MCAD/boxes.scad	ok-empty
 MCAD/constants.scad	ok-empty
 MCAD/curves.scad	ok-empty
@@ -104,7 +104,7 @@ MCAD/stepper.scad	ok-empty
 MCAD/teardrop.scad	ok-empty
 MCAD/transformations.scad	ok-empty
 MCAD/triangles.scad	ok-empty
-MCAD/trochoids.scad	kernel
+MCAD/trochoids.scad	ok
 MCAD/units.scad	ok-empty
 MCAD/unregular_shapes.scad	ok-empty
 MCAD/utilities.scad	ok-empty

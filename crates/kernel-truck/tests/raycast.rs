@@ -160,9 +160,22 @@ fn cylinder_scene_matches_the_tessellated_mesh() {
     let scene = kernel.raycast_scene(cylinder, 0.01).expect("scene");
     let mesh = kernel.tessellate(cylinder, 0.01).expect("tessellation");
 
-    assert_eq!(scene.faces().len(), 4, "side patch and two caps");
-    // Cylinder sides are B-spline surfaces in Truck, so they are covered by
-    // tessellation; both sides use the same tolerance here.
+    // Four revolved side patches plus the two caps, all analytic: nothing about
+    // a cylinder needs tessellation coverage any more.
+    assert_eq!(scene.faces().len(), 6);
+    let analytic = scene
+        .faces()
+        .iter()
+        .filter(|face| face.surface.is_some())
+        .count();
+    assert_eq!(
+        analytic,
+        scene.faces().len(),
+        "every cylinder face is analytic"
+    );
+
+    // The analytic side is exact, so the comparison tolerance only has to cover
+    // the tessellated reference.
     check_against_mesh(&scene, &mesh, 0.02);
 }
 

@@ -297,6 +297,15 @@ vendor/
 - `sphere` is built as a faceted UV B-rep with shared edges and planar
   triangles. Revolving a half-disc in Truck produced degenerate pole faces that
   broke tessellation and booleans, so the faceted shell is used instead.
+- `cylinder` revolves a rectangular profile about the axis instead of extruding
+  a disk. The vertical edge becomes four analytic `Surface::RevolutedCurve`
+  patches, the radial edges are rebuilt as planar caps from the side's own
+  boundary arcs (a swept radial line collapses at the axis, where normals are
+  undefined), and the on-axis edge is dropped. Extruding a disk instead leaves a
+  homotopy B-spline wall: slower to subdivide, harder for booleans, and
+  invisible to the ray caster. The cap winding is chosen by trying the
+  combinations until the shell validates, then flipped if the solid faces
+  inwards.
 - `square` and `circle` profiles are centered in XY, `polygon` points are used
   as given, and extrusions are centered on Z, matching the centered 3D
   primitives rather than OpenSCAD's origin-at-a-corner convention.
@@ -328,11 +337,16 @@ vendor/
   option enabled.
 - Ray casting is a separate, backend-neutral layer. `brepscad-raycast` models
   trimmed planes and revolved lines with trim loops in surface parameter space;
-  `TruckKernel::raycast_scene` classifies each face and falls back to covering
-  B-spline/NURBS faces with their tessellation, because Truck builds extruded
-  circles (the sides of `cylinder`) as homotopy B-spline surfaces rather than
-  revolved lines. Making those faces analytic needs either revolved
-  construction in the kernel or a spline ray tracer.
+  `TruckKernel::raycast_scene` classifies each face and covers any B-spline or
+  NURBS face with its tessellation. Cylinders are analytic because `cylinder`
+  now revolves a profile line instead of extruding a disk, which is what Truck
+  turns into a homotopy B-spline wall.
+- Boolean results are tessellated at a display tolerance of at least `0.05`
+  (`BOOLEAN_DISPLAY_TOLERANCE`), because master Truck can subdivide trimmed
+  boolean surfaces pathologically at finer tolerances: a cylinder 0.01 taller
+  than its cube takes minutes at `0.01` and milliseconds at `0.05`. The
+  consequence is visible on hole rims, which are polygonal in the mesh preview;
+  an analytic renderer is the fix for silhouettes, not a finer mesh.
 - Truck boolean success is tolerance-sensitive, so failures retry at finer
   tolerances instead of raising a fixed clearance requirement. The retry ladder
   (nudges and translated operands) is bounded by a 500 ms wall-clock budget, so

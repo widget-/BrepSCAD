@@ -414,11 +414,11 @@ impl Kernel for TruckKernel {
     }
 
     fn tessellate(&self, shape: ShapeId, tolerance: f64) -> KernelResult<Mesh> {
-        // Boolean-derived analytic surfaces can trigger pathological recursive
-        // subdivision in master Truck. Keep the analytic B-rep and use a
-        // display-quality tolerance only for those results.
+        // Boolean-derived surfaces can trigger pathological recursive
+        // subdivision in master Truck at a fine tolerance. Keep the analytic
+        // B-rep and tessellate those results coarsely.
         let tolerance = if self.boolean_shapes.contains(&shape.0) {
-            tolerance.max(0.05)
+            tolerance.max(BOOLEAN_DISPLAY_TOLERANCE)
         } else {
             tolerance
         };
@@ -460,6 +460,10 @@ fn mesh_bounds(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
     }
     Some((min, max))
 }
+
+/// Tessellation tolerance floor for boolean results, in model units. See the
+/// comment in `TruckKernel::tessellate`.
+const BOOLEAN_DISPLAY_TOLERANCE: f64 = 0.05;
 
 pub(crate) fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
     let shell: Shell = vec![face.clone()].into_iter().collect();
