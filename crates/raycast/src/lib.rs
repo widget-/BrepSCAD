@@ -9,6 +9,7 @@ mod bvh;
 mod surface;
 mod trim;
 
+pub use bvh::Node;
 pub use surface::{Surface, SurfaceHit};
 pub use trim::TrimRegion;
 
@@ -122,6 +123,16 @@ impl Scene {
 
     pub fn faces(&self) -> &[Face] {
         &self.faces
+    }
+
+    /// Bounding-volume nodes, in the layout the shader consumes.
+    pub fn nodes(&self) -> &[Node] {
+        &self.nodes
+    }
+
+    /// Face indices in leaf order; leaf `start..start + count` indexes this.
+    pub fn order(&self) -> &[u32] {
+        &self.order
     }
 
     pub fn is_empty(&self) -> bool {

@@ -439,6 +439,10 @@ impl Kernel for TruckKernel {
         Ok(to_neutral_mesh(&mesh))
     }
 
+    fn raycast_scene(&self, shape: ShapeId, tolerance: f64) -> Option<brepscad_raycast::Scene> {
+        TruckKernel::raycast_scene(self, shape, tolerance)
+    }
+
     fn bounds(&self, shape: ShapeId, tolerance: f64) -> KernelResult<([f64; 3], [f64; 3])> {
         let mesh = self.tessellate(shape, tolerance)?;
         mesh_bounds(&mesh).ok_or_else(|| KernelError::Backend("shape has no geometry".to_owned()))

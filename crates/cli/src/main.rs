@@ -42,6 +42,7 @@ fn main() -> Result<()> {
         tolerance: 0.01,
         legacy_centering: args.legacy_centering,
         library_paths,
+        analytic_scene: false,
     };
     let mut kernel = TruckKernel::new();
     let evaluation = match &args.path {

@@ -164,6 +164,14 @@ pub trait Kernel {
         Err(KernelError::Unsupported("tessellate"))
     }
 
+    /// Analytic scene for a solid shape, used by ray-cast preview and picking.
+    ///
+    /// Backends that cannot describe a shape analytically return `None`, and
+    /// callers fall back to the tessellated mesh.
+    fn raycast_scene(&self, _shape: ShapeId, _tolerance: f64) -> Option<brepscad_raycast::Scene> {
+        None
+    }
+
     /// Axis-aligned bounds in the shape's local coordinates.
     fn bounds(
         &self,

@@ -155,6 +155,7 @@ fn angle_bracket_includes_use_library_paths() {
         tolerance: 0.01,
         legacy_centering: false,
         library_paths: vec![dir.path().join("lib")],
+        analytic_scene: false,
     };
     let evaluation =
         evaluate_file_with_options(&main, &mut kernel, options).expect("library path include");
@@ -172,6 +173,7 @@ fn quoted_includes_do_not_search_library_paths() {
         tolerance: 0.01,
         legacy_centering: false,
         library_paths: vec![dir.path().join("lib")],
+        analytic_scene: false,
     };
     let error = evaluate_file_with_options(&main, &mut kernel, options)
         .expect_err("quoted include should not use library paths");

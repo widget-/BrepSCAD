@@ -8,6 +8,7 @@ use eframe::egui_wgpu::{self, wgpu};
 use glam::Vec3;
 use wgpu::util::DeviceExt as _;
 
+use crate::analytic::ComputePreview;
 use crate::camera::Camera;
 
 #[repr(C)]
@@ -54,6 +55,9 @@ pub struct MeshRenderer {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     targets: Option<RenderTargets>,
+    preview: ComputePreview,
+    /// Draw with the compute ray tracer when the evaluation produced a scene.
+    analytic: bool,
 }
 
 impl MeshRenderer {
@@ -152,7 +156,19 @@ impl MeshRenderer {
             index_buffer,
             index_count,
             targets: None,
+            preview: ComputePreview::new(device),
+            analytic: false,
         }
+    }
+
+    /// Uploads the analytic scene used by the compute preview.
+    pub fn set_scene(&mut self, device: &wgpu::Device, scene: Option<&brepscad_raycast::Scene>) {
+        self.preview.set_scene(device, scene);
+    }
+
+    /// Turns the compute preview on or off; the mesh path is the fallback.
+    pub fn set_analytic(&mut self, analytic: bool) {
+        self.analytic = analytic;
     }
 
     pub fn set_mesh(&mut self, device: &wgpu::Device, mesh: &Mesh) {
@@ -190,7 +206,9 @@ impl MeshRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
         let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
@@ -219,6 +237,9 @@ impl MeshRenderer {
             egui_renderer.register_native_texture(device, &color_view, wgpu::FilterMode::Linear)
         };
 
+        // The compute preview binds the color view, so it has to rebuild its
+        // bind group whenever the texture is recreated.
+        self.preview.invalidate_targets();
         self.targets = Some(RenderTargets {
             _color: color,
             color_view,
@@ -229,12 +250,27 @@ impl MeshRenderer {
     }
 
     pub fn render(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         camera: &Camera,
         aspect: f32,
     ) -> egui::TextureId {
+        let (size, color_view, texture_id) = {
+            let targets = self.targets.as_ref().expect("ensure_targets first");
+            (targets.size, targets.color_view.clone(), targets.texture_id)
+        };
+
+        if self.analytic && self.preview.has_scene() {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("analytic preview"),
+            });
+            self.preview
+                .render(device, queue, &mut encoder, camera, size, &color_view);
+            queue.submit(Some(encoder.finish()));
+            return texture_id;
+        }
+
         let targets = self.targets.as_ref().expect("ensure_targets first");
 
         let view_proj = camera.view_projection(aspect);

@@ -91,6 +91,9 @@ pub struct EvaluationOptions {
     pub legacy_centering: bool,
     /// Directories searched by angle-bracket `include` / `use` paths.
     pub library_paths: Vec<PathBuf>,
+    /// Also build an analytic ray-cast scene for the evaluated shapes. This
+    /// costs an extra pass over the B-rep, so it is opt-in.
+    pub analytic_scene: bool,
 }
 
 impl Default for EvaluationOptions {
@@ -99,6 +102,7 @@ impl Default for EvaluationOptions {
             tolerance: 0.01,
             legacy_centering: false,
             library_paths: Vec::new(),
+            analytic_scene: false,
         }
     }
 }
@@ -124,6 +128,7 @@ pub fn evaluate<K: Kernel>(
             tolerance,
             legacy_centering: false,
             library_paths: Vec::new(),
+            analytic_scene: false,
         },
     )
 }
@@ -151,6 +156,7 @@ pub fn evaluate_with_cache<K: Kernel>(
             tolerance,
             legacy_centering: false,
             library_paths: Vec::new(),
+            analytic_scene: false,
         },
         cache,
     )
@@ -180,6 +186,7 @@ pub fn evaluate_file<K: Kernel>(
             tolerance,
             legacy_centering: false,
             library_paths: Vec::new(),
+            analytic_scene: false,
         },
     )
 }
@@ -244,6 +251,7 @@ fn evaluate_with_context<K: Kernel>(
     }
 
     let tolerance = options.tolerance;
+    let analytic_scene = options.analytic_scene;
     let (source_dir, include_stack) = match source_path {
         Some(path) => (path.parent().map(Path::to_path_buf), vec![path]),
         None => (None, Vec::new()),
@@ -277,8 +285,14 @@ fn evaluate_with_context<K: Kernel>(
     drop(evaluator);
 
     let mut shapes = Vec::new();
+    let mut scenes = Vec::new();
     for root in roots {
         let mesh = kernel.tessellate(root.shape, tolerance)?;
+        if analytic_scene {
+            if let Some(scene) = kernel.raycast_scene(root.shape, tolerance) {
+                scenes.push(scene);
+            }
+        }
         let (parts, tree) = collect_parts(&root, root.shape, &mesh, kernel, tolerance, cache)?;
         shapes.push(EvaluatedShape {
             mesh,
@@ -289,7 +303,21 @@ fn evaluate_with_context<K: Kernel>(
         });
     }
 
-    Ok(Evaluation { shapes, messages })
+    let scene = if scenes.is_empty() {
+        None
+    } else {
+        let faces = scenes
+            .iter()
+            .flat_map(|scene| scene.faces().iter().cloned())
+            .collect();
+        Some(brepscad_raycast::Scene::new(faces))
+    };
+
+    Ok(Evaluation {
+        shapes,
+        messages,
+        scene,
+    })
 }
 
 /// Convenience wrapper for callers that only need final meshes.
@@ -305,6 +333,7 @@ pub fn evaluate_to_meshes<K: Kernel>(
             tolerance,
             legacy_centering: false,
             library_paths: Vec::new(),
+            analytic_scene: false,
         },
     )
 }

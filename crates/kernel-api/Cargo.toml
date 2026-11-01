@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 thiserror.workspace = true
+brepscad-raycast.workspace = true

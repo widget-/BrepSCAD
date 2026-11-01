@@ -227,6 +227,7 @@ version = "0.1.0"
 dependencies = [
  "brepscad-kernel-api",
  "brepscad-kernel-truck",
+ "brepscad-raycast",
  "brepscad-syntax",
  "clipper2-rust",
  "thiserror 2.0.21",
@@ -236,6 +237,7 @@ dependencies = [
 name = "brepscad-kernel-api"
 version = "0.1.0"
 dependencies = [
+ "brepscad-raycast",
  "thiserror 2.0.21",
 ]
 
@@ -269,6 +271,7 @@ dependencies = [
  "brepscad-eval",
  "brepscad-kernel-api",
  "brepscad-kernel-truck",
+ "brepscad-raycast",
  "brepscad-syntax",
  "bytemuck",
  "eframe",

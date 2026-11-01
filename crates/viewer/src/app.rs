@@ -84,11 +84,28 @@ impl ViewerApp {
 
         let mut mesh_cache = MeshCache::new();
         let (evaluation, error) = evaluate_source(SAMPLE, None, &mut mesh_cache, false);
+        let adapter = render_state.adapter.get_info();
+        eprintln!(
+            "[gpu-probe] {:?} {:?} {:?} limits: complete={} buf={} tex={}",
+            adapter.backend,
+            adapter.name,
+            adapter.device_type,
+            render_state.device.limits().max_compute_workgroup_size_x,
+            render_state
+                .device
+                .limits()
+                .max_storage_buffers_per_shader_stage,
+            render_state
+                .device
+                .limits()
+                .max_storage_textures_per_shader_stage
+        );
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
         camera.fit(&mesh);
-        let renderer = MeshRenderer::new(&render_state.device, &mesh);
+        let mut renderer = MeshRenderer::new(&render_state.device, &mesh);
+        renderer.set_analytic(analytic_preview_enabled());
 
         Self {
             source: SAMPLE.to_owned(),
@@ -167,6 +184,8 @@ impl ViewerApp {
                             let (pick_mesh, pick_parts) = combine_parts(&result.evaluation);
                             self.camera.fit(&mesh);
                             self.renderer.set_mesh(&render_state.device, &mesh);
+                            self.renderer
+                                .set_scene(&render_state.device, result.evaluation.scene.as_ref());
                             self.mesh = mesh;
                             self.pick_mesh = pick_mesh;
                             self.pick_parts = pick_parts;
@@ -673,6 +692,7 @@ fn evaluate_source(
         tolerance: 0.01,
         legacy_centering,
         library_paths: brepscad_eval::environment_library_paths(),
+        analytic_scene: analytic_preview_enabled(),
     };
     let result = match source_path {
         Some(path) => evaluate_source_with_path(source, path, &mut kernel, options, cache),
@@ -684,10 +704,17 @@ fn evaluate_source(
             Evaluation {
                 shapes: Vec::new(),
                 messages: Vec::new(),
+                scene: None,
             },
             Some(error.to_string()),
         ),
     }
+}
+
+/// The analytic preview is opt-in: it costs an extra pass over the B-rep and a
+/// compute dispatch per frame.
+fn analytic_preview_enabled() -> bool {
+    std::env::var_os("BREPSCAD_ANALYTIC_PREVIEW").is_some()
 }
 
 fn line_number(source: &str, offset: usize) -> usize {

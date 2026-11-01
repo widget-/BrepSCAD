@@ -13,7 +13,7 @@ pub(crate) const NO_CHILD: u32 = u32::MAX;
 const LEAF_SIZE: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Node {
+pub struct Node {
     pub bounds: ([f64; 3], [f64; 3]),
     pub left: u32,
     pub right: u32,

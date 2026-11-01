@@ -1,8 +1,10 @@
+mod analytic;
 mod app;
 mod camera;
 mod mesh;
 mod picking;
 mod renderer;
+mod scene_gpu;
 
 use app::ViewerApp;
 

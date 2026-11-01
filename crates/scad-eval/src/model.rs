@@ -10,6 +10,9 @@ pub struct Evaluation {
     pub shapes: Vec<EvaluatedShape>,
     /// Messages collected from `echo(...)`, in evaluation order.
     pub messages: Vec<String>,
+    /// Analytic scene over every top-level shape, when the caller asked for it
+    /// and the kernel could describe them. Used by ray-cast preview and picking.
+    pub scene: Option<brepscad_raycast::Scene>,
 }
 
 /// One top-level shape, its final mesh, and its selectable operands.

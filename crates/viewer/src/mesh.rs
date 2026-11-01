@@ -103,6 +103,7 @@ mod tests {
                 },
             }],
             messages: Vec::new(),
+            scene: None,
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
                 },
             }],
             messages: Vec::new(),
+            scene: None,
         };
 
         let mesh = combine_evaluation(&evaluation);
