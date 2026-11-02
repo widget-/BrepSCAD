@@ -297,18 +297,20 @@ vendor/
   geometry where available. Spheres ignore `$fn` entirely — see below.
   `$fa`/`$fs` do not choose the geometry representation; they only sample
   2D profiles for CSG.
-- `sphere` ignores `$fn` and is built as a faceted UV B-rep with shared edges
-  and planar triangles, at a fixed 32×16. Nothing in the libraries checked uses
-  a low `$fn` on a sphere to build a polyhedron: BOSL2's code never passes a
-  literal below 16 and asks for facets through `spheroid(style = "icosa")`
-  instead, and the only low value in the corpus is MCAD's Braille dot
-  (`$fn = 8`, a render-cost shortcut). Revolving a meridian in Truck gives an
-  exact sphere, but booleans against it cost tens of seconds per attempt — a
-  cube minus a sphere went from instant to about 87 s — because shapeops meshes
-  each face and Newton-solves every intersection with a revolved B-spline arc.
-  The renderer sidesteps the facets: the kernel knows a shape is a ball and
-  `raycast_scene` emits one exact `Surface::Sphere`, so the preview and picking
-  are analytic even though the B-rep is not.
+- `sphere` ignores `$fn` and is built as an exact surface of revolution: a
+  meridian arc swept about the z axis, closed by two tiny polar caps. Nothing in
+  the libraries checked uses a low `$fn` on a sphere to build a polyhedron —
+  BOSL2's code never passes a literal below 16 and asks for facets through
+  `spheroid(style = "icosa")` instead, and the only low value in the corpus is
+  MCAD's Braille dot (`$fn = 8`, a render-cost shortcut).
+- The exact sphere costs booleans. `circle_arc` stores the meridian as a
+  rational quadratic NURBS, so the surface is exact and exports as a surface of
+  revolution, but shapeops meshes each face and Newton-solves every intersection
+  against that revolved curve: `cube − sphere(1.2)` takes about 85 s where a
+  polyhedral sphere was instant. That is accepted deliberately — an exact B-rep
+  is what a STEP export needs, and a faceted one would ship 960 planar faces.
+  The preview and picking do not pay it: the kernel knows a shape is a ball and
+  `raycast_scene` emits one exact `Surface::Sphere`, traced by a quadratic.
 - `cylinder` revolves a rectangular profile about the axis instead of extruding
   a disk. The vertical edge becomes four analytic `Surface::RevolutedCurve`
   patches, the radial edges are rebuilt as planar caps from the side's own
@@ -441,8 +443,8 @@ For headless UI snapshots, see
   - `rotate_extrude` requires `x >= 0`, ignores `convexity`, and has no
     negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
-  - `sphere` ignores `$fn`: the B-rep is a fixed 32×16 polyhedron, and the
-    preview and picking trace the exact ball
+  - `sphere` ignores `$fn` and is an exact surface of revolution, so it exports
+    as a surface rather than facets; booleans against one cost about 85 s
   - `hull` and `minkowski` support convex 3D children only; 2D hulls and
     non-convex Minkowski sums are not implemented
   - `minkowski` with a sphere is exact only for a box; the rounded offset's

@@ -429,9 +429,18 @@ fn boundary_ring(shell: &Shell, z: f64) -> Option<Vec<Edge>> {
 /// one analytic surface patch per segment.
 const REVOLVE_DIVISION: usize = 4;
 
-const SPHERE_SEGMENTS: usize = 32;
-const SPHERE_RINGS: usize = 16;
+/// Patches per full revolution of the sphere.
+const SPHERE_DIVISION: usize = 4;
 
+/// How far the sphere's meridian stops short of each pole, in radians.
+const POLE_SETBACK: f64 = 1.0e-3;
+
+/// A sphere: a meridian arc swept about the z axis, closed by two small caps.
+///
+/// `$fn` is deliberately ignored. In every library checked (BOSL2, MCAD) it is
+/// a smoothness knob on spheres, never a request for a polyhedron — BOSL2 asks
+/// for facets through `spheroid(style = "icosa")` instead — so the surface stays
+/// exact and the display tolerance decides how finely it is drawn.
 pub(crate) fn sphere(radius: f64) -> KernelResult<Solid> {
     if radius <= 0.0 {
         return Err(KernelError::Backend(
@@ -439,124 +448,54 @@ pub(crate) fn sphere(radius: f64) -> KernelResult<Solid> {
         ));
     }
 
-    // `$fn` is deliberately ignored. In every library checked (BOSL2, MCAD) it
-    // is a smoothness knob on spheres, never a request for a polyhedron —
-    // BOSL2 asks for facets through `spheroid(style = "icosa")` instead. The
-    // preview draws spheres analytically (see `raycast_scene`), so this facet
-    // count only decides how fine the B-rep is for booleans.
-    let (segments, rings) = (SPHERE_SEGMENTS, SPHERE_RINGS);
-    let north = builder::vertex(Point3::new(0.0, 0.0, radius));
-    let south = builder::vertex(Point3::new(0.0, 0.0, -radius));
+    // The generatrix stops a hair short of each pole. A meridian that reaches
+    // the axis sweeps into zero-length edges there, and the shell never
+    // validates; capping the two tiny rings instead costs a flat spot of radius
+    // `radius * sin(POLE_SETBACK)`, far below any display tolerance.
+    let (sin, cos) = POLE_SETBACK.sin_cos();
+    let height = radius * cos;
+    let rail = radius * sin;
+    let high = builder::vertex(Point3::new(rail, 0.0, height));
+    let low = builder::vertex(Point3::new(rail, 0.0, -height));
+    let meridian: Edge = builder::circle_arc(&high, &low, Point3::new(radius, 0.0, 0.0));
+    let band: Shell = builder::rsweep(
+        &meridian,
+        Point3::origin(),
+        Vector3::unit_z(),
+        Rad(std::f64::consts::TAU),
+        SPHERE_DIVISION,
+    );
 
-    let mut latitude = Vec::with_capacity(rings - 1);
-    for ring in 1..rings {
-        let theta = std::f64::consts::PI * ring as f64 / rings as f64;
-        let (sin_theta, cos_theta) = theta.sin_cos();
-        let mut row = Vec::with_capacity(segments);
-        for segment in 0..segments {
-            let phi = std::f64::consts::TAU * segment as f64 / segments as f64;
-            let (sin_phi, cos_phi) = phi.sin_cos();
-            row.push(builder::vertex(Point3::new(
-                radius * sin_theta * cos_phi,
-                radius * sin_theta * sin_phi,
-                radius * cos_theta,
-            )));
+    // As in `cylinder`: the caps are planes trimmed by the band's own boundary
+    // arcs, so the shell shares edges and closes. Truck makes no promise about
+    // the direction of those arcs, so try the windings until it validates.
+    let low_ring = boundary_ring(&band, -height)
+        .ok_or_else(|| KernelError::Backend("sphere has no lower boundary".to_owned()))?;
+    let high_ring = boundary_ring(&band, height)
+        .ok_or_else(|| KernelError::Backend("sphere has no upper boundary".to_owned()))?;
+
+    let mut built = None;
+    for reverse_low in [false, true] {
+        for reverse_high in [false, true] {
+            let mut faces: Vec<Face> = band.face_iter().cloned().collect();
+            faces.push(cap_face(&low_ring, reverse_low)?);
+            faces.push(cap_face(&high_ring, reverse_high)?);
+            let shell: Shell = faces.into_iter().collect();
+            if let Ok(solid) = Solid::try_new(vec![shell]) {
+                built = Some(solid);
+                break;
+            }
         }
-        latitude.push(row);
-    }
-
-    let mut horizontal = Vec::with_capacity(latitude.len());
-    for row in &latitude {
-        let mut edges = Vec::with_capacity(segments);
-        for segment in 0..segments {
-            edges.push(builder::line(&row[segment], &row[(segment + 1) % segments]));
-        }
-        horizontal.push(edges);
-    }
-
-    let mut vertical = Vec::with_capacity(latitude.len().saturating_sub(1));
-    let mut diagonal = Vec::with_capacity(latitude.len().saturating_sub(1));
-    for ring in 0..latitude.len().saturating_sub(1) {
-        let mut vertical_edges = Vec::with_capacity(segments);
-        let mut diagonal_edges = Vec::with_capacity(segments);
-        for segment in 0..segments {
-            vertical_edges.push(builder::line(
-                &latitude[ring][segment],
-                &latitude[ring + 1][segment],
-            ));
-            diagonal_edges.push(builder::line(
-                &latitude[ring][segment],
-                &latitude[ring + 1][(segment + 1) % segments],
-            ));
-        }
-        vertical.push(vertical_edges);
-        diagonal.push(diagonal_edges);
-    }
-
-    let mut north_edges = Vec::with_capacity(segments);
-    let mut south_edges = Vec::with_capacity(segments);
-    let last_ring = latitude.len() - 1;
-    for (north_vertex, south_vertex) in latitude[0].iter().zip(&latitude[last_ring]) {
-        north_edges.push(builder::line(&north, north_vertex));
-        south_edges.push(builder::line(&south, south_vertex));
-    }
-
-    let mut faces = Vec::with_capacity(2 * segments * latitude.len());
-    for segment in 0..segments {
-        let wire: Wire = vec![
-            north_edges[segment].clone(),
-            horizontal[0][segment].clone(),
-            north_edges[(segment + 1) % segments].inverse(),
-        ]
-        .into_iter()
-        .collect();
-        faces.push(
-            builder::try_attach_plane(vec![wire])
-                .map_err(|error| KernelError::Backend(format!("sphere cap failed: {error:?}")))?,
-        );
-
-        let wire: Wire = vec![
-            south_edges[(segment + 1) % segments].clone(),
-            horizontal[last_ring][segment].inverse(),
-            south_edges[segment].inverse(),
-        ]
-        .into_iter()
-        .collect();
-        faces.push(
-            builder::try_attach_plane(vec![wire])
-                .map_err(|error| KernelError::Backend(format!("sphere cap failed: {error:?}")))?,
-        );
-    }
-
-    for ring in 0..vertical.len() {
-        for segment in 0..segments {
-            let wire: Wire = vec![
-                vertical[ring][segment].clone(),
-                horizontal[ring + 1][segment].clone(),
-                diagonal[ring][segment].inverse(),
-            ]
-            .into_iter()
-            .collect();
-            faces.push(builder::try_attach_plane(vec![wire]).map_err(|error| {
-                KernelError::Backend(format!("sphere facet failed: {error:?}"))
-            })?);
-
-            let wire: Wire = vec![
-                diagonal[ring][segment].clone(),
-                vertical[ring][(segment + 1) % segments].inverse(),
-                horizontal[ring][segment].inverse(),
-            ]
-            .into_iter()
-            .collect();
-            faces.push(builder::try_attach_plane(vec![wire]).map_err(|error| {
-                KernelError::Backend(format!("sphere facet failed: {error:?}"))
-            })?);
+        if built.is_some() {
+            break;
         }
     }
-
-    let shell: Shell = faces.into_iter().collect();
-    Solid::try_new(vec![shell])
-        .map_err(|error| KernelError::Backend(format!("sphere shell failed: {error:?}")))
+    let mut solid = built
+        .ok_or_else(|| KernelError::Backend("sphere caps do not close the shell".to_owned()))?;
+    if !faces_outwards(&solid) {
+        solid.not();
+    }
+    Ok(solid)
 }
 fn signed_volume(points: &[[f64; 3]], faces: &[Vec<usize>]) -> f64 {
     let mut volume = 0.0;
