@@ -68,6 +68,11 @@ fn seam_side(angle: f64, hint: Option<f64>) -> f64 {
     match hint {
         Some(h) if angle < SEAM && h > PI => angle + 2.0 * PI,
         Some(h) if angle > 2.0 * PI - SEAM && h < PI => angle - 2.0 * PI,
+        // PATCH(BrepSCAD): without a continuity hint the seam has no preferred
+        // side, and the cross-product sign in `proj_angle` is rounding noise
+        // there. Keep it on the 0 side, as the 2D presearch grid used to by
+        // picking its first sample on a tie.
+        None if angle > 2.0 * PI - SEAM => 0.0,
         _ => angle,
     }
 }

@@ -42,6 +42,65 @@ fn assert_close(actual: [f64; 3], expected: [f64; 3]) {
     }
 }
 
+fn signed_volume(mesh: &Mesh) -> f64 {
+    mesh.indices
+        .chunks_exact(3)
+        .map(|triangle| {
+            let a = mesh.positions[triangle[0] as usize];
+            let b = mesh.positions[triangle[1] as usize];
+            let c = mesh.positions[triangle[2] as usize];
+            a[0] * (b[1] * c[2] - b[2] * c[1])
+                + a[1] * (b[2] * c[0] - b[0] * c[2])
+                + a[2] * (b[0] * c[1] - b[1] * c[0])
+        })
+        .sum::<f64>()
+        / 6.0
+}
+
+/// A sphere poking through all six faces of a cube used to spend almost all of
+/// its time in a 101x101 parameter presearch, and the search's seam choice
+/// decided whether the sphere patches were trimmed correctly. The two boolean
+/// results must partition the cube, and the lens must have its analytic volume,
+/// so this pins both the speed and the seam handling.
+#[test]
+fn cube_sphere_booleans_partition_the_cube() {
+    let mut kernel = TruckKernel::new();
+    let cube = cube(&mut kernel, [2.0; 3], [0.0; 3]);
+    let sphere = kernel
+        .primitive(Primitive::Sphere { radius: 1.2 })
+        .expect("sphere");
+
+    let started = std::time::Instant::now();
+    let carved = kernel
+        .boolean(BooleanOp::Difference, cube, sphere)
+        .expect("cube minus sphere");
+    let lens = kernel
+        .boolean(BooleanOp::Intersection, cube, sphere)
+        .expect("cube intersect sphere");
+    let elapsed = started.elapsed();
+
+    let carved_volume = signed_volume(&kernel.tessellate(carved, 0.05).expect("tessellate"));
+    let lens_volume = signed_volume(&kernel.tessellate(lens, 0.05).expect("tessellate"));
+
+    // Volume of a ball of radius 1.2 inside the cube [-1, 1]^3.
+    let expected_lens = 6.3804;
+    assert!(
+        (lens_volume - expected_lens).abs() < 0.35,
+        "lens volume = {lens_volume}, expected {expected_lens}"
+    );
+    assert!(
+        (carved_volume + lens_volume - 8.0).abs() < 0.01,
+        "carved + lens = {} != 8",
+        carved_volume + lens_volume
+    );
+    // Ten seconds is a hundred times the current cost; the old grid search took
+    // about eighteen for these two booleans in a release build.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "sphere booleans took {elapsed:?}"
+    );
+}
+
 /// Two cubes that do not touch stay separate shells.
 #[test]
 fn union_of_disjoint_cubes_keeps_both_shells() {

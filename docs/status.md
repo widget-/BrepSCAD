@@ -306,14 +306,23 @@ vendor/
   BOSL2's code never passes a literal below 16 and asks for facets through
   `spheroid(style = "icosa")` instead, and the only low value in the corpus is
   MCAD's Braille dot (`$fn = 8`, a render-cost shortcut).
-- The exact sphere costs booleans. `circle_arc` stores the meridian as a
+- The exact sphere used to cost booleans. `circle_arc` stores the meridian as a
   rational quadratic NURBS, so the surface is exact and exports as a surface of
   revolution, but shapeops meshes each face and Newton-solves every intersection
-  against that revolved curve: `cube − sphere(1.2)` takes about 85 s where a
-  polyhedral sphere was instant. That is accepted deliberately — an exact B-rep
-  is what a STEP export needs, and a faceted one would ship 960 planar faces.
-  The preview and picking do not pay it: the kernel knows a shape is a ball and
-  `raycast_scene` emits one exact `Surface::Sphere`, traced by a quadratic.
+  against that revolved curve. `Surface`'s nearest-parameter search for a
+  revolved surface now delegates to the surface's own analytic search instead of
+  using a 101×101 presearch grid as a Newton seed: `cube − sphere(1.2)` went
+  from 9.0 s to 36 ms in the release CLI. Exactness is deliberate — an exact
+  B-rep is what a STEP export needs, and a faceted one would ship 960 planar
+  faces. The preview and picking do not pay for it: the kernel knows a shape is
+  a ball and `raycast_scene` emits one exact `Surface::Sphere`, traced by a
+  quadratic.
+- A revolved surface's nearest-parameter search has no continuity hint when
+  shapeops evaluates an intersection curve. `proj_angle`'s choice of seam side
+  is rounding noise there, so `seam_side` keeps the seam at 0 rather than 2π.
+  The old 101×101 grid did the same by tie-breaking to its first sample. Without
+  the rule the sphere patches were trimmed to half their area even though every
+  search returned the correct 3D point.
 - `cylinder` revolves a rectangular profile about the axis instead of extruding
   a disk. The vertical edge becomes four analytic `Surface::RevolutedCurve`
   patches, the radial edges are rebuilt as planar caps from the side's own
@@ -449,7 +458,9 @@ For headless UI snapshots, see
     negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
   - `sphere` ignores `$fn` and is an exact surface of revolution, so it exports
-    as a surface rather than facets; booleans against one cost about 85 s
+    as a surface rather than facets; booleans against one are now cheap (about
+    36 ms for `cube − sphere(1.2)` in release) but their display mesh is
+    tessellated at the coarse boolean tolerance
   - `hull` and `minkowski` support convex 3D children only; 2D hulls and
     non-convex Minkowski sums are not implemented
   - `minkowski` with a sphere is exact only for a box; the rounded offset's
@@ -562,6 +573,10 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
   steps.
 - `docs/notes/2026-10-30.md` — first-session snapshot and checkout sync note.
 - `docs/notes/2026-10-31.md` — syntax-compatibility slice and corpus results.
+- `docs/notes/2026-11-01.md` — Truck master migration, exact spheres, rounded
+  offset, and the opengrid investigation.
+- `docs/notes/2026-11-02.md` — analytic parameter search and the seam rule that
+  makes sphere booleans cheap.
 - `docs/research.md` — prior art, source-first architecture, kernel trade-offs,
   native library fast paths.
 - `docs/kernels.md` — per-operation OCCT/SolidCore/Truck capability matrix.

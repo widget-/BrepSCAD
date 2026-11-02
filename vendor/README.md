@@ -31,14 +31,28 @@ Licensed under Apache-2.0; see [`LICENSE`](truck-geometry/LICENSE).
   `double_projection`. Coincident faces of two solids are computed
   independently, so their normals are only parallel to within accumulated
   rounding; the previous tolerance rejected them and failed the boolean.
+- `src/decorators/revolved_curve.rs` keeps the seam at angle 0 rather than 2π
+  when `seam_side` has no continuity hint. `proj_angle` decides that side from a
+  cross-product sign that is rounding noise on the seam; trimming a surface with
+  the other name folds the parameter polygon over itself.
+
+## truck-modeling 0.6.0 (master)
+
+Source: <https://github.com/ricosjp/truck>, vendored from master `1ca3214`.
+Licensed under Apache-2.0; see [`LICENSE`](truck-modeling/LICENSE).
+
+- `src/geometry.rs` delegates `Surface::RevolutedCurve`'s nearest-parameter
+  search to the surface's analytic meridian search. It previously sampled a
+  101×101 grid only to seed the Newton solve, which made every intersection
+  evaluation against a sphere cost ten thousand surface evaluations.
 
 ## Other vendored Truck crates
 
 `truck-base`, `truck-derivers`, `truck-geotrait`, `truck-topology`,
-`truck-polymesh`, `truck-meshalgo`, and `truck-modeling` are vendored from the
-same master revision. They carry the BrepSCAD patches needed to keep
-boolean-derived shells (which master shapeops may leave open or non-simple)
-renderable; see the `PATCH(BrepSCAD)` comments in those sources.
+`truck-polymesh`, and `truck-meshalgo` are vendored from the same master
+revision. They carry the BrepSCAD patches needed to keep boolean-derived shells
+(which master shapeops may leave open or non-simple) renderable; see the
+`PATCH(BrepSCAD)` comments in those sources.
 
 Remove the directories and the `[patch.crates-io]` entries in the workspace
 manifest once released Truck versions contain equivalent behavior. Upstream
