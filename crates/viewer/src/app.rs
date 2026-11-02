@@ -910,17 +910,29 @@ impl ViewerApp {
         egui::Window::new("Unsaved changes")
             .collapsible(false)
             .resizable(false)
+            .default_width(420.0)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label("Save changes before continuing?");
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    let spacing = ui.spacing().item_spacing.x;
+                    let button_width = ((ui.available_width() - 2.0 * spacing) / 3.0).max(80.0);
+                    if ui
+                        .add_sized(egui::vec2(button_width, 24.0), egui::Button::new("Save"))
+                        .clicked()
+                    {
                         choice = Some(DirtyChoice::Save);
                     }
-                    if ui.button("Discard").clicked() {
+                    if ui
+                        .add_sized(egui::vec2(button_width, 24.0), egui::Button::new("Discard"))
+                        .clicked()
+                    {
                         choice = Some(DirtyChoice::Discard);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui
+                        .add_sized(egui::vec2(button_width, 24.0), egui::Button::new("Cancel"))
+                        .clicked()
+                    {
                         choice = Some(DirtyChoice::Cancel);
                     }
                 });
