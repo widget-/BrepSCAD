@@ -1067,6 +1067,7 @@ impl ViewerApp {
     }
 
     fn diagnostics_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_width(ui.available_width());
         let mut any = false;
         if let Some(error) = &self.error
             && !self
@@ -1100,6 +1101,7 @@ impl ViewerApp {
     }
 
     fn shapes_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_width(ui.available_width());
         ui.label(format!("{} shape(s)", self.evaluation.shapes.len()));
         ui.label(format!("{} triangles", self.mesh.triangle_count()));
         ui.label(format!("{} vertices", self.mesh.positions.len()));
@@ -1127,6 +1129,7 @@ impl ViewerApp {
     }
 
     fn properties_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_width(ui.available_width());
         let Some((shape_index, part_index)) = self.selected_part else {
             ui.label("Click the model to select a part.");
             return;
@@ -1224,6 +1227,7 @@ impl eframe::App for ViewerApp {
                         ui.heading("Source");
                         egui::ScrollArea::vertical()
                             .id_salt("source_scroll")
+                            .auto_shrink([false, false])
                             .scroll_source(ScrollSource {
                                 drag: egui::containers::scroll_area::DragScroll::Never,
                                 ..ScrollSource::default()
@@ -1258,6 +1262,7 @@ impl eframe::App for ViewerApp {
                         ui.heading("Diagnostics");
                         egui::ScrollArea::vertical()
                             .id_salt("diagnostics_scroll")
+                            .auto_shrink([false, false])
                             .scroll_source(ScrollSource {
                                 drag: egui::containers::scroll_area::DragScroll::Never,
                                 ..ScrollSource::default()
@@ -1273,6 +1278,7 @@ impl eframe::App for ViewerApp {
                         ui.heading("Shapes");
                         egui::ScrollArea::vertical()
                             .id_salt("shapes_scroll")
+                            .auto_shrink([false, false])
                             .scroll_source(ScrollSource {
                                 drag: egui::containers::scroll_area::DragScroll::Never,
                                 ..ScrollSource::default()
@@ -1283,6 +1289,7 @@ impl eframe::App for ViewerApp {
                 ui.heading("Properties");
                 egui::ScrollArea::vertical()
                     .id_salt("properties_scroll")
+                    .auto_shrink([false, false])
                     .scroll_source(ScrollSource {
                         drag: egui::containers::scroll_area::DragScroll::Never,
                         ..ScrollSource::default()

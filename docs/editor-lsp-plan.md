@@ -23,6 +23,13 @@ conflict, keeps the server free of a runtime, and is covered by the protocol
 and handler tests. The protocol surface is limited to the features listed in
 Phase 4: diagnostics, completion, hover, definition, and document symbols.
 
+The in-app completion popup is a small custom `egui::Area` anchored at the
+cursor line rather than `egui::CompletionPopup`. The built-in popup anchors to
+the whole text widget and, in this layout, opened on focus/mouse events and
+captured arrow keys before the editor did. The replacement opens only after
+typing or Ctrl+Space, closes on mouse focus/selection, and keeps local/LSP
+candidates behind the same `Keyword`/`Function` metadata.
+
 This plan replaces the plain `egui::TextEdit` source pane with a rowan-backed
 editor, then adds a standalone `brepscad-lsp` server and, last, an in-app LSP
 client. It also schedules the dependency upgrade that should happen before the
