@@ -259,6 +259,7 @@ dependencies = [
 name = "brepscad-viewer"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "brepscad-eval",
  "brepscad-kernel-api",
  "brepscad-kernel-truck",

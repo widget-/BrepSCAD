@@ -1,11 +1,14 @@
+mod actions;
 mod completion;
 mod diagnostics;
 mod gutter;
 mod highlight;
-#[allow(dead_code)]
 mod keymap;
 mod theme;
 
+pub use actions::{
+    EditAction, action as edit_action, can as can_edit, editor_id, reset as reset_editor_state,
+};
 pub use diagnostics::{Diagnostic, Severity, parse_diagnostics};
 
 use eframe::egui::{self, EventFilter, TextBuffer, TextEdit, text_edit::TextEditOutput};
@@ -41,7 +44,7 @@ impl CodeEditor {
         source: &mut String,
         diagnostics: &[Diagnostic],
     ) -> EditorOutput {
-        let id = ui.make_persistent_id("source_editor");
+        let id = editor_id();
         let job = self
             .highlighter
             .job(source, diagnostics, &self.theme)

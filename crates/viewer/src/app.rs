@@ -51,6 +51,21 @@ enum FileDialogKind {
     Save,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingFileAction {
+    New,
+    Open,
+    Reload,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirtyChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
 struct FileDialogResult {
     kind: FileDialogKind,
     path: Option<PathBuf>,
@@ -78,6 +93,10 @@ pub(crate) struct ViewerApp {
     pending_evaluate: bool,
     evaluation_job: Option<EvaluationJob>,
     file_dialog: Option<Receiver<FileDialogResult>>,
+    pending_file_action: Option<PendingFileAction>,
+    allow_close: bool,
+    show_shortcuts: bool,
+    show_about: bool,
     last_eval_ms: f64,
     /// Avoid re-sending the viewport title every frame: `send_viewport_cmd`
     /// requests a repaint, which would otherwise keep the event loop spinning.
@@ -125,6 +144,10 @@ impl ViewerApp {
             pending_evaluate: false,
             evaluation_job: None,
             file_dialog: None,
+            pending_file_action: None,
+            allow_close: false,
+            show_shortcuts: false,
+            show_about: false,
             last_eval_ms: 0.0,
             last_title: None,
         }
@@ -308,7 +331,7 @@ impl ViewerApp {
         self.start_file_dialog(FileDialogKind::Save);
     }
 
-    fn poll_file_dialog(&mut self) {
+    fn poll_file_dialog(&mut self, ctx: &egui::Context) {
         let Some(receiver) = self.file_dialog.take() else {
             return;
         };
@@ -318,8 +341,10 @@ impl ViewerApp {
                     return;
                 };
                 match result.kind {
-                    FileDialogKind::Open => self.load_path(path),
-                    FileDialogKind::Save => self.save_to(path),
+                    FileDialogKind::Open => self.load_path(ctx, path),
+                    FileDialogKind::Save => {
+                        self.save_to(path);
+                    }
                 }
             }
             Err(TryRecvError::Empty) => {
@@ -331,7 +356,7 @@ impl ViewerApp {
         }
     }
 
-    fn load_path(&mut self, path: PathBuf) {
+    fn load_path(&mut self, ctx: &egui::Context, path: PathBuf) {
         match read_source_file(&path) {
             Ok(source) => {
                 self.source = source;
@@ -341,13 +366,14 @@ impl ViewerApp {
                 self.parameters.clear();
                 self.error = None;
                 self.refresh_diagnostics();
+                editor::reset_editor_state(ctx);
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error),
         }
     }
 
-    fn save_to(&mut self, path: PathBuf) {
+    fn save_to(&mut self, path: PathBuf) -> bool {
         match write_source_file(&path, &self.source) {
             Ok(()) => {
                 let context_changed = self.current_path.as_ref() != Some(&path);
@@ -357,15 +383,437 @@ impl ViewerApp {
                 if context_changed {
                     self.pending_evaluate = true;
                 }
+                true
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                self.error = Some(error);
+                false
+            }
         }
     }
 
-    fn save_file(&mut self) {
+    fn save_file(&mut self) -> bool {
         match self.current_path.clone() {
             Some(path) => self.save_to(path),
-            None => self.save_as_dialog(),
+            None => {
+                self.save_as_dialog();
+                false
+            }
+        }
+    }
+
+    fn new_file(&mut self, ctx: &egui::Context) {
+        self.source.clear();
+        self.current_path = None;
+        self.dirty = false;
+        self.selected_part = None;
+        self.parameters.clear();
+        self.error = None;
+        self.refresh_diagnostics();
+        editor::reset_editor_state(ctx);
+        self.pending_evaluate = true;
+    }
+
+    fn request_file_action(&mut self, ctx: &egui::Context, action: PendingFileAction) {
+        if self.dirty {
+            self.pending_file_action = Some(action);
+        } else {
+            self.execute_file_action(ctx, action);
+        }
+    }
+
+    fn execute_file_action(&mut self, ctx: &egui::Context, action: PendingFileAction) {
+        match action {
+            PendingFileAction::New => self.new_file(ctx),
+            PendingFileAction::Open => self.open_dialog(),
+            PendingFileAction::Reload => {
+                if let Some(path) = self.current_path.clone() {
+                    self.load_path(ctx, path);
+                }
+            }
+            PendingFileAction::Quit => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn advance_pending_file_action(&mut self, ctx: &egui::Context) {
+        if self.dirty {
+            return;
+        }
+        if let Some(action) = self.pending_file_action.take() {
+            self.execute_file_action(ctx, action);
+        }
+    }
+
+    fn perform_edit(&mut self, ctx: &egui::Context, action: editor::EditAction) {
+        if editor::edit_action(ctx, &mut self.source, action) {
+            self.dirty = true;
+            self.selected_part = None;
+            self.parameters.clear();
+            self.refresh_diagnostics();
+        }
+    }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)) {
+            self.pending_evaluate = true;
+        }
+
+        if ctx.input_mut(|input| {
+            input.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::S,
+            )
+        }) {
+            self.save_as_dialog();
+        } else if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+            self.save_file();
+        }
+
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::N)) {
+            self.request_file_action(ctx, PendingFileAction::New);
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::O)) {
+            self.request_file_action(ctx, PendingFileAction::Open);
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+            self.request_file_action(ctx, PendingFileAction::Quit);
+        }
+
+        if !ctx.memory(|memory| memory.has_focus(editor::editor_id())) {
+            return;
+        }
+
+        let redo = ctx.input_mut(|input| {
+            input.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::Z,
+            ) || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
+        });
+        let undo = !redo
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
+        if redo {
+            self.perform_edit(ctx, editor::EditAction::Redo);
+        } else if undo {
+            self.perform_edit(ctx, editor::EditAction::Undo);
+        }
+
+        let paste_plain = ctx.input_mut(|input| {
+            input.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::V,
+            )
+        });
+        if paste_plain {
+            self.perform_edit(ctx, editor::EditAction::PastePlain);
+        } else if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::V)) {
+            self.perform_edit(ctx, editor::EditAction::Paste);
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::X)) {
+            self.perform_edit(ctx, editor::EditAction::Cut);
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::C)) {
+            self.perform_edit(ctx, editor::EditAction::Copy);
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+            self.perform_edit(ctx, editor::EditAction::SelectAll);
+        }
+        let comment = ctx.input_mut(|input| {
+            input.consume_key(egui::Modifiers::COMMAND, egui::Key::Slash)
+                || input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Slash,
+                )
+                || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Questionmark)
+        });
+        if comment {
+            self.perform_edit(ctx, editor::EditAction::ToggleLineComment);
+        }
+    }
+
+    fn menu_bar_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if menu_button(ui, "New", &shortcut_label("N")).clicked() {
+                    self.request_file_action(ctx, PendingFileAction::New);
+                    ui.close();
+                }
+                if menu_button(ui, "Open…", &shortcut_label("O")).clicked() {
+                    self.request_file_action(ctx, PendingFileAction::Open);
+                    ui.close();
+                }
+                ui.separator();
+                if menu_button(ui, "Save", &shortcut_label("S")).clicked() {
+                    self.save_file();
+                    ui.close();
+                }
+                if menu_button(ui, "Save As…", &shortcut_label("Shift+S")).clicked() {
+                    self.save_as_dialog();
+                    ui.close();
+                }
+                if menu_button_enabled(ui, self.current_path.is_some(), "Reload from Disk", "")
+                    .clicked()
+                {
+                    self.request_file_action(ctx, PendingFileAction::Reload);
+                    ui.close();
+                }
+                ui.separator();
+                if menu_button(ui, "Quit", &shortcut_label("Q")).clicked() {
+                    self.request_file_action(ctx, PendingFileAction::Quit);
+                    ui.close();
+                }
+            });
+
+            ui.menu_button("Edit", |ui| {
+                let undo = menu_button_enabled(
+                    ui,
+                    editor::can_edit(ctx, &self.source, editor::EditAction::Undo),
+                    "Undo",
+                    &shortcut_label("Z"),
+                );
+                if undo.clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Undo);
+                    ui.close();
+                }
+                let redo = menu_button_enabled(
+                    ui,
+                    editor::can_edit(ctx, &self.source, editor::EditAction::Redo),
+                    "Redo",
+                    &shortcut_label("Shift+Z"),
+                );
+                if redo.clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Redo);
+                    ui.close();
+                }
+                ui.separator();
+                let cut = menu_button_enabled(
+                    ui,
+                    editor::can_edit(ctx, &self.source, editor::EditAction::Cut),
+                    "Cut",
+                    &shortcut_label("X"),
+                );
+                if cut.clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Cut);
+                    ui.close();
+                }
+                let copy = menu_button_enabled(
+                    ui,
+                    editor::can_edit(ctx, &self.source, editor::EditAction::Copy),
+                    "Copy",
+                    &shortcut_label("C"),
+                );
+                if copy.clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Copy);
+                    ui.close();
+                }
+                if menu_button(ui, "Paste", &shortcut_label("V")).clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Paste);
+                    ui.close();
+                }
+                if menu_button(ui, "Paste as Plain Text", &shortcut_label("Shift+V")).clicked() {
+                    self.perform_edit(ctx, editor::EditAction::PastePlain);
+                    ui.close();
+                }
+                if menu_button(ui, "Select All", &shortcut_label("A")).clicked() {
+                    self.perform_edit(ctx, editor::EditAction::SelectAll);
+                    ui.close();
+                }
+                ui.separator();
+                if menu_button(ui, "Toggle Line Comment", &shortcut_label("/")).clicked() {
+                    self.perform_edit(ctx, editor::EditAction::ToggleLineComment);
+                    ui.close();
+                }
+                if menu_button(ui, "Indent", "Tab").clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Indent);
+                    ui.close();
+                }
+                if menu_button(ui, "Outdent", "Shift+Tab").clicked() {
+                    self.perform_edit(ctx, editor::EditAction::Outdent);
+                    ui.close();
+                }
+            });
+
+            ui.menu_button("View", |ui| {
+                if ui.button("Fit View").clicked() {
+                    self.camera.fit(&self.mesh);
+                    ui.close();
+                }
+                if ui.button("Reset Camera").clicked() {
+                    self.camera = Camera::default();
+                    self.camera.fit(&self.mesh);
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .checkbox(&mut self.legacy_centering, "Legacy OpenSCAD centering")
+                    .changed()
+                {
+                    self.pending_evaluate = true;
+                }
+                if ui
+                    .checkbox(
+                        &mut self.analytic_preview,
+                        "Analytic preview (experimental)",
+                    )
+                    .changed()
+                {
+                    self.renderer.set_analytic(self.analytic_preview);
+                    self.pending_evaluate = true;
+                }
+            });
+
+            ui.menu_button("Help", |ui| {
+                if ui.button("Keyboard Shortcuts").clicked() {
+                    self.show_shortcuts = true;
+                    ui.close();
+                }
+                if ui.button("About BrepSCAD").clicked() {
+                    self.show_about = true;
+                    ui.close();
+                }
+            });
+        });
+    }
+
+    fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("BrepSCAD");
+            ui.separator();
+            if ui.button("Evaluate").clicked() {
+                self.pending_evaluate = true;
+            }
+            ui.label("Ctrl+Enter");
+            if self.evaluation_job.is_some() {
+                ui.separator();
+                ui.spinner();
+                ui.label("Evaluating…");
+            }
+            if self.last_eval_ms > 0.0 {
+                ui.separator();
+                ui.label(format!("{:.0} ms", self.last_eval_ms));
+            }
+            ui.separator();
+            match &self.current_path {
+                Some(path) => {
+                    ui.label(path.display().to_string());
+                }
+                None => {
+                    ui.weak("untitled");
+                }
+            }
+            if self.dirty {
+                ui.colored_label(egui::Color32::YELLOW, "modified");
+            }
+            if self.file_dialog.is_some() {
+                ui.spinner();
+                ui.weak("File dialog…");
+            }
+        });
+    }
+
+    fn dirty_prompt_ui(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.pending_file_action else {
+            return;
+        };
+        if !self.dirty {
+            self.pending_file_action = None;
+            self.execute_file_action(ctx, action);
+            return;
+        }
+
+        let mut choice = None;
+        egui::Window::new("Unsaved changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Save changes before continuing?");
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        choice = Some(DirtyChoice::Save);
+                    }
+                    if ui.button("Discard").clicked() {
+                        choice = Some(DirtyChoice::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(DirtyChoice::Cancel);
+                    }
+                });
+            });
+
+        match choice {
+            Some(DirtyChoice::Save) if self.save_file() => {
+                self.pending_file_action = None;
+                self.execute_file_action(ctx, action);
+            }
+            Some(DirtyChoice::Save) => {}
+            Some(DirtyChoice::Discard) => {
+                self.dirty = false;
+                self.pending_file_action = None;
+                self.execute_file_action(ctx, action);
+            }
+            Some(DirtyChoice::Cancel) => {
+                self.pending_file_action = None;
+            }
+            None => {}
+        }
+    }
+
+    fn windows_ui(&mut self, ctx: &egui::Context) {
+        if self.show_shortcuts {
+            let mut open = true;
+            egui::Window::new("Keyboard Shortcuts")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    for (keys, action) in [
+                        ("Ctrl+Enter", "Evaluate"),
+                        ("Ctrl+S / Ctrl+Shift+S", "Save / Save As"),
+                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
+                        ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / Copy / Paste"),
+                        ("Ctrl+Shift+V", "Paste as plain text"),
+                        ("Ctrl+A", "Select all"),
+                        ("Ctrl+/", "Toggle line comment"),
+                        ("Tab / Shift+Tab", "Indent / Outdent"),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.monospace(keys);
+                            ui.label(action);
+                        });
+                    }
+                });
+            self.show_shortcuts = open;
+        }
+
+        if self.show_about {
+            let mut open = true;
+            egui::Window::new("About BrepSCAD")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.heading("BrepSCAD");
+                    ui.label("A small OpenSCAD-compatible B-rep viewer and evaluator.");
+                    ui.label("Editor: rowan CST highlighting, parse diagnostics, completion.");
+                });
+            self.show_about = open;
+        }
+    }
+
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+        if self.allow_close {
+            self.allow_close = false;
+        } else if self.dirty {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.pending_file_action = Some(PendingFileAction::Quit);
+        } else {
+            self.allow_close = true;
         }
     }
 
@@ -521,16 +969,8 @@ impl ViewerApp {
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        if ctx.input(|input| input.key_pressed(egui::Key::Enter) && input.modifiers.command) {
-            self.pending_evaluate = true;
-        }
-        if ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::S)) {
-            if ctx.input(|input| input.modifiers.shift) {
-                self.save_as_dialog();
-            } else {
-                self.save_file();
-            }
-        }
+        self.handle_close_request(&ctx);
+        self.handle_shortcuts(&ctx);
 
         let title = match &self.current_path {
             Some(path) => format!("BrepSCAD — {}", path.display()),
@@ -546,75 +986,17 @@ impl eframe::App for ViewerApp {
             self.last_title = Some(title);
         }
 
-        self.poll_file_dialog();
+        self.poll_file_dialog(&ctx);
+        self.advance_pending_file_action(&ctx);
         self.poll_evaluation(&ctx, frame);
         if self.pending_evaluate && self.evaluation_job.is_none() {
             self.start_evaluation();
         }
 
         egui::Panel::top("top").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("BrepSCAD");
-                ui.separator();
-                if ui.button("Evaluate").clicked() {
-                    self.pending_evaluate = true;
-                }
-                let legacy = ui.checkbox(&mut self.legacy_centering, "Legacy OpenSCAD centering");
-                if legacy.changed() {
-                    self.pending_evaluate = true;
-                }
-                legacy.on_hover_text(
-                    "Place cubes and squares at the origin, and cylinder/extrusion bases at z = 0",
-                );
-                let analytic = ui.checkbox(
-                    &mut self.analytic_preview,
-                    "Analytic preview (experimental)",
-                );
-                if analytic.changed() {
-                    self.renderer.set_analytic(self.analytic_preview);
-                    self.pending_evaluate = true;
-                }
-                analytic.on_hover_text(
-                    "Ray-cast the preview from the B-rep surfaces instead of the tessellated mesh",
-                );
-                ui.label("Ctrl+Enter");
-                if self.evaluation_job.is_some() {
-                    ui.separator();
-                    ui.spinner();
-                    ui.label("Evaluating…");
-                }
-                if self.last_eval_ms > 0.0 {
-                    ui.separator();
-                    ui.label(format!("{:.0} ms", self.last_eval_ms));
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("File");
-                if ui.button("Open…").clicked() {
-                    self.open_dialog();
-                }
-                if ui.button("Save").clicked() {
-                    self.save_file();
-                }
-                if ui.button("Save As…").clicked() {
-                    self.save_as_dialog();
-                }
-                match &self.current_path {
-                    Some(path) => {
-                        ui.label(path.display().to_string());
-                    }
-                    None => {
-                        ui.label("untitled");
-                    }
-                }
-                if self.dirty {
-                    ui.label("modified");
-                }
-                if self.file_dialog.is_some() {
-                    ui.spinner();
-                    ui.label("File dialog…");
-                }
-            });
+            self.menu_bar_ui(&ctx, ui);
+            ui.separator();
+            self.toolbar_ui(ui);
         });
 
         egui::Panel::left("source")
@@ -744,10 +1126,47 @@ impl eframe::App for ViewerApp {
             );
         });
 
-        if self.pending_evaluate || self.file_dialog.is_some() {
+        self.dirty_prompt_ui(&ctx);
+        self.windows_ui(&ctx);
+
+        if self.pending_evaluate
+            || self.file_dialog.is_some()
+            || self.pending_file_action.is_some()
+            || self.show_shortcuts
+            || self.show_about
+        {
             ctx.request_repaint();
         }
     }
+}
+
+fn shortcut_label(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("Cmd+{key}")
+    } else {
+        format!("Ctrl+{key}")
+    }
+}
+
+fn menu_button(ui: &mut egui::Ui, label: &str, shortcut: &str) -> egui::Response {
+    let mut button = egui::Button::new(label);
+    if !shortcut.is_empty() {
+        button = button.shortcut_text(shortcut);
+    }
+    ui.add(button)
+}
+
+fn menu_button_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    shortcut: &str,
+) -> egui::Response {
+    let mut button = egui::Button::new(label);
+    if !shortcut.is_empty() {
+        button = button.shortcut_text(shortcut);
+    }
+    ui.add_enabled(enabled, button)
 }
 
 fn tree_ui(
