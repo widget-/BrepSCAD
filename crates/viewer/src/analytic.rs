@@ -33,6 +33,9 @@ struct SceneBuffers {
     loops: wgpu::Buffer,
     points: wgpu::Buffer,
     vertices: wgpu::Buffer,
+    knots: wgpu::Buffer,
+    control: wgpu::Buffer,
+    patches: wgpu::Buffer,
     face_count: usize,
 }
 
@@ -79,6 +82,9 @@ impl ComputePreview {
             storage_buffer(3),
             storage_buffer(4),
             storage_buffer(5),
+            storage_buffer(7),
+            storage_buffer(8),
+            storage_buffer(9),
             wgpu::BindGroupLayoutEntry {
                 binding: 6,
                 visibility: wgpu::ShaderStages::COMPUTE,
@@ -209,6 +215,18 @@ impl ComputePreview {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: scene.knots.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: scene.control.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: scene.patches.as_entire_binding(),
+                    },
                 ],
             })
         });
@@ -238,6 +256,17 @@ fn pack_buffers(device: &wgpu::Device, packed: &PackedScene) -> SceneBuffers {
             "preview vertices",
             bytemuck::cast_slice(&packed.vertices),
         ),
+        knots: storage_buffer(device, "preview knots", bytemuck::cast_slice(&packed.knots)),
+        control: storage_buffer(
+            device,
+            "preview control",
+            bytemuck::cast_slice(&packed.control),
+        ),
+        patches: storage_buffer(
+            device,
+            "preview patches",
+            bytemuck::cast_slice(&packed.patches),
+        ),
         face_count: packed.faces.len(),
     }
 }
@@ -247,7 +276,9 @@ fn storage_buffer(device: &wgpu::Device, label: &str, contents: &[u8]) -> wgpu::
     if contents.is_empty() {
         return device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size: 16,
+            // A runtime-sized array still needs one element bound; 64 bytes
+            // covers the largest element (a 48-byte patch).
+            size: 64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });

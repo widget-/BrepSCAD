@@ -33,6 +33,11 @@ impl TrimRegion {
         &self.loops
     }
 
+    /// Period of the `u` parameter, when it wraps.
+    pub fn u_period(&self) -> Option<f64> {
+        self.u_period
+    }
+
     pub fn is_empty(&self) -> bool {
         self.loops.is_empty()
     }

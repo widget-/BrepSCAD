@@ -1,9 +1,10 @@
 //! Analytic ray/surface intersection.
 //!
-//! Only the surfaces this project's kernel produces are modelled: planes, and
-//! the surfaces of revolution of a straight generator line (cylinders and
-//! cones). Everything else in a Truck B-rep (B-splines, NURBS, hyperboloids)
-//! has to be approximated or skipped by the backend adapter.
+//! Models the surfaces this project's kernel produces: planes, balls, tensor-
+//! product B-spline/NURBS patches, and surfaces of revolution of a straight
+//! generator line (cylinders and cones). The kernel adapter converts a
+//! revolution of a smooth curve into an exact NURBS patch instead of leaving it
+//! to tessellation.
 
 use std::f64::consts::TAU;
 

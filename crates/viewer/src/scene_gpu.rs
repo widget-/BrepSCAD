@@ -14,6 +14,10 @@ pub(crate) const KIND_CYLINDER: u32 = 1;
 pub(crate) const KIND_CONE: u32 = 2;
 pub(crate) const KIND_TRIANGLES: u32 = 3;
 pub(crate) const KIND_SPHERE: u32 = 4;
+pub(crate) const KIND_SPLINE: u32 = 5;
+
+/// Highest B-spline degree the shader's fixed-size basis window supports.
+pub(crate) const MAX_SPLINE_DEGREE: usize = 8;
 
 /// One bounding-volume node; `meta` holds left, right, start, count.
 #[repr(C)]
@@ -40,6 +44,22 @@ pub(crate) struct GpuFace {
     pub params2: [f32; 4],
     /// Plane `v` axis.
     pub params3: [f32; 4],
+    /// Spline degrees and knot-vector starts: degree_u, degree_v, knot_u, knot_v.
+    pub spline0: [u32; 4],
+    /// Knot counts, control-point start and patch start.
+    pub spline1: [u32; 4],
+    /// Patch count in `w`; the rest is reserved.
+    pub spline2: [u32; 4],
+}
+
+/// One parameter sub-rectangle of a spline patch and its world-space bounds.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct GpuPatch {
+    /// `(u0, u1, v0, v1)`.
+    pub uv: [f32; 4],
+    pub min: [f32; 4],
+    pub max: [f32; 4],
 }
 
 /// A trim loop as a range into the shared point array.
@@ -60,6 +80,12 @@ pub(crate) struct PackedScene {
     /// Three vertices per triangle, for faces covered by tessellation. Stored
     /// as `vec4` because a `vec3` array has a 16-byte stride in WGSL.
     pub vertices: Vec<[f32; 4]>,
+    /// B-spline and NURBS knot vectors, shared by all spline faces.
+    pub knots: Vec<f32>,
+    /// Homogeneous spline control points, row-major in `(u, v)`.
+    pub control: Vec<[f32; 4]>,
+    /// Culling bounds for the parameter sub-rectangles of spline faces.
+    pub patches: Vec<GpuPatch>,
 }
 
 pub(crate) fn pack(scene: &Scene) -> PackedScene {
@@ -92,6 +118,9 @@ pub(crate) fn pack(scene: &Scene) -> PackedScene {
             &mut packed.loops,
             &mut packed.points,
             &mut packed.vertices,
+            &mut packed.knots,
+            &mut packed.control,
+            &mut packed.patches,
         );
         packed.faces.push(packed_face);
     }
@@ -104,6 +133,9 @@ fn pack_face(
     loops: &mut Vec<GpuLoop>,
     points: &mut Vec<[f32; 2]>,
     vertices: &mut Vec<[f32; 4]>,
+    knots: &mut Vec<f32>,
+    control: &mut Vec<[f32; 4]>,
+    patches: &mut Vec<GpuPatch>,
 ) -> GpuFace {
     let mut packed = GpuFace {
         header: [0, u32::from(face.flip), 0, 0],
@@ -149,23 +181,14 @@ fn pack_face(
             packed.header[0] = KIND_SPHERE;
             packed.params0 = point_and(centre, *radius);
         }
-        // Spline faces have no GPU intersection yet, so they ride the
-        // tessellated path like any other unmodelled surface.
-        Some(Surface::Spline(_)) | None => {
-            packed.header[0] = KIND_TRIANGLES;
-            packed.triangles = [
-                (vertices.len() / 3) as u32,
-                face.triangles.len() as u32,
-                0,
-                0,
-            ];
-            for triangle in &face.triangles {
-                for point in triangle {
-                    vertices.push([point[0] as f32, point[1] as f32, point[2] as f32, 0.0]);
-                }
+        Some(Surface::Spline(surface)) => {
+            if !pack_spline(surface, &mut packed, knots, control, patches) {
+                return pack_triangles(face, vertices);
             }
-            return packed;
+            packed.params1[3] = face.trims.u_period().unwrap_or(0.0) as f32;
         }
+        // Only faces with no modelled surface ride the tessellated path.
+        None => return pack_triangles(face, vertices),
     }
 
     packed.header[2] = loops.len() as u32;
@@ -180,6 +203,73 @@ fn pack_face(
     packed
 }
 
+fn pack_triangles(face: &Face, vertices: &mut Vec<[f32; 4]>) -> GpuFace {
+    let packed = GpuFace {
+        header: [KIND_TRIANGLES, u32::from(face.flip), 0, 0],
+        triangles: [
+            (vertices.len() / 3) as u32,
+            face.triangles.len() as u32,
+            0,
+            0,
+        ],
+        ..Default::default()
+    };
+    for triangle in &face.triangles {
+        for point in triangle {
+            vertices.push([point[0] as f32, point[1] as f32, point[2] as f32, 0.0]);
+        }
+    }
+    packed
+}
+
+fn pack_spline(
+    surface: &brepscad_raycast::SplineSurface,
+    packed: &mut GpuFace,
+    knots: &mut Vec<f32>,
+    control: &mut Vec<[f32; 4]>,
+    patches: &mut Vec<GpuPatch>,
+) -> bool {
+    let (degree_u, degree_v) = surface.degrees();
+    if degree_u > MAX_SPLINE_DEGREE || degree_v > MAX_SPLINE_DEGREE || surface.patches().is_empty()
+    {
+        return false;
+    }
+    let (knots_u, knots_v) = surface.knot_vecs();
+    let knot_u_start = knots.len() as u32;
+    knots.extend(knots_u.iter().map(|&value| value as f32));
+    let knot_v_start = knots.len() as u32;
+    knots.extend(knots_v.iter().map(|&value| value as f32));
+    let control_start = control.len() as u32;
+    control.extend(
+        surface
+            .control_points()
+            .iter()
+            .map(|point| point.map(|v| v as f32)),
+    );
+    let patch_start = patches.len() as u32;
+    patches.extend(surface.patches().iter().map(|patch| GpuPatch {
+        uv: [
+            patch.u.0 as f32,
+            patch.u.1 as f32,
+            patch.v.0 as f32,
+            patch.v.1 as f32,
+        ],
+        min: point_and(&patch.min, 0.0),
+        max: point_and(&patch.max, 0.0),
+    }));
+
+    packed.header[0] = KIND_SPLINE;
+    packed.spline0 = [degree_u as u32, degree_v as u32, knot_u_start, knot_v_start];
+    packed.spline1 = [
+        knots_u.len() as u32,
+        knots_v.len() as u32,
+        control_start,
+        patch_start,
+    ];
+    packed.spline2 = [surface.patches().len() as u32, 0, 0, 0];
+    true
+}
+
 fn point_and(point: &[f64; 3], extra: f64) -> [f32; 4] {
     [
         point[0] as f32,
@@ -192,7 +282,8 @@ fn point_and(point: &[f64; 3], extra: f64) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brepscad_raycast::{Face, TrimRegion};
+    use brepscad_raycast::{Face, SplineSurface, TrimRegion};
+    use std::sync::Arc;
 
     fn plane_face() -> Face {
         Face::new(
@@ -239,8 +330,9 @@ mod tests {
     fn struct_sizes_are_pinned() {
         // The shader reads these layouts; a change here is a shader change.
         assert_eq!(size_of::<GpuNode>(), 48);
-        assert_eq!(size_of::<GpuFace>(), 96);
+        assert_eq!(size_of::<GpuFace>(), 144);
         assert_eq!(size_of::<GpuLoop>(), 8);
+        assert_eq!(size_of::<GpuPatch>(), 48);
     }
 
     #[test]
@@ -344,6 +436,44 @@ mod tests {
             covered.iter().all(|count| *count == 1),
             "every face covered once: {covered:?}"
         );
+    }
+
+    #[test]
+    fn packs_spline_knots_control_points_and_patches() {
+        let surface = SplineSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0, 1.0],
+            ],
+        )
+        .expect("bilinear surface");
+        let face = Face::new(
+            Surface::Spline(Arc::new(surface)),
+            TrimRegion::with_u_period(
+                vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+                TAU,
+            ),
+            ([-0.1, -0.1, -0.1], [1.1, 1.1, 0.1]),
+        );
+        let packed = pack(&Scene::new(vec![face]));
+        let spline = packed.faces[0];
+
+        assert_eq!(spline.header[0], KIND_SPLINE);
+        assert_eq!(spline.spline0, [1, 1, 0, 4]);
+        assert_eq!(spline.spline1, [4, 4, 0, 0]);
+        assert_eq!(spline.spline2[0], 4, "two subdivisions in each direction");
+        assert!((spline.params1[3] - TAU as f32).abs() < 1e-6, "u period");
+        assert_eq!(packed.knots.len(), 8);
+        assert_eq!(packed.control.len(), 4);
+        assert_eq!(packed.patches.len(), 4);
+        assert_eq!(packed.patches[0].uv, [0.0, 0.5, 0.0, 0.5]);
+        assert_eq!(spline.header[3], 1, "one trim loop");
     }
 
     #[test]

@@ -33,7 +33,15 @@ enum Parameterization {
     },
     /// The patch's own `(u, v)`, projected back through Truck's parameter
     /// search so trims line up with the caster's parameterisation.
-    Spline { surface: std::sync::Arc<Surface> },
+    Spline {
+        surface: std::sync::Arc<Surface>,
+        /// Period of `u` when the patch is a converted surface of revolution.
+        period: Option<f64>,
+        /// The converted parameter order `(angle, curve)` is the reverse of
+        /// `RevolutedCurve`'s `(curve, angle)`, so its surface normal is
+        /// inverted relative to the B-rep face.
+        normal_flip: bool,
+    },
 }
 
 impl Parameterization {
@@ -57,7 +65,7 @@ impl Parameterization {
                 let radial = local - height * *axis;
                 Some([revolved_angle(*axis, *u_reference, radial), height])
             }
-            Self::Spline { surface } => match **surface {
+            Self::Spline { surface, .. } => match **surface {
                 Surface::BSplineSurface(ref patch) => patch
                     .search_parameter(point, None, TRIM_SEARCH_TRIALS)
                     .map(|(u, v)| [u, v]),
@@ -69,8 +77,22 @@ impl Parameterization {
         }
     }
 
-    fn periodic(&self) -> bool {
-        matches!(self, Self::Revolved { .. })
+    fn period(&self) -> Option<f64> {
+        match self {
+            Self::Revolved { .. } => Some(TAU),
+            Self::Spline { period, .. } => *period,
+            _ => None,
+        }
+    }
+
+    fn flips_normal(&self) -> bool {
+        matches!(
+            self,
+            Self::Spline {
+                normal_flip: true,
+                ..
+            }
+        )
     }
 }
 
@@ -83,9 +105,9 @@ pub(crate) fn scene_from_solid(solid: &Solid, tolerance: f64) -> Scene {
             }
             continue;
         };
-        // The GPU tracer has no spline intersection yet, so spline faces keep
-        // tessellated coverage for the shader. The CPU caster still uses the
-        // exact surface, because `Scene::cast` prefers it when present.
+        // Spline faces keep tessellated coverage as a fallback for a degree the
+        // shader's fixed basis window cannot evaluate. Both casters use the
+        // exact surface when they can.
         if matches!(analytic.surface, Some(RaycastSurface::Spline(_))) {
             if let Some(triangles) = tessellated_face(face, tolerance) {
                 analytic = analytic.with_triangles(triangles);
@@ -150,13 +172,107 @@ fn analytic_face(face: &Face) -> Option<RaycastFace> {
         max[axis] += TRIM_TOLERANCE;
     }
 
-    let trims = if parameters.periodic() {
-        TrimRegion::with_u_period(loops, TAU)
-    } else {
-        TrimRegion::new(loops)
+    let trims = match parameters.period() {
+        Some(period) => TrimRegion::with_u_period(loops, period),
+        None => TrimRegion::new(loops),
     };
 
-    Some(RaycastFace::new(surface, trims, (min, max)).with_flip(!face.orientation()))
+    let flip = if parameters.flips_normal() {
+        face.orientation()
+    } else {
+        !face.orientation()
+    };
+    Some(RaycastFace::new(surface, trims, (min, max)).with_flip(flip))
+}
+
+/// Export a surface of revolution that is not an axis-parallel line or a cone
+/// as the exact NURBS surface it sweeps, so the ray caster can trace it instead
+/// of falling back to tessellation. This covers smooth generatrices (spheres,
+/// tori, revolved profiles) and skew lines (hyperboloids). The angular
+/// direction becomes `u`, scaled to `[0, TAU]`, and the generatrix keeps its
+/// own parameter as `v`.
+fn revolved_spline(
+    revolved: &RevolutedCurve<Curve>,
+    matrix: Matrix4,
+) -> Option<(RaycastSurface, Parameterization)> {
+    let curve = revolved.entity_curve();
+    let (degree, knots, control) = match curve {
+        Curve::BSplineCurve(curve) => (
+            curve.degree(),
+            curve.knot_vec().clone(),
+            curve
+                .control_points()
+                .iter()
+                .map(|point| [point.x, point.y, point.z, 1.0])
+                .collect::<Vec<_>>(),
+        ),
+        Curve::NurbsCurve(curve) => (
+            curve.degree(),
+            curve.knot_vec().clone(),
+            curve
+                .control_points()
+                .iter()
+                .map(|point| [point.x, point.y, point.z, point.w])
+                .collect::<Vec<_>>(),
+        ),
+        Curve::Line(line) => (
+            1,
+            KnotVec::from(vec![0.0, 0.0, 1.0, 1.0]),
+            vec![
+                [line.front().x, line.front().y, line.front().z, 1.0],
+                [line.back().x, line.back().y, line.back().z, 1.0],
+            ],
+        ),
+        Curve::IntersectionCurve(_) => return None,
+    };
+    let base = brepscad_raycast::SplineSurface::from_revolution(
+        position(revolved.origin()),
+        vector(revolved.axis()),
+        degree,
+        knots.into(),
+        &control,
+    )?;
+    let mapped = base.map_control_points(|point| transform_homogeneous(matrix, point))?;
+
+    // The trim loops are projected with Truck's own search, so it needs the
+    // same surface in Truck form. Build it from the already-transformed
+    // control points; then the neutral and Truck parameterisations agree.
+    let (degree_u, degree_v) = mapped.degrees();
+    let (knots_u, knots_v) = mapped.knot_vecs();
+    let nu = knots_u.len().checked_sub(degree_u + 1)?;
+    let nv = knots_v.len().checked_sub(degree_v + 1)?;
+    let mut grid = vec![vec![Vector4::new(0.0, 0.0, 0.0, 0.0); nv]; nu];
+    for (index, control) in mapped.control_points().iter().enumerate() {
+        grid[index / nv][index % nv] = Vector4::new(control[0], control[1], control[2], control[3]);
+    }
+    let surface = Surface::NurbsSurface(NurbsSurface::new(BSplineSurface::new(
+        (
+            KnotVec::from(knots_u.to_vec()),
+            KnotVec::from(knots_v.to_vec()),
+        ),
+        grid,
+    )));
+
+    Some((
+        RaycastSurface::Spline(std::sync::Arc::new(mapped)),
+        Parameterization::Spline {
+            surface: std::sync::Arc::new(surface),
+            period: Some(TAU),
+            normal_flip: true,
+        },
+    ))
+}
+
+/// Apply an affine matrix to a homogeneous control point without touching its
+/// weight.
+fn transform_homogeneous(matrix: Matrix4, control: [f64; 4]) -> [f64; 4] {
+    let [x, y, z, w] = control;
+    [
+        matrix[0][0] * x + matrix[1][0] * y + matrix[2][0] * z + matrix[3][0] * w,
+        matrix[0][1] * x + matrix[1][1] * y + matrix[2][1] * z + matrix[3][1] * w,
+        matrix[0][2] * x + matrix[1][2] * y + matrix[2][2] * z + matrix[3][2] * w,
+        w,
+    ]
 }
 
 fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
@@ -181,10 +297,10 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
         }
         Surface::RevolutedCurve(processor) => {
             let revolved = processor.entity();
-            let Curve::Line(line) = revolved.entity_curve() else {
-                return None;
-            };
             let matrix = *processor.transform();
+            let Curve::Line(line) = revolved.entity_curve() else {
+                return revolved_spline(revolved, matrix);
+            };
             let origin = matrix.transform_point(revolved.origin());
             let axis = matrix.transform_vector(revolved.axis()).normalize();
             let start = matrix.transform_point(line.front());
@@ -219,13 +335,17 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
             }
 
             // Otherwise the generator has to meet the axis for the surface to be
-            // a cone; a skew pair is a hyperboloid, which is not modelled.
-            let (line_parameter, axis_parameter) =
-                closest_approach_parameters(origin, axis, start, direction)?;
+            // a cone. A skew pair is a hyperboloid; export it as the exact
+            // NURBS surface it sweeps instead of dropping it to tessellation.
+            let Some((line_parameter, axis_parameter)) =
+                closest_approach_parameters(origin, axis, start, direction)
+            else {
+                return revolved_spline(revolved, matrix);
+            };
             let on_generator = start + direction * line_parameter;
             let on_axis = origin + axis * axis_parameter;
             if (on_generator - on_axis).magnitude() > CONE_AXIS_TOLERANCE {
-                return None;
+                return revolved_spline(revolved, matrix);
             }
             let apex = (on_generator + on_axis.to_vec()) / 2.0;
             let cosine = direction.dot(axis).abs();
@@ -270,6 +390,8 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
                 RaycastSurface::Spline(std::sync::Arc::new(spline)),
                 Parameterization::Spline {
                     surface: std::sync::Arc::new(surface.clone()),
+                    period: None,
+                    normal_flip: false,
                 },
             ))
         }
@@ -287,6 +409,8 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
                 RaycastSurface::Spline(std::sync::Arc::new(spline)),
                 Parameterization::Spline {
                     surface: std::sync::Arc::new(surface.clone()),
+                    period: None,
+                    normal_flip: false,
                 },
             ))
         }
@@ -328,7 +452,7 @@ fn wire_loop(wire: &Wire, parameters: &Parameterization) -> Option<ProjectedLoop
                 continue;
             };
             points.push(position(*point));
-            if parameters.periodic() {
+            if parameters.period().is_some() {
                 // Keep a loop that crosses the seam continuous.
                 uv[0] = match previous_angle {
                     Some(previous) => unwrap_angle(uv[0], previous),

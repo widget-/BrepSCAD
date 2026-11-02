@@ -17,15 +17,17 @@ pub struct SplineSurface {
     knots_u: Vec<f64>,
     knots_v: Vec<f64>,
     control: Vec<[f64; 4]>,
-    patches: Vec<Patch>,
+    patches: Vec<SplinePatch>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct Patch {
-    u: (f64, f64),
-    v: (f64, f64),
-    min: [f64; 3],
-    max: [f64; 3],
+/// One parameter sub-rectangle with its world-space bounds, used to cull a ray
+/// before running Newton in that part of the patch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplinePatch {
+    pub u: (f64, f64),
+    pub v: (f64, f64),
+    pub min: [f64; 3],
+    pub max: [f64; 3],
 }
 
 /// Patches per knot span, in each direction.
@@ -74,6 +76,127 @@ impl SplineSurface {
         )
     }
 
+    /// Degrees in `(u, v)`.
+    pub fn degrees(&self) -> (usize, usize) {
+        (self.degree_u, self.degree_v)
+    }
+
+    /// Knot vectors in `(u, v)`.
+    pub fn knot_vecs(&self) -> (&[f64], &[f64]) {
+        (&self.knots_u, &self.knots_v)
+    }
+
+    /// Homogeneous control points, row-major in `(u, v)`.
+    pub fn control_points(&self) -> &[[f64; 4]] {
+        &self.control
+    }
+
+    /// Parameter sub-rectangles used to cull rays before Newton.
+    pub fn patches(&self) -> &[SplinePatch] {
+        &self.patches
+    }
+
+    /// Rebuilds the surface with every control point mapped, e.g. to apply an
+    /// affine transform in homogeneous coordinates.
+    pub fn map_control_points(mut self, mut map: impl FnMut([f64; 4]) -> [f64; 4]) -> Option<Self> {
+        for control in &mut self.control {
+            *control = map(*control);
+        }
+        self.patches = self.build_patches();
+        (!self.patches.is_empty()).then_some(self)
+    }
+
+    /// The exact NURBS surface swept by revolving a rational B-spline curve
+    /// about `axis` through `origin`.
+    ///
+    /// `u` is the angular direction, scaled to `[0, TAU]` so it can use the
+    /// same periodic trim convention as a cylinder, and `v` keeps the curve's
+    /// own parameter. The curve control points are homogeneous, `[x, y, z, w]`.
+    pub fn from_revolution(
+        origin: [f64; 3],
+        axis: [f64; 3],
+        degree: usize,
+        knots: Vec<f64>,
+        control: &[[f64; 4]],
+    ) -> Option<Self> {
+        let length = dot(axis, axis).sqrt();
+        if length <= 1.0e-12 || control.is_empty() {
+            return None;
+        }
+        let axis = [axis[0] / length, axis[1] / length, axis[2] / length];
+
+        // The rational quadratic circle uses nine control points in four
+        // 90-degree spans: the middle points carry 1/sqrt(2).
+        const ARC_WEIGHT: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        let circle = [
+            ([1.0, 0.0], 1.0),
+            ([1.0, 1.0], ARC_WEIGHT),
+            ([0.0, 1.0], 1.0),
+            ([-1.0, 1.0], ARC_WEIGHT),
+            ([-1.0, 0.0], 1.0),
+            ([-1.0, -1.0], ARC_WEIGHT),
+            ([0.0, -1.0], 1.0),
+            ([1.0, -1.0], ARC_WEIGHT),
+            ([1.0, 0.0], 1.0),
+        ];
+        let quarter = std::f64::consts::TAU / 4.0;
+        let knots_u = vec![
+            0.0,
+            0.0,
+            0.0,
+            quarter,
+            quarter,
+            2.0 * quarter,
+            2.0 * quarter,
+            3.0 * quarter,
+            3.0 * quarter,
+            4.0 * quarter,
+            4.0 * quarter,
+            4.0 * quarter,
+        ];
+        let nv = control.len();
+        if knots.len() != nv + degree + 1 {
+            return None;
+        }
+
+        let mut revolved = Vec::with_capacity(9 * nv);
+        for point in control {
+            let weight = point[3];
+            if weight.abs() <= 1.0e-12 {
+                return None;
+            }
+            let point = [point[0] / weight, point[1] / weight, point[2] / weight];
+            let relative = sub(point, origin);
+            let parallel = scale(axis, dot(relative, axis));
+            let radial = sub(relative, parallel);
+            for &([cx, cy], circle_weight) in &circle {
+                let rotated = add(
+                    parallel,
+                    add(scale(radial, cx), scale(cross(axis, radial), cy)),
+                );
+                let weight = weight * circle_weight;
+                // Row-major in (u, v): one row per circle control point.
+                revolved.push([
+                    rotated[0] * weight,
+                    rotated[1] * weight,
+                    rotated[2] * weight,
+                    weight,
+                ]);
+            }
+        }
+
+        // The rows above are (curve point, circle point). The surface wants
+        // (u = circle, v = curve), so transpose into `i * nv + j`.
+        let mut ordered = Vec::with_capacity(revolved.len());
+        for i in 0..9 {
+            for j in 0..nv {
+                ordered.push(revolved[j * 9 + i]);
+            }
+        }
+
+        Self::new(2, degree, knots_u, knots, ordered)
+    }
+
     pub(crate) fn intersect(&self, ray: &Ray, out: &mut Vec<SurfaceHit>) {
         let (u_range, v_range) = self.parameter_range();
         for patch in &self.patches {
@@ -100,7 +223,7 @@ impl SplineSurface {
         }
     }
 
-    fn build_patches(&self) -> Vec<Patch> {
+    fn build_patches(&self) -> Vec<SplinePatch> {
         let (u_range, v_range) = self.parameter_range();
         let u_spans = span_count(&self.knots_u, u_range);
         let v_spans = span_count(&self.knots_v, v_range);
@@ -133,18 +256,20 @@ impl SplineSurface {
                 if !min[0].is_finite() {
                     continue;
                 }
-                // The samples bound the patch only approximately; grow the box
-                // by its diagonal so a grazing ray is not rejected early.
+                // The samples bound the patch only approximately. A curved
+                // patch bulges away from its sampled corners by up to a
+                // quarter of its span, so keep a generous margin: a culling
+                // box that is too tight shows up as holes in the preview.
                 let pad = (0..3)
                     .map(|axis| max[axis] - min[axis])
                     .fold(0.0_f64, f64::max)
-                    * 0.05;
+                    * 0.25;
                 let pad = pad.max(1.0e-9);
                 for axis in 0..3 {
                     min[axis] -= pad;
                     max[axis] += pad;
                 }
-                patches.push(Patch {
+                patches.push(SplinePatch {
                     u: (u0, u1),
                     v: (v0, v1),
                     min,
@@ -158,7 +283,7 @@ impl SplineSurface {
     /// Newton solve of `S(u, v) = origin + t·direction` inside one patch.
     fn solve(
         &self,
-        patch: &Patch,
+        patch: &SplinePatch,
         ray: &Ray,
         u_range: (f64, f64),
         v_range: (f64, f64),
@@ -360,7 +485,7 @@ fn find_span(knots: &[f64], degree: usize, t: f64, count: usize) -> Option<usize
     Some(span)
 }
 
-fn slab_entry(patch: &Patch, ray: &Ray) -> Option<f64> {
+fn slab_entry(patch: &SplinePatch, ray: &Ray) -> Option<f64> {
     let mut enter = f64::NEG_INFINITY;
     let mut exit = f64::INFINITY;
     for axis in 0..3 {
@@ -401,6 +526,14 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn scale(a: [f64; 3], factor: f64) -> [f64; 3] {
+    [a[0] * factor, a[1] * factor, a[2] * factor]
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -575,5 +708,85 @@ mod circle_tests {
                 hit.uv
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod revolution_tests {
+    use super::*;
+
+    /// A semicircular meridian from the south pole, through (1, 0, 0), to the
+    /// north pole: two 90-degree rational quadratic spans.
+    fn meridian_half_circle() -> SplineSurface {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let control = [
+            [0.0, 0.0, -1.0, 1.0],
+            [s, 0.0, -s, s],
+            [1.0, 0.0, 0.0, 1.0],
+            [s, 0.0, s, s],
+            [0.0, 0.0, 1.0, 1.0],
+        ];
+        SplineSurface::from_revolution(
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            &control,
+        )
+        .expect("sphere of revolution")
+    }
+
+    #[test]
+    fn revolving_a_meridian_arc_gives_the_sphere() {
+        let surface = meridian_half_circle();
+        for x in [0.1, 0.25, 0.5, 0.9] {
+            let ray = Ray::new([x, 0.0, 3.0], [0.0, 0.0, -1.0]);
+            let mut hits = Vec::new();
+            surface.intersect(&ray, &mut hits);
+            let hit = hits
+                .iter()
+                .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap())
+                .unwrap_or_else(|| panic!("x = {x}: no hit"));
+            let expected = 3.0 - (1.0 - x * x).sqrt();
+            assert!(
+                (hit.distance - expected).abs() < 1e-6,
+                "x = {x}: distance {} expected {expected}, uv {:?}",
+                hit.distance,
+                hit.uv
+            );
+            assert!(
+                (dot(hit.position, hit.position).sqrt() - 1.0).abs() < 1e-6,
+                "x = {x}: point {:?} is not on the unit sphere",
+                hit.position
+            );
+            let radial = normalize(hit.position);
+            assert!(
+                dot(radial, hit.normal).abs() > 0.999,
+                "x = {x}: normal {:?} is not radial",
+                hit.normal
+            );
+        }
+    }
+
+    #[test]
+    fn revolving_a_radial_line_gives_a_cylinder() {
+        let control = [[1.0, 0.0, -1.0, 1.0], [1.0, 0.0, 1.0, 1.0]];
+        let surface = SplineSurface::from_revolution(
+            [0.0; 3],
+            [0.0, 0.0, 1.0],
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            &control,
+        )
+        .expect("cylinder of revolution");
+
+        let ray = Ray::new([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        let mut hits = Vec::new();
+        surface.intersect(&ray, &mut hits);
+        let hit = hits
+            .iter()
+            .find(|hit| (hit.distance - 1.0).abs() < 1e-6)
+            .expect("hit at radius 1");
+        assert!((hit.position[0] - 1.0).abs() < 1e-6, "{:?}", hit.position);
     }
 }

@@ -42,8 +42,8 @@ impl Ray {
 }
 
 /// One B-rep face: either an analytic surface with boundary loops in that
-/// surface's parameter space, or the triangles of a face whose surface the
-/// caster does not model (B-splines, NURBS).
+/// surface's parameter space, or tessellation for a face no analytic surface
+/// could be exported for.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Face {
     pub surface: Option<Surface>,
@@ -67,7 +67,7 @@ impl Face {
         }
     }
 
-    /// A face covered by tessellation because its surface is not modelled.
+    /// A face covered by tessellation when no analytic surface was exported.
     pub fn from_triangles(triangles: Vec<[[f64; 3]; 3]>) -> Self {
         let mut min = [f64::INFINITY; 3];
         let mut max = [f64::NEG_INFINITY; 3];
@@ -93,8 +93,9 @@ impl Face {
         self
     }
 
-    /// Attach tessellated coverage. The CPU caster keeps using the surface; the
-    /// GPU tracer, which has no spline intersection yet, renders the triangles.
+    /// Attach tessellated coverage as a fallback. Both casters use the surface
+    /// when it is present; the triangles only cover a patch the GPU cannot
+    /// evaluate, such as one whose degree exceeds its basis window.
     pub fn with_triangles(mut self, triangles: Vec<[[f64; 3]; 3]>) -> Self {
         self.triangles = triangles;
         self

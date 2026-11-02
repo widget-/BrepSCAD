@@ -223,8 +223,10 @@ vendor/
   - axis-aligned bounds for solids and sketches
   - analytic ray casting: planes, surfaces of revolution of a straight line
     (cylinders, cones), tensor-product B-spline/NURBS patches and balls are all
-    exported as trimmed analytic faces. The GPU tracer covers planes,
-    cylinders, cones and spheres, and falls back to tessellation for splines
+    exported as trimmed analytic faces. A revolution of a smooth curve
+    (spheres, tori, revolved profiles, hyperboloids) is converted to an exact
+    NURBS patch; the GPU tracer evaluates splines directly, so tessellation is
+    only a fallback for a patch whose degree exceeds its basis window.
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed
@@ -239,7 +241,10 @@ vendor/
 - Evaluation runs on a worker thread; the UI stays responsive with a spinner,
   queues the latest request, and discards stale results.
 - Orbit camera: drag to orbit, scroll to zoom.
-- CPU ray picking against operand meshes.
+- CPU ray picking against the analytic part scenes, with operand meshes as the
+  fallback.
+- Analytic compute-shader preview (the top-bar checkbox) over the same packed
+  scene, including planes, cylinders, cones, balls and B-spline/NURBS patches.
 - Shapes panel showing the source-shaped tree of groups and leaf primitives.
   Clicking a leaf selects it, including cutters enclosed by other geometry.
 - Properties panel with drag-editable numeric parameters.
@@ -365,10 +370,11 @@ vendor/
   trimmed planes, revolved lines (cylinders, cones), tensor-product B-spline and
   NURBS patches, and balls, all through trim loops in surface parameter space.
   `TruckKernel::raycast_scene` classifies each face, exports B-spline and NURBS
-  faces as spline patches, and emits one exact `Surface::Sphere` for a shape it
-  knows is a ball. Cylinders are analytic because `cylinder` revolves a profile
-  line instead of extruding a disk, which is what Truck turns into a homotopy
-  B-spline wall.
+  faces as spline patches, converts a revolved B-spline or NURBS generatrix to
+  the exact NURBS surface it sweeps, and emits one exact `Surface::Sphere` for a
+  shape it knows is a ball. Cylinders are analytic because `cylinder` revolves a
+  profile line instead of extruding a disk, which is what Truck turns into a
+  homotopy B-spline wall.
 - Boolean results are tessellated at a display tolerance of at least `0.05`
   (`BOOLEAN_DISPLAY_TOLERANCE`), because master Truck can subdivide trimmed
   boolean surfaces pathologically at finer tolerances: a cylinder 0.01 taller
@@ -491,8 +497,8 @@ For headless UI snapshots, see
   step. The model also feeds `prism_stack()` tapered prisms whose caps collapse
   to a knife edge, which produces self-intersecting polyhedron faces and
   coincident faces between solids.
-- Ray casting exists in the kernel but is not wired into the viewer yet:
-  picking and selection still use mesh triangles.
+- Picking uses the analytic part scenes when the analytic preview is on; mesh
+  triangles remain the fallback for parts without a scene.
 - Selection:
   - per leaf primitive, not per nested boolean group
   - no selected-part highlight
@@ -527,10 +533,12 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
 `cuboid(rounding=)` also render; non-convex Minkowski sums remain limited.
 
 1. **Finish the ray-casting layer**
-   - Move picking onto `raycast_scene`, falling back to meshes for sketches.
-   - Make cylinder sides analytic: build them from a revolved line, or add a
-     spline ray tracer with parameter-space trimming.
-   - Prototype the preview path as a compute shader over the same scene data.
+   - The analytic preview covers planes, cylinders, cones, balls and
+     B-spline/NURBS patches, including surfaces of revolution converted to
+     NURBS; picking already prefers the analytic part scenes.
+   - Patches whose degree exceeds the shader's basis window still keep
+     tessellated coverage. Raise the window or add a fallback tracer.
+   - Prototype screen-space adaptive sampling for the compute preview.
 2. **Remaining library and kernel gaps**
    - Make Truck booleans deterministic: topology IDs hash `Arc` pointers, so
      results depend on the process address layout. A stable per-entity ID would

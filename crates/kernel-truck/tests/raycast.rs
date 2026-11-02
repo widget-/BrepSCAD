@@ -293,3 +293,154 @@ fn sphere_scene_is_one_analytic_ball() {
         hit.distance
     );
 }
+
+#[test]
+fn sphere_boolean_patches_are_analytic_and_exact() {
+    let mut kernel = TruckKernel::new();
+    let cube = cube(&mut kernel, [2.0; 3], [0.0; 3]);
+    let sphere = kernel
+        .primitive(Primitive::Sphere { radius: 1.2 })
+        .expect("sphere");
+
+    for op in [BooleanOp::Difference, BooleanOp::Intersection] {
+        let result = kernel.boolean(op, cube, sphere).expect("boolean");
+        let scene = kernel.raycast_scene(result, 0.01).expect("scene");
+
+        let spline_faces = scene
+            .faces()
+            .iter()
+            .filter(|face| matches!(face.surface, Some(brepscad_raycast::Surface::Spline(_))))
+            .count();
+        assert_eq!(spline_faces, 4, "{op:?}: one spline per sphere quadrant");
+        assert!(
+            scene.faces().iter().all(|face| face.surface.is_some()),
+            "{op:?}: every face has an analytic surface"
+        );
+    }
+
+    // The intersection lens has no cube top above the sphere at x = 0.8: the
+    // first hit is the exact sphere patch, not a facet.
+    let lens = kernel
+        .boolean(BooleanOp::Intersection, cube, sphere)
+        .expect("intersection");
+    let scene = kernel.raycast_scene(lens, 0.01).expect("scene");
+    let ray = Ray::new([0.8, 0.0, 3.0], [0.0, 0.0, -1.0]);
+    let hit = scene.cast(&ray).expect("lens hit");
+    let expected = 3.0 - (1.2_f64 * 1.2 - 0.8 * 0.8).sqrt();
+    assert!(
+        (hit.distance - expected).abs() < 1.0e-6,
+        "distance {} expected {expected}",
+        hit.distance
+    );
+    let radius = (hit.position[0] * hit.position[0]
+        + hit.position[1] * hit.position[1]
+        + hit.position[2] * hit.position[2])
+        .sqrt();
+    assert!((radius - 1.2).abs() < 1.0e-6, "radius {radius}");
+    assert!(
+        dot(hit.normal, hit.position) > 0.0,
+        "lens normal points outward: {:?}",
+        hit.normal
+    );
+
+    // In the carved cube the same point is a cavity wall, so its normal points
+    // toward the sphere centre.
+    let carved = kernel
+        .boolean(BooleanOp::Difference, cube, sphere)
+        .expect("difference");
+    let scene = kernel.raycast_scene(carved, 0.01).expect("scene");
+    let ray = Ray::new([0.99, 0.8, 0.0], [-1.0, 0.0, 0.0]);
+    let hit = scene.cast(&ray).expect("cavity hit");
+    assert!(
+        (hit.position[0] - (1.44_f64 - 0.64).sqrt()).abs() < 1.0e-6,
+        "cavity hit at {:?}",
+        hit.position
+    );
+    assert!(
+        dot(hit.normal, hit.position) < 0.0,
+        "cavity normal points inward: {:?}",
+        hit.normal
+    );
+
+    // Every quadrant of the cavity wall must face the same way; a flipped patch
+    // shows up as a bright seam in the preview.
+    for step in 0..16 {
+        let angle = std::f64::consts::TAU * step as f64 / 16.0;
+        let (sin, cos) = angle.sin_cos();
+        let origin = [0.8 * cos, 0.8 * sin, 0.99];
+        let ray = Ray::new(origin, [0.0, 0.0, -1.0]);
+        let hit = scene.cast(&ray).expect("cavity hit around the wall");
+        let radius = (hit.position[0] * hit.position[0]
+            + hit.position[1] * hit.position[1]
+            + hit.position[2] * hit.position[2])
+            .sqrt();
+        assert!(
+            (radius - 1.2).abs() < 1.0e-6,
+            "step {step}: radius {radius}"
+        );
+        assert!(
+            dot(hit.normal, hit.position) < 0.0,
+            "step {step}: cavity normal points inward: {:?}",
+            hit.normal
+        );
+    }
+}
+
+#[test]
+fn extruded_circle_wall_covers_a_dense_ray_grid() {
+    let mut kernel = TruckKernel::new();
+    let sketch = kernel
+        .sketch(Sketch::Circle { radius: 1.0 })
+        .expect("circle");
+    let solid = kernel.extrude(sketch, 2.0).expect("extrude");
+    let scene = kernel.raycast_scene(solid, 0.01).expect("scene");
+    let mesh = kernel.tessellate(solid, 0.01).expect("tessellation");
+
+    let mut missed = Vec::new();
+    for iy in 0..30 {
+        for iz in 0..30 {
+            let y = -0.95 + 1.9 * iy as f64 / 29.0;
+            let z = -0.95 + 1.9 * iz as f64 / 29.0;
+            if y * y + z * z > 0.9 {
+                continue;
+            }
+            let ray = Ray::new([2.0, y, z], [-1.0, 0.0, 0.0]);
+            let analytic = scene.cast(&ray);
+            let reference = mesh_distance(&mesh, &ray);
+            if analytic.is_none() && reference.is_some() {
+                missed.push((y, z, reference));
+            }
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "analytic missed {} wall rays, first {:?}",
+        missed.len(),
+        &missed[..missed.len().min(5)]
+    );
+}
+
+#[test]
+fn revolved_circle_scene_matches_the_mesh() {
+    let mut kernel = TruckKernel::new();
+    let sketch = kernel
+        .sketch(Sketch::Circle { radius: 0.5 })
+        .expect("circle");
+    let shifted = kernel
+        .transform(sketch, Transform::from_translation([2.0, 0.0, 0.0]))
+        .expect("translate profile");
+    let torus = kernel
+        .revolve(shifted, 0.0, std::f64::consts::TAU)
+        .expect("revolve");
+    let scene = kernel.raycast_scene(torus, 0.01).expect("scene");
+    let mesh = kernel.tessellate(torus, 0.01).expect("tessellation");
+
+    let spline_faces = scene
+        .faces()
+        .iter()
+        .filter(|face| matches!(face.surface, Some(brepscad_raycast::Surface::Spline(_))))
+        .count();
+    assert!(spline_faces > 0, "the torus should be spline faces");
+
+    check_against_mesh(&scene, &mesh, 0.02);
+}
