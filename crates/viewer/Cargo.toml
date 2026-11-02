@@ -17,6 +17,8 @@ eframe = { version = "0.37", default-features = false, features = [
 ] }
 glam = "0.34"
 rfd = "0.17"
+serde_json = "1"
+url = "2"
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 brepscad-kernel-api.workspace = true
 brepscad-kernel-truck.workspace = true

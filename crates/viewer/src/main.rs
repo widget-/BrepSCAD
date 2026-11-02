@@ -2,6 +2,7 @@ mod analytic;
 mod app;
 mod camera;
 mod editor;
+mod lsp;
 mod mesh;
 mod picking;
 mod renderer;

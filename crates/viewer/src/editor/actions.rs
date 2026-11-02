@@ -29,6 +29,21 @@ pub fn editor_id() -> egui::Id {
     egui::Id::unique("brepscad_source_editor")
 }
 
+pub fn cursor_byte(ctx: &egui::Context, source: &str) -> Option<usize> {
+    let state = TextEditState::load(ctx, editor_id())?;
+    let range = state.cursor.char_range()?;
+    Some(diagnostics::byte_index(source, range.primary.index.0))
+}
+
+pub fn set_cursor(ctx: &egui::Context, source: &str, byte: usize) {
+    let mut state = TextEditState::load(ctx, editor_id()).unwrap_or_default();
+    let character = diagnostics::char_index(source, byte);
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(character))));
+    state.store(ctx, editor_id());
+}
+
 pub fn action(ctx: &egui::Context, source: &mut String, action: EditAction) -> bool {
     match action {
         EditAction::Undo => undo(ctx, source, false),

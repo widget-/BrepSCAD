@@ -281,6 +281,8 @@ dependencies = [
  "eframe",
  "glam",
  "rfd",
+ "serde_json",
+ "url",
  "wgpu",
 ]
 

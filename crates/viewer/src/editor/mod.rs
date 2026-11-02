@@ -7,8 +7,10 @@ mod keymap;
 mod theme;
 
 pub use actions::{
-    EditAction, action as edit_action, can as can_edit, editor_id, reset as reset_editor_state,
+    EditAction, action as edit_action, can as can_edit, cursor_byte, editor_id,
+    reset as reset_editor_state, set_cursor,
 };
+pub use completion::{Candidate, CandidateKind};
 pub use diagnostics::{Diagnostic, Severity, parse_diagnostics};
 
 use eframe::egui::{self, EventFilter, TextBuffer, TextEdit, text_edit::TextEditOutput};
@@ -31,6 +33,12 @@ impl EditorOutput {
     pub fn changed(&self) -> bool {
         self.text_edit.response.response.changed() || self.accepted.is_some()
     }
+
+    pub fn cursor_byte(&self, source: &str) -> Option<usize> {
+        self.text_edit
+            .cursor_range
+            .map(|range| diagnostics::byte_index(source, range.primary.index.0))
+    }
 }
 
 impl CodeEditor {
@@ -43,6 +51,7 @@ impl CodeEditor {
         ui: &mut egui::Ui,
         source: &mut String,
         diagnostics: &[Diagnostic],
+        external: Option<&[Candidate]>,
     ) -> EditorOutput {
         let id = editor_id();
         let job = self
@@ -73,7 +82,20 @@ impl CodeEditor {
                 .word_boundary(|character| !completion::is_identifier_continue(character))
                 .show(ui, text_edit, |query| {
                     let cursor = diagnostics::byte_index(query.text, query.word_range.end.0);
-                    completion::suggestions(query.text, cursor)
+                    let mut candidates: Vec<Candidate> = external
+                        .filter(|items| !items.is_empty())
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter(|candidate| candidate.insert.starts_with(query.word))
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if candidates.is_empty() {
+                        candidates = completion::suggestions(query.text, cursor);
+                    }
+                    candidates
                         .into_iter()
                         .map(|candidate| {
                             egui::Suggestion::new(candidate.insert).description(candidate.detail)

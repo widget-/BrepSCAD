@@ -16,6 +16,7 @@ use glam::{Vec2, Vec3};
 
 use crate::camera::Camera;
 use crate::editor::{self, CodeEditor, Diagnostic};
+use crate::lsp;
 use crate::mesh::{combine_evaluation, combine_parts};
 use crate::picking::{PickPart, nearest_scene, nearest_triangle};
 use crate::renderer::MeshRenderer;
@@ -91,6 +92,18 @@ pub(crate) struct ViewerApp {
     error: Option<String>,
     editor: CodeEditor,
     diagnostics: Vec<Diagnostic>,
+    evaluation_diagnostic: Option<Diagnostic>,
+    lsp: Option<lsp::LspClient>,
+    lsp_uri: Option<String>,
+    lsp_diagnostics: Vec<Diagnostic>,
+    lsp_completion: Option<(usize, Vec<editor::Candidate>)>,
+    lsp_completion_pending: Option<(u64, usize)>,
+    lsp_hover: Option<String>,
+    lsp_hover_pending: Option<u64>,
+    lsp_definition_pending: Option<u64>,
+    lsp_log: Option<String>,
+    lsp_waiting: bool,
+    last_lsp_cursor: Option<usize>,
     pending_evaluate: bool,
     evaluation_job: Option<EvaluationJob>,
     file_dialog: Option<Receiver<FileDialogResult>>,
@@ -124,9 +137,19 @@ impl ViewerApp {
 
         let source = SAMPLE.to_owned();
         let mut diagnostics = editor::parse_diagnostics(&source, parse(&source).errors());
-        if let Some(diagnostic) = error_diagnostic {
-            diagnostics.push(diagnostic);
+        if let Some(diagnostic) = &error_diagnostic {
+            diagnostics.push(diagnostic.clone());
         }
+
+        let lsp_uri = "file:///untitled.scad".to_owned();
+        let (lsp, lsp_log) = match lsp::LspClient::start() {
+            Ok(mut client) => {
+                client.open(lsp_uri.clone(), &source);
+                (Some(client), None)
+            }
+            Err(error) => (None, Some(error)),
+        };
+        let lsp_waiting = lsp.is_some();
 
         Self {
             source,
@@ -146,6 +169,18 @@ impl ViewerApp {
             error,
             editor: CodeEditor::new(),
             diagnostics,
+            evaluation_diagnostic: error_diagnostic,
+            lsp,
+            lsp_uri: Some(lsp_uri),
+            lsp_diagnostics: Vec::new(),
+            lsp_completion: None,
+            lsp_completion_pending: None,
+            lsp_hover: None,
+            lsp_hover_pending: None,
+            lsp_definition_pending: None,
+            lsp_log,
+            lsp_waiting,
+            last_lsp_cursor: None,
             pending_evaluate: false,
             evaluation_job: None,
             file_dialog: None,
@@ -230,10 +265,8 @@ impl ViewerApp {
                         self.parameters.clear();
                     }
                     self.error = result.error;
+                    self.evaluation_diagnostic = result.error_diagnostic;
                     self.refresh_diagnostics();
-                    if let Some(diagnostic) = result.error_diagnostic {
-                        self.diagnostics.push(diagnostic);
-                    }
                 } else {
                     // The source or placement mode changed while this job ran.
                     self.pending_evaluate = true;
@@ -291,10 +324,7 @@ impl ViewerApp {
         match apply_edit(&self.source, &TextEdit::new(text_range, replacement)) {
             Ok(source) => {
                 self.source = source;
-                self.dirty = true;
-                self.selected_part = None;
-                self.parameters.clear();
-                self.refresh_diagnostics();
+                self.source_changed();
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error.to_string()),
@@ -302,7 +332,126 @@ impl ViewerApp {
     }
 
     fn refresh_diagnostics(&mut self) {
-        self.diagnostics = editor::parse_diagnostics(&self.source, parse(&self.source).errors());
+        let mut diagnostics = editor::parse_diagnostics(&self.source, parse(&self.source).errors());
+        if let Some(diagnostic) = &self.evaluation_diagnostic {
+            diagnostics.push(diagnostic.clone());
+        }
+        diagnostics.extend(self.lsp_diagnostics.iter().cloned());
+        diagnostics.sort_by_key(|diagnostic| {
+            (
+                diagnostic.range.start,
+                diagnostic.range.end,
+                diagnostic.message.clone(),
+            )
+        });
+        diagnostics.dedup_by(|a, b| a.range == b.range && a.message == b.message);
+        self.diagnostics = diagnostics;
+    }
+
+    fn source_changed(&mut self) {
+        self.dirty = true;
+        self.selected_part = None;
+        self.parameters.clear();
+        self.evaluation_diagnostic = None;
+        self.lsp_diagnostics.clear();
+        self.lsp_completion = None;
+        self.last_lsp_cursor = None;
+        self.lsp_waiting = self.lsp.is_some();
+        self.refresh_diagnostics();
+        if let Some(lsp) = &mut self.lsp {
+            lsp.change(&self.source);
+        }
+    }
+
+    fn poll_lsp(&mut self, ctx: &egui::Context) {
+        let events = self.lsp.as_mut().map(|lsp| lsp.poll()).unwrap_or_default();
+        for event in events {
+            match event {
+                lsp::Event::Diagnostics { uri, diagnostics } => {
+                    if Some(uri.as_str()) != self.lsp_uri.as_deref() {
+                        continue;
+                    }
+                    self.lsp_waiting = false;
+                    self.lsp_diagnostics = diagnostics
+                        .into_iter()
+                        .filter_map(|diagnostic| lsp_diagnostic(&self.source, diagnostic))
+                        .collect();
+                    self.refresh_diagnostics();
+                }
+                lsp::Event::Completion { id, items } => {
+                    if self
+                        .lsp_completion_pending
+                        .as_ref()
+                        .is_some_and(|(pending, _)| *pending == id)
+                    {
+                        let (_, cursor) = self.lsp_completion_pending.take().unwrap();
+                        self.lsp_completion =
+                            Some((cursor, items.into_iter().map(lsp_candidate).collect()));
+                    }
+                }
+                lsp::Event::Hover { id, text } => {
+                    if self.lsp_hover_pending == Some(id) {
+                        self.lsp_hover_pending = None;
+                        self.lsp_hover = text;
+                    }
+                }
+                lsp::Event::Definition { id, location } => {
+                    if self.lsp_definition_pending == Some(id) {
+                        self.lsp_definition_pending = None;
+                        if let Some(location) = location {
+                            if Some(location.uri.as_str()) == self.lsp_uri.as_deref() {
+                                let byte =
+                                    lsp::position_to_offset(&self.source, location.range.start);
+                                editor::set_cursor(ctx, &self.source, byte);
+                            } else if let Some(path) = lsp::uri_to_path(&location.uri) {
+                                self.load_path(ctx, path);
+                            }
+                        }
+                    }
+                }
+                lsp::Event::Log(message) => {
+                    self.lsp_log = Some(message);
+                    self.lsp = None;
+                    self.lsp_waiting = false;
+                }
+            }
+        }
+    }
+
+    fn request_lsp_completion(&mut self, cursor: usize) {
+        if self.last_lsp_cursor == Some(cursor) {
+            return;
+        }
+        self.last_lsp_cursor = Some(cursor);
+        let position = lsp::offset_to_position(&self.source, cursor);
+        let Some(lsp) = &mut self.lsp else {
+            return;
+        };
+        if let Some(id) = lsp.request_completion(position) {
+            self.lsp_completion_pending = Some((id, cursor));
+        }
+    }
+
+    fn request_lsp_hover(&mut self, ctx: &egui::Context) {
+        let cursor = editor::cursor_byte(ctx, &self.source).unwrap_or(0);
+        let position = lsp::offset_to_position(&self.source, cursor);
+        let Some(lsp) = &mut self.lsp else {
+            return;
+        };
+        if let Some(id) = lsp.request_hover(position) {
+            self.lsp_hover_pending = Some(id);
+        }
+    }
+
+    fn request_lsp_definition(&mut self, ctx: &egui::Context) {
+        let cursor = editor::cursor_byte(ctx, &self.source).unwrap_or(0);
+        let position = lsp::offset_to_position(&self.source, cursor);
+        let Some(lsp) = &mut self.lsp else {
+            return;
+        };
+        if let Some(id) = lsp.request_definition(position) {
+            self.lsp_definition_pending = Some(id);
+        }
     }
 
     fn start_file_dialog(&mut self, kind: FileDialogKind) {
@@ -369,13 +518,23 @@ impl ViewerApp {
     fn load_path(&mut self, ctx: &egui::Context, path: PathBuf) {
         match read_source_file(&path) {
             Ok(source) => {
+                let uri = lsp::file_uri(&path);
                 self.source = source;
                 self.current_path = Some(path);
                 self.dirty = false;
                 self.selected_part = None;
                 self.parameters.clear();
                 self.error = None;
+                self.evaluation_diagnostic = None;
+                self.lsp_diagnostics.clear();
+                self.last_lsp_cursor = None;
                 self.refresh_diagnostics();
+                if let Some(uri) = uri
+                    && let Some(lsp) = &mut self.lsp
+                {
+                    lsp.open(uri, &self.source);
+                    self.lsp_waiting = true;
+                }
                 editor::reset_editor_state(ctx);
                 self.pending_evaluate = true;
             }
@@ -392,6 +551,9 @@ impl ViewerApp {
                 self.error = None;
                 if context_changed {
                     self.pending_evaluate = true;
+                }
+                if let Some(lsp) = &mut self.lsp {
+                    lsp.save();
                 }
                 true
             }
@@ -419,7 +581,14 @@ impl ViewerApp {
         self.selected_part = None;
         self.parameters.clear();
         self.error = None;
+        self.evaluation_diagnostic = None;
+        self.lsp_diagnostics.clear();
+        self.last_lsp_cursor = None;
         self.refresh_diagnostics();
+        if let Some(lsp) = &mut self.lsp {
+            lsp.open("file:///untitled.scad".to_owned(), "");
+            self.lsp_waiting = true;
+        }
         editor::reset_editor_state(ctx);
         self.pending_evaluate = true;
     }
@@ -459,10 +628,7 @@ impl ViewerApp {
 
     fn perform_edit(&mut self, ctx: &egui::Context, action: editor::EditAction) {
         if editor::edit_action(ctx, &mut self.source, action) {
-            self.dirty = true;
-            self.selected_part = None;
-            self.parameters.clear();
-            self.refresh_diagnostics();
+            self.source_changed();
         }
     }
 
@@ -494,6 +660,13 @@ impl ViewerApp {
 
         if !ctx.memory(|memory| memory.has_focus(editor::editor_id())) {
             return;
+        }
+
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
+            self.request_lsp_hover(ctx);
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F12)) {
+            self.request_lsp_definition(ctx);
         }
 
         let redo = ctx.input_mut(|input| {
@@ -811,6 +984,21 @@ impl ViewerApp {
                 });
             self.show_about = open;
         }
+
+        if let Some(text) = self.lsp_hover.clone() {
+            let mut open = true;
+            egui::Window::new("Hover")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
+                .show(ctx, |ui| {
+                    ui.label(text);
+                });
+            if !open {
+                self.lsp_hover = None;
+            }
+        }
     }
 
     fn handle_close_request(&mut self, ctx: &egui::Context) {
@@ -898,6 +1086,10 @@ impl ViewerApp {
                 None => format!("line {}", line_number(&self.source, diagnostic.range.start)),
             };
             ui.colored_label(color, format!("{location}: {}", diagnostic.message));
+            any = true;
+        }
+        if let Some(log) = &self.lsp_log {
+            ui.weak(log);
             any = true;
         }
         if !any {
@@ -1007,6 +1199,7 @@ impl eframe::App for ViewerApp {
         self.poll_file_dialog(&ctx);
         self.advance_pending_file_action(&ctx);
         self.poll_evaluation(&ctx, frame);
+        self.poll_lsp(&ctx);
         if self.pending_evaluate && self.evaluation_job.is_none() {
             self.start_evaluation();
         }
@@ -1034,13 +1227,23 @@ impl eframe::App for ViewerApp {
                                 ..ScrollSource::default()
                             })
                             .show(ui, |ui| {
-                                let output =
-                                    self.editor.show(ui, &mut self.source, &self.diagnostics);
+                                let cursor = editor::cursor_byte(&ctx, &self.source);
+                                let external = self
+                                    .lsp_completion
+                                    .as_ref()
+                                    .filter(|(saved, _)| Some(*saved) == cursor)
+                                    .map(|(_, items)| items.clone());
+                                let output = self.editor.show(
+                                    ui,
+                                    &mut self.source,
+                                    &self.diagnostics,
+                                    external.as_deref(),
+                                );
                                 if output.changed() {
-                                    self.dirty = true;
-                                    self.selected_part = None;
-                                    self.parameters.clear();
-                                    self.refresh_diagnostics();
+                                    self.source_changed();
+                                }
+                                if let Some(cursor) = output.cursor_byte(&self.source) {
+                                    self.request_lsp_completion(cursor);
                                 }
                             });
                     });
@@ -1152,6 +1355,11 @@ impl eframe::App for ViewerApp {
             || self.pending_file_action.is_some()
             || self.show_shortcuts
             || self.show_about
+            || self.lsp_waiting
+            || self.lsp_completion_pending.is_some()
+            || self.lsp_hover_pending.is_some()
+            || self.lsp_definition_pending.is_some()
+            || self.lsp_hover.is_some()
         {
             ctx.request_repaint();
         }
@@ -1276,6 +1484,43 @@ fn evaluate_source(
                 Some(diagnostic),
             )
         }
+    }
+}
+
+fn lsp_diagnostic(source: &str, diagnostic: lsp::LspDiagnostic) -> Option<editor::Diagnostic> {
+    let mut start = lsp::position_to_offset(source, diagnostic.range.start).min(source.len());
+    let mut end = lsp::position_to_offset(source, diagnostic.range.end).min(source.len());
+    while start > 0 && !source.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end > 0 && !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    if start > end {
+        return None;
+    }
+    Some(editor::Diagnostic {
+        severity: match diagnostic.severity {
+            1 => editor::Severity::Error,
+            2 => editor::Severity::Warning,
+            _ => editor::Severity::Info,
+        },
+        message: diagnostic.message,
+        range: start..end,
+        source_path: None,
+    })
+}
+
+fn lsp_candidate(item: lsp::CompletionItem) -> editor::Candidate {
+    editor::Candidate {
+        insert: item.insert_text,
+        label: item.label,
+        detail: item.detail,
+        kind: match item.kind {
+            9 => editor::CandidateKind::Declaration,
+            3 => editor::CandidateKind::Builtin,
+            _ => editor::CandidateKind::Parameter,
+        },
     }
 }
 
