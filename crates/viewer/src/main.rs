@@ -5,6 +5,7 @@ mod editor;
 mod lsp;
 mod mesh;
 mod picking;
+mod properties;
 mod renderer;
 mod scene_gpu;
 

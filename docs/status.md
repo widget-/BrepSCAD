@@ -259,8 +259,11 @@ vendor/
   size, mesh, scene or analytic mode changes. The viewport title is sent only
   when it changes, because `send_viewport_cmd` requests a repaint.
 - Shapes panel showing the source-shaped tree of groups and leaf primitives.
-  Clicking a leaf selects it, including cutters enclosed by other geometry.
-- Properties panel with drag-editable numeric parameters.
+  Clicking a leaf selects it, including cutters enclosed by other geometry;
+  clicking a group selects that transform or boolean node.
+- Properties panel with named parameters (`h`, `r`, `x`, `y`, `z`, …),
+  drag-editable numeric values, and links that jump to the declaration in the
+  editor.
 - "Legacy OpenSCAD centering" is a View-menu checkbox; the analytic preview is
   the adjacent View-menu checkbox.
 - Parameter edits apply on drag release, Enter, or focus loss.

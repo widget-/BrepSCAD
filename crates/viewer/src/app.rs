@@ -19,16 +19,18 @@ use crate::editor::{self, CodeEditor, Diagnostic};
 use crate::lsp;
 use crate::mesh::{combine_evaluation, combine_parts};
 use crate::picking::{PickPart, nearest_scene, nearest_triangle};
+use crate::properties;
 use crate::renderer::MeshRenderer;
 
 const SAMPLE: &str = include_str!("../../../assets/sample.scad");
 
 #[derive(Debug, Clone)]
 struct ParameterDraft {
+    name: String,
+    target: Range<usize>,
     range: Range<usize>,
     source: String,
-    value: f64,
-    line: usize,
+    value: Option<f64>,
 }
 
 struct EvaluationResult {
@@ -88,6 +90,7 @@ pub(crate) struct ViewerApp {
     renderer: MeshRenderer,
     camera: Camera,
     selected_part: Option<(usize, usize)>,
+    selected_node: Option<(usize, String, Range<usize>)>,
     parameters: Vec<ParameterDraft>,
     error: Option<String>,
     editor: CodeEditor,
@@ -165,6 +168,7 @@ impl ViewerApp {
             renderer,
             camera,
             selected_part: None,
+            selected_node: None,
             parameters: Vec::new(),
             error,
             editor: CodeEditor::new(),
@@ -262,6 +266,7 @@ impl ViewerApp {
                         self.pick_parts = pick_parts;
                         self.evaluation = result.evaluation;
                         self.selected_part = None;
+                        self.selected_node = None;
                         self.parameters.clear();
                     }
                     self.error = result.error;
@@ -283,11 +288,12 @@ impl ViewerApp {
     }
 
     fn select_part(&mut self, selection: Option<(usize, usize)>) {
-        if self.selected_part == selection {
+        if self.selected_part == selection && self.selected_node.is_none() {
             return;
         }
 
         self.selected_part = selection;
+        self.selected_node = None;
         self.parameters.clear();
 
         let Some((shape_index, part_index)) = selection else {
@@ -303,15 +309,28 @@ impl ViewerApp {
             return;
         };
 
-        let source = &self.source;
-        self.parameters = part
-            .parameters
-            .iter()
-            .map(|parameter| ParameterDraft {
-                range: parameter.range.clone(),
-                source: parameter.source.clone(),
-                value: parameter.value,
-                line: line_number(source, parameter.range.start),
+        let module = part.module.clone();
+        let source_range = part.source_range.clone();
+        self.load_parameter_rows(&module, &source_range);
+    }
+
+    fn select_node(&mut self, shape_index: usize, module: String, source_range: Range<usize>) {
+        self.selected_part = None;
+        self.selected_node = Some((shape_index, module.clone(), source_range.clone()));
+        self.parameters.clear();
+        self.load_parameter_rows(&module, &source_range);
+    }
+
+    fn load_parameter_rows(&mut self, module: &str, source_range: &Range<usize>) {
+        self.parameters = properties::call_properties(&self.source, module, source_range)
+            .rows
+            .into_iter()
+            .map(|row| ParameterDraft {
+                name: row.name,
+                target: row.target,
+                range: row.range,
+                source: row.source,
+                value: row.value,
             })
             .collect();
     }
@@ -351,6 +370,7 @@ impl ViewerApp {
     fn source_changed(&mut self) {
         self.dirty = true;
         self.selected_part = None;
+        self.selected_node = None;
         self.parameters.clear();
         self.evaluation_diagnostic = None;
         self.lsp_diagnostics.clear();
@@ -523,6 +543,7 @@ impl ViewerApp {
                 self.current_path = Some(path);
                 self.dirty = false;
                 self.selected_part = None;
+                self.selected_node = None;
                 self.parameters.clear();
                 self.error = None;
                 self.evaluation_diagnostic = None;
@@ -579,6 +600,7 @@ impl ViewerApp {
         self.current_path = None;
         self.dirty = false;
         self.selected_part = None;
+        self.selected_node = None;
         self.parameters.clear();
         self.error = None;
         self.evaluation_diagnostic = None;
@@ -1132,69 +1154,96 @@ impl ViewerApp {
             return;
         }
 
+        let selected_node = self
+            .selected_node
+            .as_ref()
+            .map(|(shape_index, _, source_range)| (*shape_index, source_range.start));
         let mut clicked = None;
+        let mut clicked_node = None;
         for (shape_index, shape) in self.evaluation.shapes.iter().enumerate() {
-            tree_ui(
-                ui,
-                &shape.tree,
+            let mut view = TreeView {
                 shape_index,
-                self.selected_part,
-                &self.source,
-                &mut clicked,
-            );
+                selected_part: self.selected_part,
+                selected_node,
+                source: &self.source,
+                clicked: &mut clicked,
+                clicked_node: &mut clicked_node,
+            };
+            tree_ui(ui, &shape.tree, &mut view);
         }
 
-        if clicked.is_some() {
-            self.select_part(clicked);
+        if let Some(part) = clicked {
+            self.select_part(Some(part));
+        } else if let Some((shape_index, module, source_range)) = clicked_node {
+            self.select_node(shape_index, module, source_range);
         }
     }
 
     fn properties_ui(&mut self, ui: &mut egui::Ui) {
         ui.set_width(ui.available_width());
-        let Some((shape_index, part_index)) = self.selected_part else {
-            ui.label("Click the model to select a part.");
+
+        let target = if let Some((_shape_index, module, source_range)) = &self.selected_node {
+            Some((module.clone(), source_range.clone()))
+        } else if let Some((shape_index, part_index)) = self.selected_part {
+            self.evaluation
+                .shapes
+                .get(shape_index)
+                .and_then(|shape| shape.parts.get(part_index))
+                .map(|part| (part.module.clone(), part.source_range.clone()))
+        } else {
+            None
+        };
+
+        let Some((module, source_range)) = target else {
+            self.selected_part = None;
+            self.selected_node = None;
+            self.parameters.clear();
+            ui.label("Click a shape in the tree or the model to select a part.");
             return;
         };
 
-        let (module, source_range) = match self
-            .evaluation
-            .shapes
-            .get(shape_index)
-            .and_then(|shape| shape.parts.get(part_index))
-        {
-            Some(part) => (part.module.clone(), part.source_range.clone()),
-            None => {
-                self.selected_part = None;
-                self.parameters.clear();
-                return;
-            }
-        };
-
-        ui.label(format!(
-            "{module} · shape {shape_index} part {part_index} · bytes {}..{}",
-            source_range.start, source_range.end
-        ));
+        let title = format!(
+            "{} (Line {})",
+            module_title(&module),
+            line_number(&self.source, source_range.start)
+        );
+        if ui.link(title).clicked() {
+            jump_to(ui, &self.source, source_range.start);
+        }
 
         if self.parameters.is_empty() {
-            ui.label("No editable numbers in this part.");
+            ui.label("No named parameters in this node.");
             return;
         }
 
+        let source = self.source.clone();
         let mut apply = None;
-        for parameter in &mut self.parameters {
-            ui.horizontal(|ui| {
-                ui.label(format!("line {}", parameter.line));
-                let response = ui.add(egui::DragValue::new(&mut parameter.value).speed(0.01));
-                ui.monospace(&parameter.source);
-                let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                if response.drag_stopped()
-                    || response.lost_focus()
-                    || (enter && response.has_focus())
-                {
-                    apply = Some((parameter.range.clone(), format_number(parameter.value)));
+        egui::Grid::new("properties_parameters")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                for parameter in &mut self.parameters {
+                    if ui.link(&parameter.name).clicked() {
+                        jump_to(ui, &source, parameter.target.start);
+                    }
+                    match &mut parameter.value {
+                        Some(value) => {
+                            let response = ui.add(egui::DragValue::new(value).speed(0.01));
+                            let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            if response.drag_stopped()
+                                || response.lost_focus()
+                                || (enter && response.has_focus())
+                            {
+                                apply = Some((parameter.range.clone(), format_number(*value)));
+                            }
+                        }
+                        None => {
+                            ui.monospace(&parameter.source);
+                        }
+                    }
+                    ui.end_row();
                 }
             });
-        }
 
         if let Some((range, replacement)) = apply {
             self.apply_parameter_edit(range, replacement);
@@ -1425,38 +1474,54 @@ fn menu_button_enabled(
     ui.add_enabled(enabled, button)
 }
 
-fn tree_ui(
-    ui: &mut egui::Ui,
-    node: &TreeNode,
+struct TreeView<'a> {
     shape_index: usize,
-    selected: Option<(usize, usize)>,
-    source: &str,
-    clicked: &mut Option<(usize, usize)>,
-) {
+    selected_part: Option<(usize, usize)>,
+    selected_node: Option<(usize, usize)>,
+    source: &'a str,
+    clicked: &'a mut Option<(usize, usize)>,
+    clicked_node: &'a mut Option<(usize, String, Range<usize>)>,
+}
+
+fn tree_ui(ui: &mut egui::Ui, node: &TreeNode, view: &mut TreeView<'_>) {
     let label = format!(
         "{}  ·  line {}",
         node.module,
-        line_number(source, node.source_range.start)
+        line_number(view.source, node.source_range.start)
     );
 
     match node.part_index {
         Some(part_index) => {
             if ui
-                .selectable_label(selected == Some((shape_index, part_index)), label)
+                .selectable_label(
+                    view.selected_part == Some((view.shape_index, part_index)),
+                    label,
+                )
                 .clicked()
             {
-                *clicked = Some((shape_index, part_index));
+                *view.clicked = Some((view.shape_index, part_index));
             }
         }
         None => {
-            egui::CollapsingHeader::new(label)
-                .id_salt((shape_index, node.source_range.start))
+            let selected_here =
+                view.selected_node == Some((view.shape_index, node.source_range.start));
+            let label = egui::RichText::new(label);
+            let label = if selected_here { label.strong() } else { label };
+            let response = egui::CollapsingHeader::new(label)
+                .id_salt((view.shape_index, node.source_range.start))
                 .default_open(true)
                 .show(ui, |ui| {
                     for child in &node.children {
-                        tree_ui(ui, child, shape_index, selected, source, clicked);
+                        tree_ui(ui, child, view);
                     }
                 });
+            if response.header_response.clicked() {
+                *view.clicked_node = Some((
+                    view.shape_index,
+                    node.module.clone(),
+                    node.source_range.clone(),
+                ));
+            }
         }
     }
 }
@@ -1560,6 +1625,20 @@ fn line_number(source: &str, offset: usize) -> usize {
         .filter(|byte| *byte == b'\n')
         .count()
         + 1
+}
+
+fn module_title(module: &str) -> String {
+    let mut characters = module.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+        None => String::new(),
+    }
+}
+
+fn jump_to(ui: &egui::Ui, source: &str, offset: usize) {
+    editor::set_cursor(ui.ctx(), source, offset);
+    ui.ctx()
+        .memory_mut(|memory| memory.request_focus(editor::editor_id()));
 }
 
 fn format_number(value: f64) -> String {
