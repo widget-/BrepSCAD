@@ -256,15 +256,8 @@ impl CodeEditor {
 
                 if let Some(index) = keys.accept.then_some(selected).or(clicked) {
                     let candidate = &candidates[index];
-                    let start = word_start(source, cursor);
-                    if accept_completion(
-                        ui,
-                        id,
-                        source,
-                        &mut output,
-                        start..cursor,
-                        &candidate.insert,
-                    ) {
+                    let range = word_start(source, cursor)..word_end(source, cursor);
+                    if accept_completion(ui, id, source, &mut output, range, &candidate.insert) {
                         applied = true;
                         self.completion.open = false;
                         self.completion.last_word.clear();
@@ -411,6 +404,20 @@ fn word_prefix(source: &str, cursor: usize) -> String {
     source[start..cursor.min(source.len())].to_owned()
 }
 
+fn word_end(source: &str, cursor: usize) -> usize {
+    let mut end = cursor.min(source.len());
+    while end < source.len() {
+        let Some(character) = source[end..].chars().next() else {
+            break;
+        };
+        if !completion::is_identifier_continue(character) {
+            break;
+        }
+        end += character.len_utf8();
+    }
+    end
+}
+
 fn consume_unmodified_key(input: &mut InputState, key: Key) -> usize {
     let mut count = 0;
     input.events.retain(|event| {
@@ -446,5 +453,13 @@ mod tests {
         assert_eq!(word_prefix("cube(w", 6), "w");
         assert_eq!(word_prefix("cube(", 5), "");
         assert_eq!(word_prefix("$fn", 3), "$fn");
+    }
+
+    #[test]
+    fn completion_replaces_the_whole_identifier_around_the_cursor() {
+        assert_eq!(word_start("translate", 6), 0);
+        assert_eq!(word_end("translate", 6), 9);
+        assert_eq!(word_start("cube(", 5), 5);
+        assert_eq!(word_end("cube(", 5), 5);
     }
 }

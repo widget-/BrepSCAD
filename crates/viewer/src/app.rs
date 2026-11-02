@@ -951,23 +951,32 @@ impl ViewerApp {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
+                .default_width(460.0)
                 .show(ctx, |ui| {
-                    for (keys, action) in [
-                        ("Ctrl+Enter", "Evaluate"),
-                        ("Ctrl+S / Ctrl+Shift+S", "Save / Save As"),
-                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
-                        ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / Copy / Paste"),
-                        ("Ctrl+Shift+V", "Paste as plain text"),
-                        ("Ctrl+A", "Select all"),
-                        ("Ctrl+/", "Toggle line comment"),
-                        ("Tab / Shift+Tab", "Indent / Outdent"),
-                        ("F1 / F12", "Language server hover / definition"),
-                    ] {
-                        ui.horizontal(|ui| {
-                            ui.monospace(keys);
-                            ui.label(action);
+                    egui::Grid::new("shortcuts_grid")
+                        .num_columns(2)
+                        .spacing([24.0, 6.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.strong("Shortcut");
+                            ui.strong("Action");
+                            ui.end_row();
+                            for (keys, action) in [
+                                ("Ctrl+Enter", "Evaluate"),
+                                ("Ctrl+S / Ctrl+Shift+S", "Save / Save As"),
+                                ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
+                                ("Ctrl+X / Ctrl+C / Ctrl+V", "Cut / Copy / Paste"),
+                                ("Ctrl+Shift+V", "Paste as plain text"),
+                                ("Ctrl+A", "Select all"),
+                                ("Ctrl+/", "Toggle line comment"),
+                                ("Tab / Shift+Tab", "Indent / Outdent"),
+                                ("F1 / F12", "Language server hover / definition"),
+                            ] {
+                                ui.monospace(keys);
+                                ui.label(action);
+                                ui.end_row();
+                            }
                         });
-                    }
                 });
             self.show_shortcuts = open;
         }
