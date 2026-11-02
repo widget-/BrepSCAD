@@ -31,6 +31,11 @@ enum Parameterization {
         axis: Vector3,
         u_reference: Vector3,
     },
+    Sphere {
+        centre: Point3,
+        axis: Vector3,
+        u_reference: Vector3,
+    },
     /// The patch's own `(u, v)`, projected back through Truck's parameter
     /// search so trims line up with the caster's parameterisation.
     Spline {
@@ -65,6 +70,22 @@ impl Parameterization {
                 let radial = local - height * *axis;
                 Some([revolved_angle(*axis, *u_reference, radial), height])
             }
+            Self::Sphere {
+                centre,
+                axis,
+                u_reference,
+            } => {
+                let offset = point - centre;
+                let length = offset.magnitude();
+                if length <= 1.0e-12 {
+                    return None;
+                }
+                let normal = offset / length;
+                Some([
+                    revolved_angle(*axis, *u_reference, normal),
+                    normal.dot(*axis).clamp(-1.0, 1.0).acos(),
+                ])
+            }
             Self::Spline { surface, .. } => match **surface {
                 Surface::BSplineSurface(ref patch) => patch
                     .search_parameter(point, None, TRIM_SEARCH_TRIALS)
@@ -79,7 +100,7 @@ impl Parameterization {
 
     fn period(&self) -> Option<f64> {
         match self {
-            Self::Revolved { .. } => Some(TAU),
+            Self::Revolved { .. } | Self::Sphere { .. } => Some(TAU),
             Self::Spline { period, .. } => *period,
             _ => None,
         }
@@ -183,6 +204,48 @@ fn analytic_face(face: &Face) -> Option<RaycastFace> {
         !face.orientation()
     };
     Some(RaycastFace::new(surface, trims, (min, max)).with_flip(flip))
+}
+
+/// Detect a revolved circular arc as a sphere: every point of the generatrix
+/// is the same distance from the revolution origin, and the resulting surface
+/// is a sphere centred there.
+fn revolved_sphere(
+    revolved: &RevolutedCurve<Curve>,
+    matrix: Matrix4,
+) -> Option<(Point3, f64, Vector3, Vector3)> {
+    let axis = matrix.transform_vector(revolved.axis()).normalize();
+    let centre = matrix.transform_point(revolved.origin());
+    let curve = revolved.entity_curve();
+    let (t0, t1) = curve.range_tuple();
+    let mut radius: Option<f64> = None;
+    let mut u_reference: Option<Vector3> = None;
+    for step in 0..=16 {
+        let t = t0 + (t1 - t0) * step as f64 / 16.0;
+        let point = matrix.transform_point(curve.subs(t));
+        let offset = point - centre;
+        let distance = offset.magnitude();
+        if distance <= 1.0e-9 {
+            continue;
+        }
+        match radius {
+            Some(expected) if (distance - expected).abs() > 1.0e-6 * expected.max(1.0) => {
+                return None;
+            }
+            Some(_) => {}
+            None => radius = Some(distance),
+        }
+        let radial = offset - axis * offset.dot(axis);
+        if u_reference.is_none() && radial.magnitude() > 1.0e-9 {
+            u_reference = Some(radial.normalize());
+        }
+    }
+    let radius = radius?;
+    Some((
+        centre,
+        radius,
+        axis,
+        u_reference.unwrap_or_else(|| perpendicular(axis)),
+    ))
 }
 
 /// Export a surface of revolution that is not an axis-parallel line or a cone
@@ -299,6 +362,22 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
             let revolved = processor.entity();
             let matrix = *processor.transform();
             let Curve::Line(line) = revolved.entity_curve() else {
+                if let Some((centre, radius, axis, u_reference)) = revolved_sphere(revolved, matrix)
+                {
+                    return Some((
+                        RaycastSurface::Sphere {
+                            centre: position(centre),
+                            radius,
+                            axis: vector(axis),
+                            u_reference: vector(u_reference),
+                        },
+                        Parameterization::Sphere {
+                            centre,
+                            axis,
+                            u_reference,
+                        },
+                    ));
+                }
                 return revolved_spline(revolved, matrix);
             };
             let origin = matrix.transform_point(revolved.origin());

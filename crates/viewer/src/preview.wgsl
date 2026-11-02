@@ -172,6 +172,8 @@ fn trace_sphere(
 
     let centre = face.params0.xyz;
     let radius = face.params0.w;
+    let axis = normalize(face.params1.xyz);
+    let reference = face.params2.xyz;
     let rest = origin - centre;
     let a = dot(direction, direction);
     let b = 2.0 * dot(rest, direction);
@@ -186,8 +188,8 @@ fn trace_sphere(
         let normal = (position - centre) / radius;
         // Same parameterisation as the CPU caster, so trim loops placed by
         // either path land in the same space.
-        let u = fract(atan2(normal.y, normal.x) / TAU + 1.0) * TAU;
-        let v = acos(clamp(normal.z, -1.0, 1.0));
+        let u = revolved_u(axis, reference, normal);
+        let v = acos(clamp(dot(normal, axis), -1.0, 1.0));
         let uv = vec2<f32>(u, v);
         if (!inside_trims(face, uv)) {
             continue;
@@ -506,14 +508,6 @@ fn trace_spline(
     if (count_u == 0u || count_v == 0u) {
         return result;
     }
-    let u_range = vec2<f32>(
-        knots[knot_u_start + degree_u],
-        knots[knot_u_start + count_u],
-    );
-    let v_range = vec2<f32>(
-        knots[knot_v_start + degree_v],
-        knots[knot_v_start + count_v],
-    );
     let normal_axis = perpendicular(direction);
     let bitangent = cross(direction, normal_axis);
     let patch_start = face.spline1.w;
@@ -528,7 +522,7 @@ fn trace_spline(
         var u = (region.uv.x + region.uv.y) * 0.5;
         var v = (region.uv.z + region.uv.w) * 0.5;
         var converged = false;
-        for (var step = 0u; step < 32u; step += 1u) {
+        for (var step = 0u; step < 16u; step += 1u) {
             let frame = spline_frame(face, u, v);
             if (!frame.valid) {
                 break;
@@ -550,8 +544,8 @@ fn trace_spline(
             }
             let du = (f * d - b * g) / determinant;
             let dv = (a * g - f * c) / determinant;
-            u = clamp(u - du, u_range.x, u_range.y);
-            v = clamp(v - dv, v_range.x, v_range.y);
+            u = clamp(u - du, region.uv.x, region.uv.y);
+            v = clamp(v - dv, region.uv.z, region.uv.w);
         }
         let frame = spline_frame(face, u, v);
         if (!frame.valid) {

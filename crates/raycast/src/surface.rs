@@ -54,9 +54,15 @@ pub enum Surface {
     },
     /// A tensor-product B-spline or NURBS patch.
     Spline(std::sync::Arc<SplineSurface>),
-    /// A sphere. `u` is the angle around the polar axis and `v` the polar
-    /// angle, so a whole sphere needs no trim loops.
-    Sphere { centre: [f64; 3], radius: f64 },
+    /// A sphere. `u` is the angle around `axis` measured from `u_reference`
+    /// and `v` the polar angle from `axis`, matching the parameterisation used
+    /// by a revolved circular arc. A whole sphere needs no trim loops.
+    Sphere {
+        centre: [f64; 3],
+        radius: f64,
+        axis: [f64; 3],
+        u_reference: [f64; 3],
+    },
 }
 
 impl Surface {
@@ -64,7 +70,12 @@ impl Surface {
     pub(crate) fn intersect(&self, ray: &Ray, out: &mut Vec<SurfaceHit>) {
         match self {
             Surface::Spline(surface) => surface.intersect(ray, out),
-            Surface::Sphere { centre, radius } => {
+            Surface::Sphere {
+                centre,
+                radius,
+                axis,
+                u_reference,
+            } => {
                 let rest = sub(ray.origin, *centre);
                 let a = dot(ray.direction, ray.direction);
                 let b = 2.0 * dot(rest, ray.direction);
@@ -80,8 +91,9 @@ impl Surface {
                         continue;
                     }
                     let normal = scale(offset, 1.0 / length);
-                    let u = normal[1].atan2(normal[0]).rem_euclid(TAU);
-                    let v = normal[2].clamp(-1.0, 1.0).acos();
+                    let axis = normalize(*axis);
+                    let u = revolved_u(axis, *u_reference, normal);
+                    let v = dot(normal, axis).clamp(-1.0, 1.0).acos();
                     out.push(SurfaceHit {
                         distance: t,
                         position,

@@ -174,7 +174,12 @@ impl TruckKernel {
         ];
         Some(brepscad_raycast::Scene::new(vec![
             brepscad_raycast::Face::new(
-                brepscad_raycast::Surface::Sphere { centre, radius },
+                brepscad_raycast::Surface::Sphere {
+                    centre,
+                    radius,
+                    axis: [0.0, 0.0, 1.0],
+                    u_reference: [1.0, 0.0, 0.0],
+                },
                 brepscad_raycast::TrimRegion::new(Vec::new()),
                 (min, max),
             ),

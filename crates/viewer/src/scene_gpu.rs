@@ -177,9 +177,16 @@ fn pack_face(
             packed.params1 = point_and(axis, TAU);
             packed.params2 = point_and(u_reference, 0.0);
         }
-        Some(Surface::Sphere { centre, radius }) => {
+        Some(Surface::Sphere {
+            centre,
+            radius,
+            axis,
+            u_reference,
+        }) => {
             packed.header[0] = KIND_SPHERE;
             packed.params0 = point_and(centre, *radius);
+            packed.params1 = point_and(axis, TAU);
+            packed.params2 = point_and(u_reference, 0.0);
         }
         Some(Surface::Spline(surface)) => {
             if !pack_spline(surface, &mut packed, knots, control, patches) {
@@ -436,6 +443,32 @@ mod tests {
             covered.iter().all(|count| *count == 1),
             "every face covered once: {covered:?}"
         );
+    }
+
+    #[test]
+    fn packs_oriented_sphere_axis_and_reference() {
+        let face = Face::new(
+            Surface::Sphere {
+                centre: [1.0, 2.0, 3.0],
+                radius: 4.0,
+                axis: [0.0, 0.0, 1.0],
+                u_reference: [1.0, 0.0, 0.0],
+            },
+            TrimRegion::with_u_period(
+                vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+                TAU,
+            ),
+            ([-3.0, -2.0, -1.0], [5.0, 6.0, 7.0]),
+        );
+        let packed = pack(&Scene::new(vec![face]));
+        let sphere = packed.faces[0];
+
+        assert_eq!(sphere.header[0], KIND_SPHERE);
+        assert_eq!(sphere.params0, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(sphere.params1[0..3], [0.0, 0.0, 1.0]);
+        assert!((sphere.params1[3] - TAU as f32).abs() < 1e-6, "u period");
+        assert_eq!(sphere.params2[0..3], [1.0, 0.0, 0.0]);
+        assert_eq!(sphere.header[3], 1, "one trim loop");
     }
 
     #[test]

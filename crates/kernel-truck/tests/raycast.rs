@@ -306,12 +306,12 @@ fn sphere_boolean_patches_are_analytic_and_exact() {
         let result = kernel.boolean(op, cube, sphere).expect("boolean");
         let scene = kernel.raycast_scene(result, 0.01).expect("scene");
 
-        let spline_faces = scene
+        let sphere_faces = scene
             .faces()
             .iter()
-            .filter(|face| matches!(face.surface, Some(brepscad_raycast::Surface::Spline(_))))
+            .filter(|face| matches!(face.surface, Some(brepscad_raycast::Surface::Sphere { .. })))
             .count();
-        assert_eq!(spline_faces, 4, "{op:?}: one spline per sphere quadrant");
+        assert_eq!(sphere_faces, 4, "{op:?}: one sphere per quadrant");
         assert!(
             scene.faces().iter().all(|face| face.surface.is_some()),
             "{op:?}: every face has an analytic surface"
@@ -365,7 +365,9 @@ fn sphere_boolean_patches_are_analytic_and_exact() {
     // Every quadrant of the cavity wall must face the same way; a flipped patch
     // shows up as a bright seam in the preview.
     for step in 0..16 {
-        let angle = std::f64::consts::TAU * step as f64 / 16.0;
+        // Offset from the quadrant seams: a ray exactly on a shared boundary is
+        // ambiguous for the even-odd trim test and may miss both faces.
+        let angle = std::f64::consts::TAU * (step as f64 + 0.13) / 16.0;
         let (sin, cos) = angle.sin_cos();
         let origin = [0.8 * cos, 0.8 * sin, 0.99];
         let ray = Ray::new(origin, [0.0, 0.0, -1.0]);
@@ -454,13 +456,13 @@ fn rounded_offset_scene_is_fully_analytic() {
 
     let mut planes = 0;
     let mut cylinders = 0;
-    let mut splines = 0;
+    let mut spheres = 0;
     let mut missing = 0;
     for face in scene.faces() {
         match &face.surface {
             Some(brepscad_raycast::Surface::Plane { .. }) => planes += 1,
             Some(brepscad_raycast::Surface::Cylinder { .. }) => cylinders += 1,
-            Some(brepscad_raycast::Surface::Spline(_)) => splines += 1,
+            Some(brepscad_raycast::Surface::Sphere { .. }) => spheres += 1,
             None => missing += 1,
             _ => {}
         }
@@ -468,7 +470,7 @@ fn rounded_offset_scene_is_fully_analytic() {
     assert_eq!(missing, 0, "every rounded-offset face is analytic");
     assert_eq!(planes, 6);
     assert_eq!(cylinders, 48);
-    assert_eq!(splines, 32);
+    assert_eq!(spheres, 32);
 
     // A corner octant is centred on the box corner; the ray along the diagonal
     // must hit the exact sphere, not a tessellated substitute.

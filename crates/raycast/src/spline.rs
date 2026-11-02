@@ -32,10 +32,8 @@ pub struct SplinePatch {
 
 /// Patches per knot span, in each direction.
 const PATCH_SUBDIVISIONS: usize = 2;
-/// Samples per patch side when bounding it.
-const PATCH_SAMPLES: usize = 3;
 /// Newton iterations per patch.
-const NEWTON_STEPS: usize = 24;
+const NEWTON_STEPS: usize = 16;
 
 impl SplineSurface {
     /// `knots_u` has `nu + degree_u + 1` entries, likewise for `v`.
@@ -201,12 +199,11 @@ impl SplineSurface {
     }
 
     pub(crate) fn intersect(&self, ray: &Ray, out: &mut Vec<SurfaceHit>) {
-        let (u_range, v_range) = self.parameter_range();
         for patch in &self.patches {
             let Some(entry) = slab_entry(patch, ray) else {
                 continue;
             };
-            let Some((u, v)) = self.solve(patch, ray, u_range, v_range) else {
+            let Some((u, v)) = self.solve(patch, ray) else {
                 continue;
             };
             let Some((point, normal)) = self.point_and_normal(u, v) else {
@@ -233,6 +230,8 @@ impl SplineSurface {
         let u_parts = (u_spans * PATCH_SUBDIVISIONS).max(1);
         let v_parts = (v_spans * PATCH_SUBDIVISIONS).max(1);
 
+        let count_u = self.knots_u.len() - self.degree_u - 1;
+        let count_v = self.knots_v.len() - self.degree_v - 1;
         let mut patches = Vec::new();
         for i in 0..u_parts {
             for j in 0..v_parts {
@@ -241,33 +240,51 @@ impl SplineSurface {
                 let v0 = lerp(v_range.0, v_range.1, j as f64 / v_parts as f64);
                 let v1 = lerp(v_range.0, v_range.1, (j + 1) as f64 / v_parts as f64);
 
+                // A B-spline patch lies in the convex hull of the control
+                // points whose basis functions are nonzero on its parameter
+                // range. That is a conservative bound with no sampling guess
+                // (and no arbitrary padding); it is what keeps a grazing ray
+                // from being culled while still rejecting most candidates.
+                let Some(u_span0) = find_span(&self.knots_u, self.degree_u, u0, count_u) else {
+                    continue;
+                };
+                let Some(u_span1) = find_span(&self.knots_u, self.degree_u, u1, count_u) else {
+                    continue;
+                };
+                let Some(v_span0) = find_span(&self.knots_v, self.degree_v, v0, count_v) else {
+                    continue;
+                };
+                let Some(v_span1) = find_span(&self.knots_v, self.degree_v, v1, count_v) else {
+                    continue;
+                };
+                let u_base = u_span0.saturating_sub(self.degree_u);
+                let v_base = v_span0.saturating_sub(self.degree_v);
+
                 let mut min = [f64::INFINITY; 3];
                 let mut max = [f64::NEG_INFINITY; 3];
-                for a in 0..=PATCH_SAMPLES {
-                    for b in 0..=PATCH_SAMPLES {
-                        let u = lerp(u0, u1, a as f64 / PATCH_SAMPLES as f64);
-                        let v = lerp(v0, v1, b as f64 / PATCH_SAMPLES as f64);
-                        let Some(point) = self.point(u, v) else {
+                for control_u in u_base..=u_span1 {
+                    for control_v in v_base..=v_span1 {
+                        let control = self.control[control_u * count_v + control_v];
+                        let weight = control[3];
+                        if weight.abs() <= 1.0e-12 {
                             continue;
-                        };
+                        }
                         for axis in 0..3 {
-                            min[axis] = min[axis].min(point[axis]);
-                            max[axis] = max[axis].max(point[axis]);
+                            let value = control[axis] / weight;
+                            min[axis] = min[axis].min(value);
+                            max[axis] = max[axis].max(value);
                         }
                     }
                 }
                 if !min[0].is_finite() {
                     continue;
                 }
-                // The samples bound the patch only approximately. A curved
-                // patch bulges away from its sampled corners by up to a
-                // quarter of its span, so keep a generous margin: a culling
-                // box that is too tight shows up as holes in the preview.
-                let pad = (0..3)
-                    .map(|axis| max[axis] - min[axis])
-                    .fold(0.0_f64, f64::max)
-                    * 0.25;
-                let pad = pad.max(1.0e-9);
+                // The hull is exact up to floating point, so this pad only
+                // covers rounding in the control-point division.
+                let scale = (0..3)
+                    .map(|axis| max[axis].abs().max(min[axis].abs()))
+                    .fold(1.0_f64, f64::max);
+                let pad = 1.0e-9 * scale;
                 for axis in 0..3 {
                     min[axis] -= pad;
                     max[axis] += pad;
@@ -284,13 +301,7 @@ impl SplineSurface {
     }
 
     /// Newton solve of `S(u, v) = origin + t·direction` inside one patch.
-    fn solve(
-        &self,
-        patch: &SplinePatch,
-        ray: &Ray,
-        u_range: (f64, f64),
-        v_range: (f64, f64),
-    ) -> Option<(f64, f64)> {
+    fn solve(&self, patch: &SplinePatch, ray: &Ray) -> Option<(f64, f64)> {
         // Two axes orthogonal to the ray turn the 3D hit into a 2D root find.
         let normal = perpendicular(ray.direction);
         let bitangent = cross(ray.direction, normal);
@@ -313,21 +324,13 @@ impl SplineSurface {
             }
             let du = (f * d - b * g) / determinant;
             let dv = (a * g - f * c) / determinant;
-            u = (u - du).clamp(u_range.0, u_range.1);
-            v = (v - dv).clamp(v_range.0, v_range.1);
+            u = (u - du).clamp(patch.u.0, patch.u.1);
+            v = (v - dv).clamp(patch.v.0, patch.v.1);
         }
         let (point, _, _) = self.frame(u, v)?;
         let gap = sub(point, ray.origin);
         let residual = dot(gap, normal).abs().max(dot(gap, bitangent).abs());
         (residual < 1.0e-6).then_some((u, v))
-    }
-
-    fn point(&self, u: f64, v: f64) -> Option<[f64; 3]> {
-        let (point, _, _) = self.frame(u, v)?;
-        if point.iter().any(|value| !value.is_finite()) {
-            return None;
-        }
-        Some(point)
     }
 
     fn point_and_normal(&self, u: f64, v: f64) -> Option<([f64; 3], [f64; 3])> {

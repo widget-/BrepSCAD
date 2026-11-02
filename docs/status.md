@@ -223,10 +223,12 @@ vendor/
   - axis-aligned bounds for solids and sketches
   - analytic ray casting: planes, surfaces of revolution of a straight line
     (cylinders, cones), tensor-product B-spline/NURBS patches and balls are all
-    exported as trimmed analytic faces. A revolution of a smooth curve
-    (spheres, tori, revolved profiles, hyperboloids) is converted to an exact
-    NURBS patch; the GPU tracer evaluates splines directly, so tessellation is
-    only a fallback for a patch whose degree exceeds its basis window.
+    exported as trimmed analytic faces. A revolution of a circular arc is an
+    oriented closed-form sphere; other smooth curves (tori, revolved profiles,
+    hyperboloids) become exact NURBS patches. Generic spline subpatches are
+    bounded by their control-point hulls and Newton is clamped to the subpatch;
+    the GPU tracer evaluates them directly, so tessellation is only a fallback
+    for a patch whose degree exceeds its basis window.
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed
@@ -328,6 +330,13 @@ vendor/
   The old 101×101 grid did the same by tie-breaking to its first sample. Without
   the rule the sphere patches were trimmed to half their area even though every
   search returned the correct 3D point.
+- The analytic preview prefers closed-form surfaces: a revolved circular arc is
+  an oriented sphere, and only genuinely freeform faces use the spline tracer.
+  Generic spline subpatches are bounded by their control-point hulls, and
+  Newton is clamped to the subpatch with a short iteration budget. Interactive
+  CAD normally uses adaptive deflection tessellation instead; a camera-aware
+  tessellation fallback remains available if exact tracing cannot meet
+  interactive rates.
 - `cylinder` revolves a rectangular profile about the axis instead of extruding
   a disk. The vertical edge becomes four analytic `Surface::RevolutedCurve`
   patches, the radial edges are rebuilt as planar caps from the side's own

@@ -636,6 +636,12 @@ Recommended pipeline:
 
 For a mesh kernel, "faces" are triangles. If face-level selection, fillets, or STEP are core, that is an argument for OCCT.
 
+### Analytic preview vs tessellation
+
+Interactive CAD viewers (OCCT `BRepMesh_IncrementalMesh`, Rhino `MeshingParameters`) tessellate with a linear and angular deflection and cache the result per face; they do not ray-trace NURBS per pixel for display. Hardware tessellation (DirectX/OpenGL hull/domain shaders) and dicing/micropolygonisation (RenderMan, Arnold) are the DCC/offline equivalents.
+
+Exact per-pixel NURBS ray tracing is only competitive with the standard acceleration: tight control-hull (or Bézier) patch bounds, a patch-level BVH, Newton seeded from the patch entry, patch-local clamping with an early-out, and a flat-patch fast path (PBRT-v4 §6.6). BrepSCAD keeps the analytic preview as the exact path: closed-form planes/cylinders/cones/spheres, oriented spheres for revolved arcs, and control-hull patch bounds with patch-local Newton for generic splines. If that cannot meet interactive rates, camera-aware adaptive tessellation is the fallback; a one-time fixed-resolution bake is just higher-poly tessellation and will facet again when zoomed.
+
 ## 9. UI toolkit options
 
 | Toolkit            | Model                  | wgpu viewport                         | Strengths                                                                                       | Weaknesses                                                                                                                           | CAD examples                      |
