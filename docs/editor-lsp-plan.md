@@ -1,7 +1,8 @@
 # Editor, LSP, and dependency-upgrade plan
 
 Last updated: 2026-11-02
-Status: proposed. No editor or LSP code exists yet. The viewer has since gained
+Status: Phase 0 (dependency upgrade) landed on main as `6727c7c`. Phases 1--6
+are proposed; no editor or LSP code exists yet. The viewer has since gained
 the analytic compute preview and render-on-demand, which Phase 0 must migrate
 and Phases 1--2 must not regress.
 
@@ -24,6 +25,11 @@ explicitly **not** part of this plan.
   `SyntaxError { message, offset }`.
 - `brepscad-eval` has a mostly string-only `EvalError` (about 75 construction
   sites) and no shared built-in metadata table.
+
+Phase 0 landed on main as `6727c7c`: eframe/egui 0.37, wgpu 30.0.1, rowan
+0.17 and workspace MSRV 1.95. The viewer migrated to `eframe::App::ui` and the
+unified `egui::Panel` API, both wgpu pipelines are on wgpu 30, and the
+headless first-frame and idle checks pass.
 
 ## Decisions in this plan
 
