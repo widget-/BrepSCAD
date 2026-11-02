@@ -24,6 +24,7 @@ crates/
   kernel-api/   Kernel trait, ShapeId, capabilities, neutral mesh
   kernel-truck/ Truck adapter: cuboid, cylinder, sphere, polyhedron, sketch, extrude, revolve
   scad-eval/    evaluator, parameter discovery, 2D profile CSG
+  scad-lsp/     stdio language server
   scad-syntax/  lossless CST, lexer, parser, and text edits
   viewer/       egui + wgpu viewer with source editor and orbit camera
 vendor/
@@ -130,16 +131,17 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 
 | Feature | Status | Notes |
 | --------- | -------- | ------- |
-| Source editor | ✔ | In-memory basic textbox. |
+| Source editor | ✔ | Rowan CST highlighting, diagnostics, completion, menus. |
 | Source tree | ✔ | Groups and selectable leaf primitives. |
 | UI parameter editing | ◐ | Numeric parameters only. |
 | Background evaluation | ✔ | |
 | Preview-based selection | ✔ | |
 | 2D profile CSG | ✔ | Via `clipper2-rust`. |
 | Alternate kernels | ✖ | Truck only; OCCT and SolidCore are candidates. |
-| File open/save | ✔ | Permanent buttons for now |
+| File open/save | ✔ | File menu and Ctrl+S; dirty prompts. |
+| Language server | ✔ | Optional `brepscad-lsp` client, local fallback. |
 | Export | ✖ | |
-| Undo/redo | ✖ | |
+| Undo/redo | ✔ | Editor-local. |
 | Persistence | ✖ | |
 
 ## GUI
@@ -148,10 +150,15 @@ Status: ✔ supported, ◐ partial, ✖ not implemented.
 cargo run -p brepscad-viewer
 ```
 
+The viewer uses `brepscad-lsp` when it is next to the viewer binary or on
+`PATH`; set `BREPSCAD_LSP` to choose another executable. The editor works
+without the server.
+
 ## Documentation
 
 - [`docs/status.md`](docs/status.md) — current capabilities, limitations, and next steps.
 - [`docs/development.md`](docs/development.md) — development helpers
+- [`docs/editor-lsp-plan.md`](docs/editor-lsp-plan.md) — editor, language-server, and dependency plan.
 - [`docs/research.md`](docs/research.md) — prior art, source-first architecture, kernel trade-offs, native library fast paths.
 - [`docs/kernels.md`](docs/kernels.md) — per-operation capability matrix for OCCT, SolidCore, and Truck.
 

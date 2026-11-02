@@ -10,7 +10,7 @@ The viewer normally needs a desktop session. To inspect its UI without opening
 a window on the desktop, render it on a virtual X display:
 
 ```sh
-cargo build -p brepscad-viewer
+cargo build -p brepscad-lsp -p brepscad-viewer
 scripts/screenshot-viewer.sh /tmp/viewer.png
 ```
 
@@ -39,6 +39,26 @@ so the screenshot helper exercises the viewer UI but not the file picker.
 The script does not need a window manager or a visible desktop. It picks a
 random free display number between `:100` and `:199`, so it can run alongside an
 existing X session.
+
+## Language server
+
+Build the standalone server with:
+
+```sh
+cargo build -p brepscad-lsp
+cargo test -p brepscad-lsp
+```
+
+`brepscad-lsp` speaks Content-Length JSON-RPC over stdin/stdout. It supports
+full document sync, diagnostics, completion, hover, definition, and document
+symbols, using `brepscad-syntax` and the shared built-in metadata in
+`brepscad-eval`; it never runs geometry evaluation.
+
+The viewer starts the server automatically when it finds `brepscad-lsp` next to
+the viewer binary or on `PATH`. Set `BREPSCAD_LSP` to use another executable.
+If the server is absent or exits, the editor keeps its local highlighting,
+diagnostics, and completion. External clients can launch `brepscad-lsp`
+directly on `.scad` files.
 
 ## SCAD corpus check
 

@@ -1,13 +1,59 @@
 # Editor, LSP, and dependency-upgrade plan
 
-Last updated: 2026-11-01
-Status: proposed. Nothing in this document is implemented yet.
+Last updated: 2026-11-03
+Status: Phases 0--6 have landed on `feature/editor-lsp`. The viewer has a
+rowan-backed editor, a menu bar and edit commands, structured diagnostics, a
+standalone `brepscad-lsp` server, and an optional in-app language-server
+client. The analytic preview and render-on-demand behavior remain in place.
+
+## Implementation status
+
+- Phase 0 (dependencies/toolchain): `6727c7c` on `main`.
+- Phase 1 (rowan editor and left-panel sections): `34df5c4`.
+- Phase 2 (menu bar, edit commands, file prompts): `202708b`.
+- Phase 3 (structured diagnostics and evaluator spans): `21c8611`.
+- Phase 4 (`brepscad-lsp`): `43878d8`.
+- Phase 5 (in-app client with local fallback): `5281809`.
+- Phase 6 (documentation, shortcuts, and polish): final commit on the branch.
+
+The v1 client and server use a small synchronous Content-Length JSON-RPC
+transport (`std::io` plus `serde_json`) instead of `async-lsp` and `tokio`.
+The plan left this open; the smaller transport avoids the `lsp-types` version
+conflict, keeps the server free of a runtime, and is covered by the protocol
+and handler tests. The protocol surface is limited to the features listed in
+Phase 4: diagnostics, completion, hover, definition, and document symbols.
+
+The in-app completion popup is a small custom `egui::Area` anchored at the
+cursor line rather than `egui::CompletionPopup`. The built-in popup anchors to
+the whole text widget and, in this layout, opened on focus/mouse events and
+captured arrow keys before the editor did. The replacement opens only after
+typing or Ctrl+Space, closes on mouse focus/selection, and keeps local/LSP
+candidates behind the same `Keyword`/`Function` metadata.
 
 This plan replaces the plain `egui::TextEdit` source pane with a rowan-backed
 editor, then adds a standalone `brepscad-lsp` server and, last, an in-app LSP
 client. It also schedules the dependency upgrade that should happen before the
 editor work starts. A future Floem switchover is described at the end but is
 explicitly **not** part of this plan.
+
+## Baseline before this plan (2026-11-02)
+
+- `crates/viewer` uses eframe 0.32.3 / wgpu 25.0.2. The workspace manifest says
+  `rust-version = "1.85"` while `rust-toolchain.toml` pins 1.95.
+- The source pane is still a plain `egui::TextEdit` in `app.rs`, and the left
+  panel is one `ScrollArea` containing source, error, shapes and properties.
+- The 3D view has two wgpu paths: the mesh rasteriser in `renderer.rs` and the
+  analytic compute preview in `analytic.rs`. `RedrawGate` redraws only when the
+  camera, target size, mesh, scene or analytic mode changes.
+- `brepscad-syntax` already provides the lossless CST, tolerant parser and
+  `SyntaxError { message, offset }`.
+- `brepscad-eval` has a mostly string-only `EvalError` (about 75 construction
+  sites) and no shared built-in metadata table.
+
+Phase 0 landed on main as `6727c7c`: eframe/egui 0.37, wgpu 30.0.1, rowan
+0.17 and workspace MSRV 1.95. The viewer migrated to `eframe::App::ui` and the
+unified `egui::Panel` API, both wgpu pipelines are on wgpu 30, and the
+headless first-frame and idle checks pass.
 
 ## Decisions in this plan
 
@@ -18,6 +64,9 @@ explicitly **not** part of this plan.
   Extract a crate only if it needs to be reused outside the viewer.
 - Reuse `brepscad-syntax` for highlighting and diagnostics rather than adding
   a second OpenSCAD parser or a keyword-list highlighter.
+- Use egui 0.37's built-in `CompletionPopup` for the popup, keyboard handling
+  and focus; keep candidate collection as a pure function. This is another
+  reason to take the Phase 0 bump before Phase 1.
 - Do not add `egui_code_editor`: its highlighting is keyword-driven and its
   completion is dictionary-based, so it would duplicate rather than use
   `brepscad-syntax`.
@@ -80,7 +129,8 @@ releases. The real changes are `eframe`, `egui`, `wgpu`, and possibly `rowan`.
 
 | Crate | Manifest | Locked | Target | Action |
 | --- | --- | --- | --- | --- |
-| Rust | 1.95.0 | 1.95.0 | 1.95.0 | Keep. This is exactly the eframe 0.37 MSRV. |
+| Rust toolchain | 1.95.0 | 1.95.0 | 1.95.0 | Keep; `rust-toolchain.toml` already pins it. This is exactly the eframe 0.37 MSRV. |
+| Workspace `rust-version` | 1.85 | 1.85 | 1.95 | Raise it to eframe 0.37's MSRV. |
 | `eframe` | 0.32 | 0.32.3 | 0.37.0 | Bump; brings `egui` 0.37. |
 | `wgpu` | 25 | 25.0.2 | 30.0.1 | Bump; API migration required. |
 | `rowan` | 0.16 | 0.16.1 | 0.17.0 | Bump if tests pass; skip 0.18 alphas. |
@@ -94,6 +144,11 @@ releases. The real changes are `eframe`, `egui`, `wgpu`, and possibly `rowan`.
 | `truck-shapeops` | 0.4 | 0.4.0 | 0.4.0 | No change; vendored patch stays. |
 | `clipper2-rust` | 1.2 | 1.2.0 | 1.2.0 | No change. |
 
+The toolchain is pinned but the manifest's MSRV is not: raise
+`[workspace.package] rust-version` to 1.95 (or override it in `crates/viewer`)
+before adding eframe 0.37; otherwise Cargo's MSRV check no longer describes the
+real minimum.
+
 Do not bump Rust to 1.98 unless the project adopts Floem or another dependency
 requires it. `eframe` 0.37 needs 1.95 and `wgpu` 30 needs 1.87.
 
@@ -101,12 +156,18 @@ After editing the manifests, run `cargo update` and review the lockfile diff.
 Keep unrelated dependency churn out of the version-bump change. egui 0.32 to
 0.37 may also change viewer widget APIs (for example scroll and viewport
 configuration); keep those edits mechanical and separate from the editor work.
+After the bump, compile-check the egui APIs this plan relies on
+(`CompletionPopup`, `TextEditState::undoer`, `MenuBar`,
+`ViewportCommand::CancelClose`, `TextEditOutput`) before starting Phase 1;
+0.32 and 0.37 differ in more than the version number.
 
 ### wgpu 25 -> 30 migration checklist
 
-The renderer is small (about 364 lines, 82 `wgpu::` references), so this is a
-bounded migration rather than a rewrite. The compile errors will find the rest;
-these are the changes already known from the wgpu changelog:
+The migration is still bounded, but no longer one file: `renderer.rs` is about
+560 lines with roughly 86 `wgpu::` references, and `analytic.rs` adds about 290
+lines with 60 more for the compute preview. Both use the same pipeline-layout
+and buffer APIs, so the compiler will find most of the rest. Known changes from
+the wgpu 30 changelog:
 
 - `PipelineLayoutDescriptor::bind_group_layouts` is now
   `&[Option<&BindGroupLayout>]`. Pass `&[Some(&bind_group_layout)]`.
@@ -117,10 +178,23 @@ these are the changes already known from the wgpu changelog:
   `None`.
 - `RenderPassColorAttachment` has a new `depth_slice: Option<u32>` field. Set
   `None`.
-- Recheck `DepthStencilState` and surface configuration against wgpu 30; no
-  semantic change is expected, but the compiler is the source of truth.
-- The WGSL shader has no integer varyings, so the new explicit
-  `@interpolate(flat)` requirement does not apply. Recheck after compiling.
+- `DepthStencilState::depth_write_enabled` and `depth_compare` are now
+  `Option`s: pass `Some(true)` and `Some(CompareFunction::Less)`. This is a
+  compile error, not just a recheck.
+- The analytic compute pipeline also builds a `PipelineLayoutDescriptor`, so it
+  needs the same `&[Some(&layout)]` and `immediate_size: 0` changes. Revalidate
+  both `shader.wgsl` and `preview.wgsl`.
+- Empty vertex/index buffers are a real case when evaluation fails or produces
+  no geometry. wgpu 30 still rejects zero-size buffer slices in bindings and
+  `set_vertex_buffer`/`set_index_buffer`; use a one-element placeholder or skip
+  the draw when the mesh is empty.
+- `eframe` owns the surface configuration; the new `SurfaceConfiguration`
+  `color_space` field is not our code. Recheck the eframe 0.37 feature list
+  (`default_fonts`, `wayland`, `wgpu`, `x11`) and make the direct `wgpu`
+  dependency match the version eframe re-exports.
+- The mesh shader has only float varyings and the compute shader has none, so
+  the new explicit `@interpolate(flat)` requirement does not apply. Recompile
+  both shaders anyway; naga validation is the source of truth.
 - `egui_wgpu::Renderer::register_native_texture` and
   `update_egui_texture_from_wgpu_texture` still exist in `egui-wgpu` 0.37, and
   `eframe::egui_wgpu` is still re-exported. The offscreen texture path should
@@ -133,6 +207,8 @@ these are the changes already known from the wgpu changelog:
 - `cargo test --workspace` passes.
 - The viewer builds and renders `assets/sample.scad` with the same framing,
   colors, and depth behavior as before.
+- The first frame still renders through the on-demand redraw gate, and idle CPU
+  stays near zero after that frame.
 - The corpus parse baseline is unchanged:
   `scripts/check-scad-corpus.sh --parse-only --baseline corpus/baseline-parse.tsv .corpus`.
 - The CLI smoke test still prints the expected mesh counts for
@@ -152,7 +228,7 @@ crates/viewer/src/editor/
   highlight.rs    rowan token stream -> egui::text::LayoutJob
   gutter.rs       line numbers, current line, diagnostic markers
   diagnostics.rs  parse errors -> underlined spans
-  completion.rs   context detection, candidates, popup
+  completion.rs   context detection and candidate suggestions
   keymap.rs       editor shortcuts and indentation commands
   theme.rs        token colors and editor metrics
 ```
@@ -184,14 +260,18 @@ headless screenshot script remains the visual smoke test.
 ### Gutter and current line
 
 - Replace the bare `TextEdit` with a `CodeEditor::show(ui, &mut source)` that
-  returns the same `TextEditOutput` information the completion and diagnostics
-  code needs.
+  wraps `CompletionPopup::show` and returns a small output exposing both the
+  `TextEditOutput` (gutter, cursor, response) and `accepted` (completion
+  insertion). A bare `TextEditOutput` is no longer enough once the popup is in
+  use.
 - Reserve a fixed-width gutter and paint line numbers using the `Galley` row
   positions from the `TextEditOutput`. This keeps the gutter aligned when a
   long line wraps, without synchronizing two scroll areas.
 - Paint the current line number in a brighter color.
 - Paint a small error marker in the gutter for each diagnostic row.
-- Keep the existing `ScrollArea` behavior and the Ctrl+Enter evaluate shortcut.
+- Give the editor its own `ScrollArea`; the surrounding sections get
+  independent scroll areas and resizable dividers (see "Left panel layout"
+  below). Keep the Ctrl+Enter evaluate shortcut.
 
 ### Diagnostics in the editor
 
@@ -217,17 +297,35 @@ headless screenshot script remains the visual smoke test.
   - snippets later; do not block v1 on them
 - Keep candidate collection as a pure function over `(source, cursor_byte)` so
   it can be unit-tested without egui.
-- Render the popup with `egui::Area` anchored to the cursor rectangle. Handle
-  Up/Down/Tab/Enter/Escape before `TextEdit` consumes them, and keep a small
-  `CompletionState` in the app.
-- Apply the chosen completion through the same `apply_edit` helper used by the
-  parameter panel, then restore the cursor through `TextEditState`.
-- If the cursor is in an unsupported context, show no popup rather than a
-  misleading list.
+- Use `egui::CompletionPopup` (new in egui 0.37) around the `TextEdit` inside
+  `CodeEditor`. Its `show` closure receives
+  `CompletionQuery { text, word, word_range }`; return `Suggestion`s from the
+  pure candidate function. The popup owns Up/Down/Tab/Enter/Escape, click
+  handling and focus, so do not hand-roll an `egui::Area` or key interception.
+  Verify the exact API against the 0.37 source after Phase 0.
+- Configure `CompletionPopup::word_boundary` for OpenSCAD identifiers (including
+  `$` and digit-leading names); the default word rules may be too narrow.
+- `CompletionPopup` already deletes `word_range` and inserts `accepted.insert`
+  into the `TextEdit` buffer, then restores the cursor. Do **not** apply it
+  again through `apply_edit`; that would double-insert. Use
+  `CompletionOutput.accepted` only to mark the document dirty, refresh the
+  parse/diagnostic caches, and notify the LSP.
+- The popup mutates the buffer after the `TextEdit` has run, so do not rely
+  only on `TextEditOutput.response.changed()` to notice a completion; check
+  `accepted.is_some()` as well. Verify that the insertion becomes exactly one
+  undo step; add an explicit transaction boundary if the popup's edit is not
+  captured by the undoer.
+- If the cursor is in an unsupported context, return an empty suggestion list
+  rather than a misleading popup.
 
 ### Editing behavior
 
 Keep v1 deliberately small:
+
+- Give the `TextEdit` and the completion popup one stable `Id` (for example
+  `ui.make_persistent_id("source_editor")`). `TextEditState`, undo and
+  `CompletionPopup` all store state under that id, so an auto-generated id
+  would lose them across layout changes.
 
 - Ctrl+Enter evaluates, as today.
 - Ctrl+S saves, as today.
@@ -237,6 +335,33 @@ Keep v1 deliberately small:
   compute the current line's leading whitespace from the CST or source text.
 - Bracket matching is optional in v1; a simple highlight of the matching
   `()[]{}` is enough if time allows.
+
+### Left panel layout
+
+The current left panel is one `ScrollArea` containing the source editor, the
+error label, the shape tree and the properties form. A long source file pushes
+an error or the properties out of reach, and the sections cannot be sized
+independently.
+
+Replace it with a vertical stack of resizable sections inside the existing
+`SidePanel::left("source")`:
+
+- Source editor (the `CodeEditor` above), with its own vertical scroll.
+- Error/diagnostics strip, with its own scroll. Keep it compact and visible;
+  do not put it after the shape tree.
+- Shape tree, with its own vertical scroll.
+- Properties form, with its own vertical scroll.
+
+Each section gets a draggable horizontal divider. Prefer nested
+`TopBottomPanel::show_inside` (resizable) or a small splitter helper over a
+single shared `ScrollArea`; the panel sizes live in egui memory (session-only
+for now). The 3D viewport stays in the central panel. Gutter, current-line and
+diagnostic painting stay inside the editor's own scroll area.
+
+Acceptance: each section scrolls independently; dragging a divider changes the
+space without moving the others' scroll offsets; an error is visible without
+scrolling past the source; window resize and the headless screenshot still lay
+out sanely.
 
 ### Phase 1 acceptance
 
@@ -249,12 +374,19 @@ Keep v1 deliberately small:
   equal the source), identifier classification, diagnostic range conversion,
   completion context detection, and indentation arithmetic.
 - The headless screenshot shows the new editor without layout regressions.
+- Source, diagnostics, shapes and properties each have their own scroll area
+  and resizable divider.
 
 ## Phase 2 --- application menu bar and edit commands
 
 The current top panel has two rows: a heading/Evaluate row and a row with
 permanent `Open…`, `Save`, and `Save As…` buttons. Replace the second row with a
 conventional menu bar and keep only the high-frequency actions in the toolbar.
+
+The viewer now renders on demand: the offscreen 3D texture is reused while the
+camera, size and scene are unchanged. Editor and menu actions that change the
+3D scene must invalidate that gate; source-only edits do not. Do not reintroduce
+an unconditional `ViewportCommand` or `request_repaint` in the update loop.
 
 ### Menu layout
 
@@ -310,13 +442,16 @@ Do not duplicate edit logic between the two. The action returns whether it
 changed the source; the app then updates `dirty`, diagnostics, and the
 parameter list exactly as it does for typing.
 
-- **Undo/Redo.** Use `TextEditState::undoer()` and the public `Undoer` methods
-  with the `(CCursorRange, String)` state. Read `has_undo` / `has_redo` for
-  enablement, call `undo` / `redo`, replace the source, set the cursor, and store
-  the state. `TextEdit` feeds the undoer each frame, so parameter-panel edits
-  should become undoable; note that the undoer is time-based, so a fresh edit
-  becomes an undo point after the stable interval. Verify grouping and add an
-  explicit transaction boundary only if needed.
+- **Undo/Redo.** `TextEditState::undoer()` returns a clone of the
+  `TextEditUndoer`, which is `Undoer<(CCursorRange, String)>`.
+  `has_undo`, `has_redo`, `undo` and `redo` all take the current
+  `&(CCursorRange, String)` state. Replace the source and cursor from the
+  returned state, then store the modified undoer back with
+  `TextEditState::set_undoer` and store the state. `TextEdit` feeds the undoer
+  each frame, so parameter-panel edits should become undoable; note that the
+  undoer is time-based, so a fresh edit becomes an undo point after the stable
+  interval. Verify grouping and add an explicit transaction boundary only if
+  needed.
 - **Select All.** Use `CCursorRange::select_all_str` through the stored
   `TextEditState`.
 - **Cut/Copy.** Read the selected char range from the editor state, convert to
@@ -389,8 +524,10 @@ This phase exists because the LSP server should publish ranges, not strings.
 
 ### Diagnostic type
 
-Add a small diagnostic type shared by the editor and the server. Prefer
-separate types in the crate that owns the information rather than a new crate:
+Add a small viewer/LSP-facing diagnostic type. `SyntaxError` and `EvalError`
+keep their own types and gain ranges; the editor and server map those into this
+type rather than making the syntax/eval crates depend on a UI type. Prefer that
+mapping over a new crate:
 
 ```rust
 pub enum Severity { Error, Warning, Info }
@@ -409,7 +546,8 @@ pub struct Diagnostic {
 
 ### Evaluator spans
 
-`EvalError` is currently a string-only enum with roughly 74 construction
+`EvalError` is currently mostly string-only (`BadArguments` also carries a
+module name, and `Kernel` wraps a `KernelError`) with about 75 construction
 sites. The preferred refactor is:
 
 1. Split the existing variants into `EvalErrorKind`.
@@ -420,6 +558,8 @@ sites. The preferred refactor is:
 4. Leave unimportant internal errors span-less rather than blocking the
    refactor.
 5. Keep `Display` output unchanged so CLI messages do not churn.
+6. Keep `impl From<KernelError> for EvalError` working so `?` at the kernel
+   boundary does not churn.
 
 Do this as a mechanical, test-backed refactor. Do not combine it with a parser
 change or a kernel change.
@@ -450,10 +590,17 @@ making the viewer heavier.
 
 Proposed dependencies:
 
-- `async-lsp` 0.2 (client and server framework over tower)
-- `lsp-types` 0.97
-- `lsp-textdocument` 0.5 (document store and incremental text changes)
-- `tokio` 1 with `rt-multi-thread`, `io-std`, `macros`, `sync`, and `time`
+- `async-lsp` 0.2.4 (client and server framework over tower; it pins
+  `lsp-types` 0.95)
+- `lsp-types` 0.95.0 (match `async-lsp`; do not add 0.97 alongside it). Prefer
+  `async_lsp`'s re-export if it has one; otherwise pin `=0.95.0` exactly.
+- start without `lsp-textdocument`: 0.5.0 depends on `lsp-types` 0.97, so it
+  would create a second, incompatible LSP type universe. A small in-house
+  `documents.rs` (`Uri -> version, text`) is enough while sync is FULL.
+  If incremental sync needs a library, find a version that resolves to
+  `lsp-types` 0.95 and check with `cargo tree -d`.
+- `tokio` 1 with `rt-multi-thread`, `io-std`, `io-util`, `macros`, `sync`, and
+  `time`; add `process` for the Phase 5 child-process client
 - `serde`, `serde_json`, `anyhow`, `thiserror`, `url`
 - `brepscad-syntax` and `brepscad-eval` (for built-ins and include resolution)
 
@@ -467,7 +614,7 @@ surface is unwanted.
 crates/scad-lsp/src/
   main.rs         stdio bootstrap and capability registration
   server.rs       async-lsp handlers and server state
-  documents.rs    URI -> (version, text); full sync first
+  documents.rs    URI -> (version, text); full sync first; in-house store
   positions.rs    UTF-16 Position <-> byte offset
   analysis.rs     declarations, scopes, include resolution
   diagnostics.rs  parse and static checks
@@ -675,6 +822,12 @@ copied rather than depended on.
   0.18 alphas.
 - **Incremental sync:** full sync first. Decide after the document store and
   position conversion are tested.
+- **LSP dependency triad:** `async-lsp` 0.2.4 pins `lsp-types` 0.95, while
+  `lsp-textdocument` 0.5.0 pins 0.97. Do not add both. Prefer the in-house
+  document store in v1, or prove a compatible trio with `cargo tree -d` first.
+- **Phase 0 landing:** land the dependency bump as its own commit/branch before
+  the editor work, then rebase `feature/editor-lsp`. Keep it out of editor
+  commits so it can merge to `main` independently.
 - **Formatting scope:** indentation only, or a full CST-based formatter?
   Deferred until after the LSP v1.
 

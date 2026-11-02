@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 bytemuck = { version = "1", features = ["derive"] }
 eframe = { version = "0.37", default-features = false, features = [
     "default_fonts",
@@ -16,6 +17,8 @@ eframe = { version = "0.37", default-features = false, features = [
 ] }
 glam = "0.34"
 rfd = "0.17"
+serde_json = "1"
+url = "2"
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 brepscad-kernel-api.workspace = true
 brepscad-kernel-truck.workspace = true

@@ -1,6 +1,7 @@
 //! Evaluator connecting the source tree to a kernel.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,7 +19,7 @@ use crate::parts::{Dimension, Node, collect_parts};
 use crate::profile;
 use crate::scope::{Declaration, Env};
 use crate::value::{FunctionValue, Value, binary_value, unary_value};
-use crate::{EvalError, bad_args};
+use crate::{EvalError, EvaluationFailure, bad_args};
 
 const SINGULAR_DETERMINANT: f64 = 1.0e-12;
 const FACETED_MAX: usize = 32;
@@ -169,7 +170,26 @@ pub fn evaluate_with_cache_options<K: Kernel>(
     options: EvaluationOptions,
     cache: &mut MeshCache,
 ) -> Result<Evaluation, EvalError> {
-    evaluate_with_context(source, None, kernel, options, cache)
+    evaluate_with_context(source, None, kernel, options, cache, None)
+}
+
+/// Like [`evaluate_with_cache_options`], but reports the source range that
+/// produced an evaluator error.
+pub fn evaluate_with_cache_options_diagnostics<K: Kernel>(
+    source: &str,
+    kernel: &mut K,
+    options: EvaluationOptions,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvaluationFailure> {
+    let mut failure = FailureSpan::default();
+    match evaluate_with_context(source, None, kernel, options, cache, Some(&mut failure)) {
+        Ok(evaluation) => Ok(evaluation),
+        Err(error) => Err(EvaluationFailure {
+            error,
+            range: failure.range,
+            source_path: failure.source_path,
+        }),
+    }
 }
 
 /// Parses and evaluates a source file, resolving `include` and `use` paths
@@ -212,7 +232,7 @@ pub fn evaluate_file_with_cache_options<K: Kernel>(
     let source = std::fs::read_to_string(&canonical).map_err(|error| {
         EvalError::Source(format!("failed to read {}: {error}", canonical.display()))
     })?;
-    evaluate_with_context(&source, Some(canonical), kernel, options, cache)
+    evaluate_with_context(&source, Some(canonical), kernel, options, cache, None)
 }
 
 /// Evaluates in-memory `source` with a file path supplying include/use context.
@@ -225,7 +245,36 @@ pub fn evaluate_source_with_path<K: Kernel>(
 ) -> Result<Evaluation, EvalError> {
     let path = source_path.as_ref();
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    evaluate_with_context(source, Some(canonical), kernel, options, cache)
+    evaluate_with_context(source, Some(canonical), kernel, options, cache, None)
+}
+
+/// Like [`evaluate_source_with_path`], but reports the source range that
+/// produced an evaluator error.
+pub fn evaluate_source_with_path_diagnostics<K: Kernel>(
+    source: &str,
+    source_path: impl AsRef<Path>,
+    kernel: &mut K,
+    options: EvaluationOptions,
+    cache: &mut MeshCache,
+) -> Result<Evaluation, EvaluationFailure> {
+    let path = source_path.as_ref();
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut failure = FailureSpan::default();
+    match evaluate_with_context(
+        source,
+        Some(canonical),
+        kernel,
+        options,
+        cache,
+        Some(&mut failure),
+    ) {
+        Ok(evaluation) => Ok(evaluation),
+        Err(error) => Err(EvaluationFailure {
+            error,
+            range: failure.range,
+            source_path: failure.source_path,
+        }),
+    }
 }
 
 fn evaluate_with_context<K: Kernel>(
@@ -234,9 +283,17 @@ fn evaluate_with_context<K: Kernel>(
     kernel: &mut K,
     options: EvaluationOptions,
     cache: &mut MeshCache,
+    mut failure: Option<&mut FailureSpan>,
 ) -> Result<Evaluation, EvalError> {
     let parsed = parse(source);
     if !parsed.errors().is_empty() {
+        if let Some(failure) = failure.as_mut() {
+            failure.range = parsed
+                .errors()
+                .first()
+                .map(|error| source_error_range(source, error.offset));
+            failure.source_path = source_path.clone();
+        }
         let messages = parsed
             .errors()
             .iter()
@@ -279,8 +336,19 @@ fn evaluate_with_context<K: Kernel>(
         messages: Vec::new(),
         call_depth: 0,
         call_stack: Vec::new(),
+        error_span: None,
+        error_source_path: None,
     };
-    let roots = evaluator.evaluate_source_tree(&parsed.syntax(), Transform::IDENTITY)?;
+    let roots = match evaluator.evaluate_source_tree(&parsed.syntax(), Transform::IDENTITY) {
+        Ok(roots) => roots,
+        Err(error) => {
+            if let Some(failure) = failure.as_mut() {
+                failure.range = evaluator.error_span.take();
+                failure.source_path = evaluator.error_source_path.take();
+            }
+            return Err(error);
+        }
+    };
     let messages = std::mem::take(&mut evaluator.messages);
     drop(evaluator);
 
@@ -369,6 +437,14 @@ struct Evaluator<'a, K: Kernel> {
     messages: Vec<String>,
     call_depth: usize,
     call_stack: Vec<String>,
+    error_span: Option<Range<usize>>,
+    error_source_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Default)]
+struct FailureSpan {
+    range: Option<Range<usize>>,
+    source_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -380,7 +456,8 @@ struct ChildrenFrame {
 
 impl<K: Kernel> Evaluator<'_, K> {
     fn statement(&mut self, node: SyntaxNode, parent: Transform) -> Result<Vec<Node>, EvalError> {
-        match node.kind() {
+        let range = text_range_to_range(node.text_range());
+        let result = match node.kind() {
             SyntaxKind::ASSIGNMENT => {
                 self.assignment(node)?;
                 Ok(Vec::new())
@@ -393,6 +470,29 @@ impl<K: Kernel> Evaluator<'_, K> {
             SyntaxKind::MODIFIER => self.modified_statement(node, parent),
             SyntaxKind::BLOCK => self.block(node, parent),
             _ => Ok(Vec::new()),
+        };
+        self.note_error_at(range, result)
+    }
+
+    fn note_error_at<T>(
+        &mut self,
+        range: Range<usize>,
+        result: Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
+        if result.is_err() && self.error_span.is_none() {
+            self.error_span = Some(range);
+            self.error_source_path = self.include_stack.last().cloned();
+        }
+        result
+    }
+
+    fn note_parse_error(&mut self, path: &Path, source: &str, parsed: &brepscad_syntax::Parse) {
+        if self.error_span.is_none() {
+            self.error_span = parsed
+                .errors()
+                .first()
+                .map(|error| source_error_range(source, error.offset));
+            self.error_source_path = Some(path.to_path_buf());
         }
     }
 
@@ -981,6 +1081,7 @@ impl<K: Kernel> Evaluator<'_, K> {
         })?;
         let parsed = parse(&source);
         if !parsed.errors().is_empty() {
+            self.note_parse_error(&path, &source, &parsed);
             return Err(parse_error(&path, &parsed));
         }
         let root = parsed.syntax();
@@ -1010,6 +1111,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             })?;
             let parsed = parse(&source);
             if !parsed.errors().is_empty() {
+                self.note_parse_error(&path, &source, &parsed);
                 return Err(parse_error(&path, &parsed));
             }
             let child = parsed.syntax();
@@ -1037,6 +1139,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             })?;
             let parsed = parse(&source);
             if !parsed.errors().is_empty() {
+                self.note_parse_error(&path, &source, &parsed);
                 return Err(parse_error(&path, &parsed));
             }
             let child = parsed.syntax();
@@ -1060,6 +1163,7 @@ impl<K: Kernel> Evaluator<'_, K> {
                     })?;
                     let parsed = parse(&source);
                     if !parsed.errors().is_empty() {
+                        self.note_parse_error(&path, &source, &parsed);
                         return Err(parse_error(&path, &parsed));
                     }
                     let child = parsed.syntax();
@@ -2530,7 +2634,8 @@ impl<K: Kernel> Evaluator<'_, K> {
     }
 
     fn element_value(&mut self, element: SyntaxElement) -> Result<Value, EvalError> {
-        match element {
+        let range = text_range_to_range(element.text_range());
+        let result = match element {
             NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::NUMBER => Ok(Value::Number(parse_number(token.text())?)),
                 SyntaxKind::TRUE => Ok(Value::Boolean(true)),
@@ -2543,7 +2648,8 @@ impl<K: Kernel> Evaluator<'_, K> {
                 ))),
             },
             NodeOrToken::Node(node) => self.node_value(&node),
-        }
+        };
+        self.note_error_at(range, result)
     }
 
     fn node_value(&mut self, node: &SyntaxNode) -> Result<Value, EvalError> {
@@ -3684,6 +3790,29 @@ fn function_literal_body(node: &SyntaxNode) -> Result<SyntaxElement, EvalError> 
     Err(EvalError::Expression(
         "missing function literal body".to_owned(),
     ))
+}
+
+fn source_error_range(source: &str, offset: usize) -> Range<usize> {
+    let len = source.len();
+    let mut start = offset.min(len);
+    while start > 0 && !source.is_char_boundary(start) {
+        start -= 1;
+    }
+    if start < len {
+        let end = source[start..]
+            .chars()
+            .next()
+            .map_or(start, |character| start + character.len_utf8());
+        start..end
+    } else if len > 0 {
+        let mut previous = len - 1;
+        while previous > 0 && !source.is_char_boundary(previous) {
+            previous -= 1;
+        }
+        previous..len
+    } else {
+        0..0
+    }
 }
 
 fn parse_error(path: &Path, parsed: &brepscad_syntax::Parse) -> EvalError {
