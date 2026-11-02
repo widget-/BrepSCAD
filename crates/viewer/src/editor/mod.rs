@@ -150,7 +150,9 @@ impl CodeEditor {
                 .layouter(&mut layouter)
                 .event_filter(EventFilter {
                     tab: true,
-                    ..Default::default()
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: self.completion.open,
                 });
             let text_output = text_edit.show(ui);
             gutter::paint(
