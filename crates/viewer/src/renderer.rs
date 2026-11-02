@@ -126,8 +126,8 @@ impl MeshRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -136,7 +136,7 @@ impl MeshRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::layout()],
+                buffers: &[Some(Vertex::layout())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -157,13 +157,13 @@ impl MeshRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -347,6 +347,7 @@ impl MeshRenderer {
         {
             let color_attachment = Some(wgpu::RenderPassColorAttachment {
                 view: &targets.color_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -373,13 +374,19 @@ impl MeshRenderer {
                 depth_stencil_attachment: depth_attachment,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+            // wgpu 30 still rejects zero-size buffers in vertex/index bindings;
+            // an evaluation error or empty model leaves nothing to draw.
+            if self.index_count > 0 {
+                render_pass.set_pipeline(&self.pipeline);
+                render_pass.set_bind_group(0, &self.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+            }
         }
 
         queue.submit(Some(encoder.finish()));

@@ -288,10 +288,8 @@ fn evaluate_with_context<K: Kernel>(
     let mut scenes = Vec::new();
     for root in roots {
         let mesh = kernel.tessellate(root.shape, tolerance)?;
-        if analytic_scene {
-            if let Some(scene) = kernel.raycast_scene(root.shape, tolerance) {
-                scenes.push(scene);
-            }
+        if analytic_scene && let Some(scene) = kernel.raycast_scene(root.shape, tolerance) {
+            scenes.push(scene);
         }
         let (parts, tree) = collect_parts(
             &root,
@@ -3080,10 +3078,10 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             match stage {
                 0 => {
-                    if let NodeOrToken::Node(child) = element {
-                        if child.kind() == SyntaxKind::NAMED_ARG {
-                            init.push(child);
-                        }
+                    if let NodeOrToken::Node(child) = element
+                        && child.kind() == SyntaxKind::NAMED_ARG
+                    {
+                        init.push(child);
                     }
                 }
                 1 => condition = Some(element),
@@ -3108,13 +3106,12 @@ impl<K: Kernel> Evaluator<'_, K> {
             }
             let mut iterations = 0usize;
             loop {
-                if let Some(condition) = &condition {
-                    if !evaluator
+                if let Some(condition) = &condition
+                    && !evaluator
                         .element_value(condition.clone())?
                         .as_boolean("for")?
-                    {
-                        break;
-                    }
+                {
+                    break;
                 }
                 values.extend(evaluator.comprehension_values(&body)?);
                 for assignment in &next {
@@ -3415,11 +3412,11 @@ impl<K: Kernel> Evaluator<'_, K> {
                 SyntaxKind::L_BRACK | SyntaxKind::R_BRACK | SyntaxKind::COMMA => {}
                 kind if kind.is_trivia() => {}
                 _ => {
-                    if let NodeOrToken::Node(child) = &element {
-                        if is_comprehension(child) {
-                            values.extend(self.comprehension_values(&element)?);
-                            continue;
-                        }
+                    if let NodeOrToken::Node(child) = &element
+                        && is_comprehension(child)
+                    {
+                        values.extend(self.comprehension_values(&element)?);
+                        continue;
                     }
                     values.push(self.element_value(element)?);
                 }
@@ -3965,13 +3962,13 @@ fn search_value(name: &str, args: &Arguments) -> Result<Value, EvalError> {
     } else {
         Some(0.0)
     };
-    if let Some(index_col) = index_col {
-        if index_col < 0.0 || index_col.fract() != 0.0 {
-            return Err(bad_args(
-                name,
-                "index column must be a non-negative integer",
-            ));
-        }
+    if let Some(index_col) = index_col
+        && (index_col < 0.0 || index_col.fract() != 0.0)
+    {
+        return Err(bad_args(
+            name,
+            "index column must be a non-negative integer",
+        ));
     }
     let index_col = index_col.map(|value| value as usize);
 

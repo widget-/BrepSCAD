@@ -16,10 +16,10 @@ pub(crate) fn nearest_triangle(mesh: &Mesh, origin: Vec3, direction: Vec3) -> Op
     let mut nearest: Option<(f32, usize)> = None;
 
     for (index, triangle) in mesh.indices.chunks_exact(3).enumerate() {
-        if let Some(distance) = ray_triangle(mesh, triangle, origin, direction) {
-            if nearest.is_none_or(|(best, _)| distance < best) {
-                nearest = Some((distance, index));
-            }
+        if let Some(distance) = ray_triangle(mesh, triangle, origin, direction)
+            && nearest.is_none_or(|(best, _)| distance < best)
+        {
+            nearest = Some((distance, index));
         }
     }
 

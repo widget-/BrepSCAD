@@ -144,10 +144,10 @@ impl TruckKernel {
     /// lines) are exported exactly; the rest are covered by their tessellation
     /// at `tolerance`.
     pub fn raycast_scene(&self, id: ShapeId, tolerance: f64) -> Option<brepscad_raycast::Scene> {
-        if let Some(radius) = self.ball_radius(id) {
-            if let Some(scene) = self.ball_scene(id, radius, tolerance) {
-                return Some(scene);
-            }
+        if let Some(radius) = self.ball_radius(id)
+            && let Some(scene) = self.ball_scene(id, radius, tolerance)
+        {
+            return Some(scene);
         }
         match self.shape(id).ok()? {
             OwnedShape::Solid(solid) => Some(raycast::scene_from_solid(solid, tolerance)),
@@ -290,10 +290,10 @@ impl TruckKernel {
         // shapeops can return an amputated result (coplanar face pairs get
         // classified as inside and dropped), which is worse than failing.
         for tolerance in BOOLEAN_TOLERANCES {
-            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
-                if op != BooleanOp::Union || union_covers(&result, &a, &b) {
-                    return Ok(self.insert(OwnedShape::Solid(result)));
-                }
+            if let Some(result) = attempt_boolean(op, &a, &b, tolerance)
+                && (op != BooleanOp::Union || union_covers(&result, &a, &b))
+            {
+                return Ok(self.insert(OwnedShape::Solid(result)));
             }
         }
 
@@ -480,10 +480,10 @@ impl Kernel for TruckKernel {
         }
         // A ball stays a ball through a rigid motion, and `minkowski` needs to
         // recognise it after a translate or rotate.
-        if let Some(radius) = self.balls.get(&source.0).copied() {
-            if (matrix.determinant().abs() - 1.0).abs() < 1.0e-9 {
-                self.balls.insert(result.0, radius);
-            }
+        if let Some(radius) = self.balls.get(&source.0).copied()
+            && (matrix.determinant().abs() - 1.0).abs() < 1.0e-9
+        {
+            self.balls.insert(result.0, radius);
         }
         Ok(result)
     }

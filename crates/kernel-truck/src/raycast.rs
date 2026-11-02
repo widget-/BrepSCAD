@@ -129,10 +129,10 @@ pub(crate) fn scene_from_solid(solid: &Solid, tolerance: f64) -> Scene {
         // Spline faces keep tessellated coverage as a fallback for a degree the
         // shader's fixed basis window cannot evaluate. Both casters use the
         // exact surface when they can.
-        if matches!(analytic.surface, Some(RaycastSurface::Spline(_))) {
-            if let Some(triangles) = tessellated_face(face, tolerance) {
-                analytic = analytic.with_triangles(triangles);
-            }
+        if matches!(analytic.surface, Some(RaycastSurface::Spline(_)))
+            && let Some(triangles) = tessellated_face(face, tolerance)
+        {
+            analytic = analytic.with_triangles(triangles);
         }
         faces.push(analytic);
     }
@@ -554,10 +554,11 @@ fn wire_loop(wire: &Wire, parameters: &Parameterization) -> Option<ProjectedLoop
 }
 
 fn push_distinct(polygon: &mut Vec<[f64; 2]>, uv: [f64; 2]) {
-    if let Some(last) = polygon.last() {
-        if (last[0] - uv[0]).abs() < 1.0e-9 && (last[1] - uv[1]).abs() < 1.0e-9 {
-            return;
-        }
+    if let Some(last) = polygon.last()
+        && (last[0] - uv[0]).abs() < 1.0e-9
+        && (last[1] - uv[1]).abs() < 1.0e-9
+    {
+        return;
     }
     polygon.push(uv);
 }

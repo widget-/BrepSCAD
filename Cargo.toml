@@ -14,12 +14,12 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "BSD-3-Clause"
 
 [workspace.dependencies]
 anyhow = "1"
-rowan = "0.16"
+rowan = "0.17"
 thiserror = "2"
 truck-meshalgo = { version = "0.4", default-features = false, features = ["analyzers", "tessellation"] }
 truck-modeling = "0.6"

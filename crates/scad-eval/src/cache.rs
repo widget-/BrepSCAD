@@ -82,10 +82,10 @@ impl MeshCache {
     }
 
     pub(crate) fn insert(&mut self, key: MeshKey, mesh: Mesh) {
-        if self.entries.len() >= MESH_CACHE_LIMIT {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            }
+        if self.entries.len() >= MESH_CACHE_LIMIT
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.entries.remove(&oldest);
         }
         self.order.push_back(key.clone());
         self.entries.insert(key, mesh);

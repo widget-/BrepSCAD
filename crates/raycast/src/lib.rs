@@ -163,10 +163,10 @@ impl Scene {
             let Some(entry) = bvh::slab_hit(&node.bounds, ray) else {
                 continue;
             };
-            if let Some(best) = best {
-                if entry >= best.distance {
-                    continue;
-                }
+            if let Some(best) = best
+                && entry >= best.distance
+            {
+                continue;
             }
             if !node.is_leaf() {
                 stack.push(node.left);
@@ -190,10 +190,10 @@ impl Scene {
                     if candidate.distance <= 0.0 {
                         continue;
                     }
-                    if let Some(best) = best {
-                        if candidate.distance >= best.distance {
-                            continue;
-                        }
+                    if let Some(best) = best
+                        && candidate.distance >= best.distance
+                    {
+                        continue;
                     }
                     if !face.trims.contains(candidate.uv) {
                         continue;

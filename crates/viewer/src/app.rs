@@ -175,22 +175,22 @@ impl ViewerApp {
                     && result.analytic_preview == self.analytic_preview;
 
                 if current {
-                    if result.error.is_none() {
-                        if let Some(render_state) = frame.wgpu_render_state() {
-                            let mesh = combine_evaluation(&result.evaluation);
-                            let (pick_mesh, pick_parts) = combine_parts(&result.evaluation);
-                            self.camera.fit(&mesh);
-                            self.renderer.set_mesh(&render_state.device, &mesh);
-                            self.renderer
-                                .set_scene(&render_state.device, result.evaluation.scene.as_ref());
-                            self.renderer.set_analytic(self.analytic_preview);
-                            self.mesh = mesh;
-                            self.pick_mesh = pick_mesh;
-                            self.pick_parts = pick_parts;
-                            self.evaluation = result.evaluation;
-                            self.selected_part = None;
-                            self.parameters.clear();
-                        }
+                    if result.error.is_none()
+                        && let Some(render_state) = frame.wgpu_render_state()
+                    {
+                        let mesh = combine_evaluation(&result.evaluation);
+                        let (pick_mesh, pick_parts) = combine_parts(&result.evaluation);
+                        self.camera.fit(&mesh);
+                        self.renderer.set_mesh(&render_state.device, &mesh);
+                        self.renderer
+                            .set_scene(&render_state.device, result.evaluation.scene.as_ref());
+                        self.renderer.set_analytic(self.analytic_preview);
+                        self.mesh = mesh;
+                        self.pick_mesh = pick_mesh;
+                        self.pick_parts = pick_parts;
+                        self.evaluation = result.evaluation;
+                        self.selected_part = None;
+                        self.parameters.clear();
                     }
                     self.error = result.error;
                 } else {
@@ -486,7 +486,8 @@ impl ViewerApp {
 }
 
 impl eframe::App for ViewerApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         if ctx.input(|input| input.key_pressed(egui::Key::Enter) && input.modifiers.command) {
             self.pending_evaluate = true;
         }
@@ -513,12 +514,12 @@ impl eframe::App for ViewerApp {
         }
 
         self.poll_file_dialog();
-        self.poll_evaluation(ctx, frame);
+        self.poll_evaluation(&ctx, frame);
         if self.pending_evaluate && self.evaluation_job.is_none() {
             self.start_evaluation();
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
+        egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("BrepSCAD");
                 ui.separator();
@@ -583,13 +584,13 @@ impl eframe::App for ViewerApp {
             });
         });
 
-        egui::SidePanel::left("source")
+        egui::Panel::left("source")
             .resizable(true)
-            .default_width(420.0)
-            .show(ctx, |ui| {
+            .default_size(420.0)
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .scroll_source(ScrollSource {
-                        drag: false,
+                        drag: egui::containers::scroll_area::DragScroll::Never,
                         ..ScrollSource::default()
                     })
                     .show(ui, |ui| {
@@ -620,7 +621,7 @@ impl eframe::App for ViewerApp {
                     });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let (rect, response) =
                 ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
             let aspect = rect.width() / rect.height().max(1.0);
@@ -637,14 +638,14 @@ impl eframe::App for ViewerApp {
                 }
             }
 
-            if response.clicked() {
-                if let Some(pointer) = response.interact_pointer_pos() {
-                    let ndc = Vec2::new(
-                        ((pointer.x - rect.left()) / rect.width()) * 2.0 - 1.0,
-                        1.0 - ((pointer.y - rect.top()) / rect.height()) * 2.0,
-                    );
-                    self.select_part(self.pick_part(ndc, aspect));
-                }
+            if response.clicked()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let ndc = Vec2::new(
+                    ((pointer.x - rect.left()) / rect.width()) * 2.0 - 1.0,
+                    1.0 - ((pointer.y - rect.top()) / rect.height()) * 2.0,
+                );
+                self.select_part(self.pick_part(ndc, aspect));
             }
 
             let pixels_per_point = ctx.pixels_per_point();
