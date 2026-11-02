@@ -26,6 +26,7 @@ crates/
   kernel-truck/ Truck B-rep adapter
   raycast/      analytic ray casting over trimmed B-rep faces
   scad-eval/    evaluator and operand/parameter provenance
+  scad-lsp/     stdio language server
   scad-syntax/  lossless rowan CST, lexer, parser, text edits
   viewer/       eframe/egui/wgpu viewer
 assets/
@@ -239,30 +240,43 @@ vendor/
 
 - eframe/egui UI with an offscreen wgpu render target registered as an egui
   texture.
-- Source editor + Evaluate button (Ctrl+Enter).
+- Rowan-backed source editor with CST syntax highlighting, line numbers, current
+  line, gutter error markers, parse/evaluator underlines, and completion.
+- Menu bar: File (new/open/save/save as/reload/quit), Edit (undo/redo, clipboard,
+  line comment, indent/outdent), View (fit/reset camera, centering and analytic
+  preview toggles), and Help (shortcuts/about). Destructive file actions prompt
+  when the buffer is dirty.
+- Source, diagnostics, shapes, and properties are separate resizable sections,
+  each with its own scroll area.
 - Evaluation runs on a worker thread; the UI stays responsive with a spinner,
   queues the latest request, and discards stale results.
 - Orbit camera: drag to orbit, scroll to zoom.
 - CPU ray picking against the analytic part scenes, with operand meshes as the
   fallback.
-- Analytic compute-shader preview (the top-bar checkbox) over the same packed
-  scene, including planes, cylinders, cones, balls and B-spline/NURBS patches.
+- Analytic compute-shader preview (View menu) over the same packed scene,
+  including planes, cylinders, cones, balls and B-spline/NURBS patches.
 - Render-on-demand: the offscreen view is redrawn only when the camera, window
   size, mesh, scene or analytic mode changes. The viewport title is sent only
   when it changes, because `send_viewport_cmd` requests a repaint.
 - Shapes panel showing the source-shaped tree of groups and leaf primitives.
   Clicking a leaf selects it, including cutters enclosed by other geometry.
 - Properties panel with drag-editable numeric parameters.
-- "Legacy OpenSCAD centering" checkbox in the top bar.
+- "Legacy OpenSCAD centering" is a View-menu checkbox; the analytic preview is
+  the adjacent View-menu checkbox.
 - Parameter edits apply on drag release, Enter, or focus loss.
 - Edits write back to the source, then re-evaluate.
 - Built-in sample: `assets/sample.scad`, shared by the CLI, viewer, and
   `hello_cube` example.
-- Native Open, Save, and Save As dialogs through `rfd`; Ctrl+S saves and
-  Ctrl+Shift+S saves as. The current path appears in the window title, and
-  modified source is marked with `*`.
+- Native open/save dialogs through `rfd`; File menu actions and Ctrl+S /
+  Ctrl+Shift+S. The current path appears in the toolbar and window title, and
+  modified source is marked in both.
 - Evaluation uses the editor text with the open file's path, so unsaved edits
   resolve relative includes and `use` statements.
+- Optional language-server client: if `brepscad-lsp` is next to the viewer, on
+  `PATH`, or named by `BREPSCAD_LSP`, the viewer sends full-sync changes and
+  merges server diagnostics, completion, F1 hover, and F12 definition with the
+  local editor. If the server is unavailable, local highlighting, diagnostics,
+  and completion remain active.
 
 - `scripts/screenshot-viewer.sh` captures the UI headlessly through Xvfb and
   ffmpeg, so verification does not open a window on the desktop.
@@ -520,8 +534,11 @@ For headless UI snapshots, see
     cycling between overlapping parts
 - Native file dialogs need a working desktop portal (or Zenity fallback) on
   Linux; headless Xvfb runs cannot open them.
-- No export, undo/redo, or session persistence. Source text is in memory until
-  saved.
+- No export or session persistence. Source text is in memory until saved.
+  Undo/redo is editor-local.
+- Language-server support is static analysis only: no formatting, rename, code
+  actions, or incremental sync. Included-file diagnostics are listed with their
+  own path, but the editor does not open them as tabs or underline them.
 - Included-file source ranges are not mapped back to editor tabs.
 - Truck transitive dependencies `nom 3.2.1` and `quick-xml 0.22.0` emit
   future-incompatibility warnings.
@@ -584,7 +601,8 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
    - Build the conformance harness before claiming capabilities.
 7. **Product surface**
    - Recent-file handling.
-   - Export, undo/redo, and session persistence.
+   - Export and session persistence.
+   - Find/replace and a command palette.
 8. **Selection polish**
    - Highlight selected operand.
    - Ghost or cycle overlapping parts.
@@ -602,4 +620,5 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
 - `docs/research.md` — prior art, source-first architecture, kernel trade-offs,
   native library fast paths.
 - `docs/kernels.md` — per-operation OCCT/SolidCore/Truck capability matrix.
+- `docs/editor-lsp-plan.md` — editor, language-server, and dependency plan.
 - `README.md` — current build/run instructions and supported subset.

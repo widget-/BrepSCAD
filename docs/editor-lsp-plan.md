@@ -1,10 +1,27 @@
 # Editor, LSP, and dependency-upgrade plan
 
-Last updated: 2026-11-02
-Status: Phase 0 (dependency upgrade) landed on main as `6727c7c`. Phases 1--6
-are proposed; no editor or LSP code exists yet. The viewer has since gained
-the analytic compute preview and render-on-demand, which Phase 0 must migrate
-and Phases 1--2 must not regress.
+Last updated: 2026-11-03
+Status: Phases 0--6 have landed on `feature/editor-lsp`. The viewer has a
+rowan-backed editor, a menu bar and edit commands, structured diagnostics, a
+standalone `brepscad-lsp` server, and an optional in-app language-server
+client. The analytic preview and render-on-demand behavior remain in place.
+
+## Implementation status
+
+- Phase 0 (dependencies/toolchain): `6727c7c` on `main`.
+- Phase 1 (rowan editor and left-panel sections): `34df5c4`.
+- Phase 2 (menu bar, edit commands, file prompts): `202708b`.
+- Phase 3 (structured diagnostics and evaluator spans): `21c8611`.
+- Phase 4 (`brepscad-lsp`): `43878d8`.
+- Phase 5 (in-app client with local fallback): `5281809`.
+- Phase 6 (documentation, shortcuts, and polish): final commit on the branch.
+
+The v1 client and server use a small synchronous Content-Length JSON-RPC
+transport (`std::io` plus `serde_json`) instead of `async-lsp` and `tokio`.
+The plan left this open; the smaller transport avoids the `lsp-types` version
+conflict, keeps the server free of a runtime, and is covered by the protocol
+and handler tests. The protocol surface is limited to the features listed in
+Phase 4: diagnostics, completion, hover, definition, and document symbols.
 
 This plan replaces the plain `egui::TextEdit` source pane with a rowan-backed
 editor, then adds a standalone `brepscad-lsp` server and, last, an in-app LSP
@@ -12,7 +29,7 @@ client. It also schedules the dependency upgrade that should happen before the
 editor work starts. A future Floem switchover is described at the end but is
 explicitly **not** part of this plan.
 
-## Current baseline (2026-11-02)
+## Baseline before this plan (2026-11-02)
 
 - `crates/viewer` uses eframe 0.32.3 / wgpu 25.0.2. The workspace manifest says
   `rust-version = "1.85"` while `rust-toolchain.toml` pins 1.95.

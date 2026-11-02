@@ -961,6 +961,7 @@ impl ViewerApp {
                         ("Ctrl+A", "Select all"),
                         ("Ctrl+/", "Toggle line comment"),
                         ("Tab / Shift+Tab", "Indent / Outdent"),
+                        ("F1 / F12", "Language server hover / definition"),
                     ] {
                         ui.horizontal(|ui| {
                             ui.monospace(keys);
@@ -981,6 +982,7 @@ impl ViewerApp {
                     ui.heading("BrepSCAD");
                     ui.label("A small OpenSCAD-compatible B-rep viewer and evaluator.");
                     ui.label("Editor: rowan CST highlighting, parse diagnostics, completion.");
+                    ui.label("Language server: stdio JSON-RPC with diagnostics, completion, hover and definition.");
                 });
             self.show_about = open;
         }
