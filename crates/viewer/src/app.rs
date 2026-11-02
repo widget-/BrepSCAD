@@ -4,8 +4,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use brepscad_eval::{
-    Evaluation, EvaluationOptions, MeshCache, TreeNode, evaluate_source_with_path,
-    evaluate_with_cache_options,
+    Evaluation, EvaluationOptions, MeshCache, TreeNode, evaluate_source_with_path_diagnostics,
+    evaluate_with_cache_options_diagnostics,
 };
 use brepscad_kernel_api::Mesh;
 use brepscad_kernel_truck::TruckKernel;
@@ -33,6 +33,7 @@ struct ParameterDraft {
 struct EvaluationResult {
     evaluation: Evaluation,
     error: Option<String>,
+    error_diagnostic: Option<Diagnostic>,
     cache: MeshCache,
     elapsed: Duration,
     source: String,
@@ -111,7 +112,8 @@ impl ViewerApp {
             .expect("the viewer requires the wgpu backend");
 
         let mut mesh_cache = MeshCache::new();
-        let (evaluation, error) = evaluate_source(SAMPLE, None, &mut mesh_cache, false, true);
+        let (evaluation, error, error_diagnostic) =
+            evaluate_source(SAMPLE, None, &mut mesh_cache, false, true);
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
@@ -121,7 +123,10 @@ impl ViewerApp {
         renderer.set_analytic(true);
 
         let source = SAMPLE.to_owned();
-        let diagnostics = editor::parse_diagnostics(&source, parse(&source).errors());
+        let mut diagnostics = editor::parse_diagnostics(&source, parse(&source).errors());
+        if let Some(diagnostic) = error_diagnostic {
+            diagnostics.push(diagnostic);
+        }
 
         Self {
             source,
@@ -169,7 +174,7 @@ impl ViewerApp {
 
         std::thread::spawn(move || {
             let started = Instant::now();
-            let (evaluation, error) = evaluate_source(
+            let (evaluation, error, error_diagnostic) = evaluate_source(
                 &source,
                 source_path.as_deref(),
                 &mut cache,
@@ -179,6 +184,7 @@ impl ViewerApp {
             let _ = sender.send(EvaluationResult {
                 evaluation,
                 error,
+                error_diagnostic,
                 cache,
                 elapsed: started.elapsed(),
                 source,
@@ -224,6 +230,10 @@ impl ViewerApp {
                         self.parameters.clear();
                     }
                     self.error = result.error;
+                    self.refresh_diagnostics();
+                    if let Some(diagnostic) = result.error_diagnostic {
+                        self.diagnostics.push(diagnostic);
+                    }
                 } else {
                     // The source or placement mode changed while this job ran.
                     self.pending_evaluate = true;
@@ -868,7 +878,12 @@ impl ViewerApp {
 
     fn diagnostics_ui(&mut self, ui: &mut egui::Ui) {
         let mut any = false;
-        if let Some(error) = &self.error {
+        if let Some(error) = &self.error
+            && !self
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message == *error)
+        {
             ui.colored_label(egui::Color32::RED, error);
             any = true;
         }
@@ -878,8 +893,11 @@ impl ViewerApp {
                 editor::Severity::Warning => egui::Color32::YELLOW,
                 editor::Severity::Info => egui::Color32::GRAY,
             };
-            let line = line_number(&self.source, diagnostic.range.start);
-            ui.colored_label(color, format!("line {line}: {}", diagnostic.message));
+            let location = match &diagnostic.source_path {
+                Some(path) => path.display().to_string(),
+                None => format!("line {}", line_number(&self.source, diagnostic.range.start)),
+            };
+            ui.colored_label(color, format!("{location}: {}", diagnostic.message));
             any = true;
         }
         if !any {
@@ -1221,7 +1239,7 @@ fn evaluate_source(
     cache: &mut MeshCache,
     legacy_centering: bool,
     analytic: bool,
-) -> (Evaluation, Option<String>) {
+) -> (Evaluation, Option<String>, Option<Diagnostic>) {
     let mut kernel = TruckKernel::new();
     let options = EvaluationOptions {
         tolerance: 0.01,
@@ -1229,20 +1247,35 @@ fn evaluate_source(
         library_paths: brepscad_eval::environment_library_paths(),
         analytic_scene: analytic,
     };
+    let current_path = source_path;
     let result = match source_path {
-        Some(path) => evaluate_source_with_path(source, path, &mut kernel, options, cache),
-        None => evaluate_with_cache_options(source, &mut kernel, options, cache),
+        Some(path) => {
+            evaluate_source_with_path_diagnostics(source, path, &mut kernel, options, cache)
+        }
+        None => evaluate_with_cache_options_diagnostics(source, &mut kernel, options, cache),
     };
     match result {
-        Ok(evaluation) => (evaluation, None),
-        Err(error) => (
-            Evaluation {
-                shapes: Vec::new(),
-                messages: Vec::new(),
-                scene: None,
-            },
-            Some(error.to_string()),
-        ),
+        Ok(evaluation) => (evaluation, None, None),
+        Err(failure) => {
+            let message = failure.error.to_string();
+            let diagnostic = editor::Diagnostic {
+                severity: editor::Severity::Error,
+                message: message.clone(),
+                range: failure.range.unwrap_or(0..0),
+                source_path: failure
+                    .source_path
+                    .filter(|path| Some(path.as_path()) != current_path),
+            };
+            (
+                Evaluation {
+                    shapes: Vec::new(),
+                    messages: Vec::new(),
+                    scene: None,
+                },
+                Some(message),
+                Some(diagnostic),
+            )
+        }
     }
 }
 
@@ -1296,7 +1329,7 @@ mod tests {
 
     #[test]
     fn built_in_sample_evaluates() {
-        let (evaluation, error) =
+        let (evaluation, error, _) =
             evaluate_source(SAMPLE, None, &mut MeshCache::default(), false, true);
         assert!(error.is_none(), "{error:?}");
         assert_eq!(evaluation.shapes.len(), 1);
@@ -1312,7 +1345,7 @@ mod tests {
         let main = dir.join("main.scad");
         std::fs::write(&main, "cube(99);\n").expect("write main");
 
-        let (evaluation, error) = evaluate_source(
+        let (evaluation, error, _) = evaluate_source(
             "include \"part.scad\";\n",
             Some(&main),
             &mut MeshCache::default(),

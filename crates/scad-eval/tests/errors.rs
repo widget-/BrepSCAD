@@ -1,6 +1,9 @@
 mod common;
 
-use brepscad_eval::{EvalError, evaluate_to_meshes};
+use brepscad_eval::{
+    EvalError, EvaluationOptions, MeshCache, evaluate_to_meshes,
+    evaluate_with_cache_options_diagnostics,
+};
 use brepscad_kernel_truck::TruckKernel;
 use common::bounds;
 
@@ -38,4 +41,32 @@ fn reports_parse_errors() {
     let error = evaluate_to_meshes("cube([2, 2;", &mut kernel, 0.01).expect_err("parse error");
 
     assert!(matches!(error, EvalError::Parse(_)));
+}
+
+#[test]
+fn diagnostic_errors_carry_source_ranges() {
+    let cases = [
+        ("cube(side = 2);\n", "cube(side = 2)"),
+        ("cube(unknown(1));\n", "unknown(1)"),
+        ("assert(false, \"boom\");\n", "assert(false, \"boom\")"),
+        ("cube([2, 2;\n", ";"),
+    ];
+
+    for (source, expected) in cases {
+        let mut kernel = TruckKernel::new();
+        let failure = evaluate_with_cache_options_diagnostics(
+            source,
+            &mut kernel,
+            EvaluationOptions::default(),
+            &mut MeshCache::default(),
+        )
+        .expect_err("source should fail");
+        let range = failure.range.expect("diagnostic range");
+        assert!(range.start < range.end, "empty range for {source:?}");
+        let text = source.get(range.clone()).expect("range on char boundary");
+        assert!(
+            text.contains(expected),
+            "range {range:?} = {text:?}, expected {expected:?}"
+        );
+    }
 }

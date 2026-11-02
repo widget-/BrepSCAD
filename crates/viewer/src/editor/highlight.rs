@@ -98,7 +98,9 @@ fn append_token(
         }
         let mut segment_format = format.clone();
         if diagnostics.iter().any(|diagnostic| {
-            diagnostic.range.start <= segment_start && segment_end <= diagnostic.range.end
+            diagnostic.source_path.is_none()
+                && diagnostic.range.start <= segment_start
+                && segment_end <= diagnostic.range.end
         }) {
             segment_format.underline = theme.error_underline();
         }

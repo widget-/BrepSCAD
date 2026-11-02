@@ -55,7 +55,9 @@ fn paint_lines(
 ) {
     let error_lines: Vec<usize> = diagnostics
         .iter()
-        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Error && diagnostic.source_path.is_none()
+        })
         .map(|diagnostic| diagnostics::line_index(source, diagnostic.range.start))
         .collect();
 
