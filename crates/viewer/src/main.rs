@@ -1,6 +1,7 @@
 mod analytic;
 mod app;
 mod camera;
+mod editor;
 mod mesh;
 mod picking;
 mod renderer;

@@ -9,12 +9,13 @@ use brepscad_eval::{
 };
 use brepscad_kernel_api::Mesh;
 use brepscad_kernel_truck::TruckKernel;
-use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit};
+use brepscad_syntax::{TextEdit, TextRange, TextSize, apply_edit, parse};
 use eframe::egui;
 use egui::containers::scroll_area::ScrollSource;
 use glam::{Vec2, Vec3};
 
 use crate::camera::Camera;
+use crate::editor::{self, CodeEditor, Diagnostic};
 use crate::mesh::{combine_evaluation, combine_parts};
 use crate::picking::{PickPart, nearest_scene, nearest_triangle};
 use crate::renderer::MeshRenderer;
@@ -72,6 +73,8 @@ pub(crate) struct ViewerApp {
     selected_part: Option<(usize, usize)>,
     parameters: Vec<ParameterDraft>,
     error: Option<String>,
+    editor: CodeEditor,
+    diagnostics: Vec<Diagnostic>,
     pending_evaluate: bool,
     evaluation_job: Option<EvaluationJob>,
     file_dialog: Option<Receiver<FileDialogResult>>,
@@ -98,8 +101,11 @@ impl ViewerApp {
         renderer.set_scene(&render_state.device, evaluation.scene.as_ref());
         renderer.set_analytic(true);
 
+        let source = SAMPLE.to_owned();
+        let diagnostics = editor::parse_diagnostics(&source, parse(&source).errors());
+
         Self {
-            source: SAMPLE.to_owned(),
+            source,
             current_path: None,
             dirty: false,
             evaluation,
@@ -114,6 +120,8 @@ impl ViewerApp {
             selected_part: None,
             parameters: Vec::new(),
             error,
+            editor: CodeEditor::new(),
+            diagnostics,
             pending_evaluate: false,
             evaluation_job: None,
             file_dialog: None,
@@ -253,10 +261,15 @@ impl ViewerApp {
                 self.dirty = true;
                 self.selected_part = None;
                 self.parameters.clear();
+                self.refresh_diagnostics();
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error.to_string()),
         }
+    }
+
+    fn refresh_diagnostics(&mut self) {
+        self.diagnostics = editor::parse_diagnostics(&self.source, parse(&self.source).errors());
     }
 
     fn start_file_dialog(&mut self, kind: FileDialogKind) {
@@ -327,6 +340,7 @@ impl ViewerApp {
                 self.selected_part = None;
                 self.parameters.clear();
                 self.error = None;
+                self.refresh_diagnostics();
                 self.pending_evaluate = true;
             }
             Err(error) => self.error = Some(error),
@@ -404,9 +418,31 @@ impl ViewerApp {
         best
     }
 
+    fn diagnostics_ui(&mut self, ui: &mut egui::Ui) {
+        let mut any = false;
+        if let Some(error) = &self.error {
+            ui.colored_label(egui::Color32::RED, error);
+            any = true;
+        }
+        for diagnostic in &self.diagnostics {
+            let color = match diagnostic.severity {
+                editor::Severity::Error => egui::Color32::RED,
+                editor::Severity::Warning => egui::Color32::YELLOW,
+                editor::Severity::Info => egui::Color32::GRAY,
+            };
+            let line = line_number(&self.source, diagnostic.range.start);
+            ui.colored_label(color, format!("line {line}: {}", diagnostic.message));
+            any = true;
+        }
+        if !any {
+            ui.weak("No diagnostics.");
+        }
+    }
+
     fn shapes_ui(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.heading("Shapes");
+        ui.label(format!("{} shape(s)", self.evaluation.shapes.len()));
+        ui.label(format!("{} triangles", self.mesh.triangle_count()));
+        ui.label(format!("{} vertices", self.mesh.positions.len()));
 
         if self.evaluation.shapes.is_empty() {
             ui.label("Evaluate the source to build a tree.");
@@ -431,9 +467,6 @@ impl ViewerApp {
     }
 
     fn properties_ui(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.heading("Properties");
-
         let Some((shape_index, part_index)) = self.selected_part else {
             ui.label("Click the model to select a part.");
             return;
@@ -586,39 +619,70 @@ impl eframe::App for ViewerApp {
 
         egui::Panel::left("source")
             .resizable(true)
-            .default_size(420.0)
+            .default_size(440.0)
             .show(ui, |ui| {
+                egui::Panel::top("source_section")
+                    .resizable(true)
+                    .default_size(320.0)
+                    .min_size(100.0)
+                    .show(ui, |ui| {
+                        ui.heading("Source");
+                        egui::ScrollArea::vertical()
+                            .id_salt("source_scroll")
+                            .scroll_source(ScrollSource {
+                                drag: egui::containers::scroll_area::DragScroll::Never,
+                                ..ScrollSource::default()
+                            })
+                            .show(ui, |ui| {
+                                let output =
+                                    self.editor.show(ui, &mut self.source, &self.diagnostics);
+                                if output.changed() {
+                                    self.dirty = true;
+                                    self.selected_part = None;
+                                    self.parameters.clear();
+                                    self.refresh_diagnostics();
+                                }
+                            });
+                    });
+
+                egui::Panel::top("diagnostics_section")
+                    .resizable(true)
+                    .default_size(100.0)
+                    .min_size(38.0)
+                    .show(ui, |ui| {
+                        ui.heading("Diagnostics");
+                        egui::ScrollArea::vertical()
+                            .id_salt("diagnostics_scroll")
+                            .scroll_source(ScrollSource {
+                                drag: egui::containers::scroll_area::DragScroll::Never,
+                                ..ScrollSource::default()
+                            })
+                            .show(ui, |ui| self.diagnostics_ui(ui));
+                    });
+
+                egui::Panel::top("shapes_section")
+                    .resizable(true)
+                    .default_size(220.0)
+                    .min_size(60.0)
+                    .show(ui, |ui| {
+                        ui.heading("Shapes");
+                        egui::ScrollArea::vertical()
+                            .id_salt("shapes_scroll")
+                            .scroll_source(ScrollSource {
+                                drag: egui::containers::scroll_area::DragScroll::Never,
+                                ..ScrollSource::default()
+                            })
+                            .show(ui, |ui| self.shapes_ui(ui));
+                    });
+
+                ui.heading("Properties");
                 egui::ScrollArea::vertical()
+                    .id_salt("properties_scroll")
                     .scroll_source(ScrollSource {
                         drag: egui::containers::scroll_area::DragScroll::Never,
                         ..ScrollSource::default()
                     })
-                    .show(ui, |ui| {
-                        ui.heading("Source");
-                        let source_response = ui.add(
-                            egui::TextEdit::multiline(&mut self.source)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(20),
-                        );
-                        if source_response.changed() {
-                            self.dirty = true;
-                            self.selected_part = None;
-                            self.parameters.clear();
-                        }
-
-                        if let Some(error) = &self.error {
-                            ui.colored_label(egui::Color32::RED, error);
-                        }
-
-                        ui.separator();
-                        ui.label(format!("{} shape(s)", self.evaluation.shapes.len()));
-                        ui.label(format!("{} triangles", self.mesh.triangle_count()));
-                        ui.label(format!("{} vertices", self.mesh.positions.len()));
-
-                        self.shapes_ui(ui);
-                        self.properties_ui(ui);
-                    });
+                    .show(ui, |ui| self.properties_ui(ui));
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
