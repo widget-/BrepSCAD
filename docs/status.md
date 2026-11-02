@@ -471,7 +471,9 @@ For headless UI snapshots, see
     non-convex Minkowski sums are not implemented
   - `minkowski` with a sphere is exact only for a box; the rounded offset's
     patches are built as revolution sectors and do not share topology, so its
-    display mesh has hairline cracks at the seams
+    display mesh has hairline cracks at the seams. The analytic preview traces
+    the plates, cylinder sectors and sphere octants exactly; the seam is a
+    display artifact, not faceting
   - evaluation stops at 256 nested scopes, so deeply recursive library code
     reports a call-depth error instead of overflowing the stack
 - `color` and `render` are accepted as pass-throughs; color is not rendered.

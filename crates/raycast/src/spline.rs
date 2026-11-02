@@ -171,8 +171,11 @@ impl SplineSurface {
             let radial = sub(relative, parallel);
             for &([cx, cy], circle_weight) in &circle {
                 let rotated = add(
-                    parallel,
-                    add(scale(radial, cx), scale(cross(axis, radial), cy)),
+                    origin,
+                    add(
+                        parallel,
+                        add(scale(radial, cx), scale(cross(axis, radial), cy)),
+                    ),
                 );
                 let weight = weight * circle_weight;
                 // Row-major in (u, v): one row per circle control point.
@@ -766,6 +769,47 @@ mod revolution_tests {
                 hit.normal
             );
         }
+    }
+
+    #[test]
+    fn revolution_keeps_the_axis_origin() {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let control = [
+            [2.0, 3.0, 3.0, 1.0],
+            [3.0 * s, 3.0 * s, 3.0 * s, s],
+            [3.0, 3.0, 4.0, 1.0],
+            [3.0 * s, 3.0 * s, 5.0 * s, s],
+            [2.0, 3.0, 5.0, 1.0],
+        ];
+        let surface = SplineSurface::from_revolution(
+            [2.0, 3.0, 4.0],
+            [0.0, 0.0, 1.0],
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            &control,
+        )
+        .expect("offset sphere of revolution");
+
+        let ray = Ray::new([2.5, 3.0, 7.0], [0.0, 0.0, -1.0]);
+        let mut hits = Vec::new();
+        surface.intersect(&ray, &mut hits);
+        let hit = hits
+            .iter()
+            .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap())
+            .expect("hit");
+        let expected = 7.0 - (4.0 + (1.0_f64 - 0.25).sqrt());
+        assert!(
+            (hit.distance - expected).abs() < 1e-6,
+            "distance {} expected {expected}",
+            hit.distance
+        );
+        let offset = [
+            hit.position[0] - 2.0,
+            hit.position[1] - 3.0,
+            hit.position[2] - 4.0,
+        ];
+        let radius = (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
+        assert!((radius - 1.0).abs() < 1e-6, "radius {radius}");
     }
 
     #[test]
