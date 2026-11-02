@@ -112,26 +112,22 @@ fn text_range(start: usize, end: usize) -> TextRange {
     TextRange::new(TextSize::from(start as u32), TextSize::from(end as u32))
 }
 
-fn shift_offset(point: usize, start: usize, end: usize, delta: isize) -> usize {
-    if end <= point || start < point {
-        point.saturating_add_signed(delta)
-    } else {
-        point
-    }
-}
-
-fn apply_edits(
-    source: &str,
-    mut selection: Range<usize>,
-    mut edits: Vec<TextEdit>,
-) -> LineEditResult {
-    for edit in &edits {
+fn shift_point(point: usize, edits: &[TextEdit]) -> usize {
+    let mut delta: isize = 0;
+    for edit in edits {
         let start = usize::from(edit.range.start());
         let end = usize::from(edit.range.end());
-        let delta = edit.replacement.len() as isize - (end - start) as isize;
-        selection.start = shift_offset(selection.start, start, end, delta);
-        selection.end = shift_offset(selection.end, start, end, delta);
+        let change = edit.replacement.len() as isize - (end - start) as isize;
+        if end <= point || start < point {
+            delta += change;
+        }
     }
+    point.saturating_add_signed(delta)
+}
+
+fn apply_edits(source: &str, selection: Range<usize>, mut edits: Vec<TextEdit>) -> LineEditResult {
+    let start = shift_point(selection.start, &edits);
+    let end = shift_point(selection.end, &edits);
 
     edits.sort_by_key(|edit| std::cmp::Reverse(usize::from(edit.range.start())));
     let mut result = source.to_owned();
@@ -141,7 +137,7 @@ fn apply_edits(
     let len = result.len();
     LineEditResult {
         source: result,
-        selection: selection.start.min(len)..selection.end.min(len),
+        selection: start.min(len)..end.min(len),
     }
 }
 
@@ -174,6 +170,15 @@ mod tests {
         let indented = indent_lines(source, 2..3, "  ");
         assert_eq!(indented.source, "a\n  b\nc");
         assert_eq!(outdent_lines(&indented.source, 0..7, "  ").source, source);
+    }
+
+    #[test]
+    fn indent_and_outdent_every_line_in_a_range() {
+        let source = "a\nb\nc\n";
+        let indented = indent_lines(source, 0..source.len(), "  ");
+        assert_eq!(indented.source, "  a\n  b\n  c\n");
+        let outdented = outdent_lines(&indented.source, 0..indented.source.len(), "  ");
+        assert_eq!(outdented.source, source);
     }
 
     #[test]

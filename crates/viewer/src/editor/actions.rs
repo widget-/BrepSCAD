@@ -284,4 +284,22 @@ mod tests {
         assert!(action(&ctx, &mut source, EditAction::ToggleLineComment));
         assert_eq!(source, "// cube(1);\n");
     }
+
+    #[test]
+    fn indent_and_outdent_actions_cover_selected_lines() {
+        let ctx = egui::Context::default();
+        let source = "a\nb\nc\n";
+        let mut state = TextEditState::default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(0),
+            CCursor::new(source.chars().count()),
+        )));
+        state.store(&ctx, editor_id());
+
+        let mut text = source.to_owned();
+        assert!(action(&ctx, &mut text, EditAction::Indent));
+        assert_eq!(text, "    a\n    b\n    c\n");
+        assert!(action(&ctx, &mut text, EditAction::Outdent));
+        assert_eq!(text, source);
+    }
 }

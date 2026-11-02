@@ -75,7 +75,11 @@ impl CodeEditor {
         external: Option<&[Candidate]>,
     ) -> EditorOutput {
         let id = editor_id();
+        if self.completion.open {
+            ui.ctx().memory_mut(|memory| memory.request_focus(id));
+        }
         let focused = ui.memory(|memory| memory.has_focus(id));
+        let shift = ui.input(|input| input.modifiers.shift);
         let tab_pressed = ui.input(|input| input.key_pressed(Key::Tab));
         let command_down = ui.input(|input| input.modifiers.command);
 
@@ -92,6 +96,25 @@ impl CodeEditor {
             self.completion.open = true;
             self.completion.selected = 0;
             self.completion.dismissed_word = None;
+        }
+
+        let mut line_action = None;
+        if focused && tab_pressed && (shift || !self.completion.open) {
+            let consumed = ui.input_mut(|input| {
+                if shift {
+                    input.consume_key(Modifiers::SHIFT, Key::Tab)
+                } else {
+                    input.consume_key(Modifiers::NONE, Key::Tab)
+                }
+            });
+            if consumed {
+                line_action = Some(if shift {
+                    EditAction::Outdent
+                } else {
+                    EditAction::Indent
+                });
+                self.completion.open = false;
+            }
         }
 
         let mut keys = PopupKeys::default();
@@ -142,6 +165,16 @@ impl CodeEditor {
         });
 
         let mut output = output.expect("the editor is shown exactly once");
+        let mut applied = false;
+        if let Some(action) = line_action
+            && edit_action(ui.ctx(), source, action)
+        {
+            applied = true;
+            self.completion.open = false;
+            if let Some(state) = TextEditState::load(ui.ctx(), id) {
+                output.cursor_range = state.cursor.char_range();
+            }
+        }
         let changed = output.response.response.changed();
         let focus_after = output.response.response.has_focus();
         let selection_empty = output.cursor_range.is_some_and(|range| range.is_empty());
@@ -179,7 +212,6 @@ impl CodeEditor {
             self.completion.open = false;
         }
 
-        let mut applied = false;
         if self.completion.open {
             let Some(cursor) = cursor else {
                 self.completion.open = false;
@@ -299,11 +331,13 @@ fn show_popup(
                     .max_height(max_height)
                     .show(ui, |ui| {
                         for (index, candidate) in candidates.iter().enumerate() {
+                            let row_width = (width - 16.0).max(160.0);
                             let button = egui::Button::new(candidate.label.clone())
                                 .shortcut_text(candidate.detail.clone())
+                                .truncate()
                                 .selected(index == selected)
-                                .min_size(egui::vec2(ui.available_width(), 0.0));
-                            let response = ui.add(button);
+                                .min_size(egui::vec2(row_width, 0.0));
+                            let response = ui.add(button).on_hover_text(&candidate.detail);
                             if index == selected && scroll_selected {
                                 response.scroll_to_me(None);
                             }
