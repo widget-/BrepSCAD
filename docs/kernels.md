@@ -45,12 +45,12 @@ Legend: **✓** supported; **~** partial / experimental / verify; **✗** not su
 | Fillet                                    | ✓    | ✓         | ✗ / ~                | ✓            | Upstream Truck has only experimental fillet work; the fork adds rolling-ball fillets |
 | Chamfer                                   | ✓    | ✓         | ?                    | ?            | Verify                                                                               |
 | Shell                                     | ✓    | ✓         | ?                    | ?            | Verify; scope says offset/shell                                                      |
-| Offset                                    | ✓    | ✓         | ~                    | ✓            | Fork has offset curves/surfaces                                                      |
+| Offset                                    | ✓    | ✓         | ~                    | ✓            | Fork has offset curves/surfaces; the BrepSCAD adapter offsets a box by a ball exactly |
 | Draft / thicken                           | ✓    | ?         | ?                    | ?            | Verify                                                                               |
 | NURBS curves/surfaces                     | ✓    | ✓         | ✓                    | ✓            |                                                                                      |
 | NURBS intersection / trimming             | ✓    | ✓         | ~                    | ~            | Verify                                                                               |
-| `hull`                                    | ✗    | ✗         | ✗                    | ✗            | Mesh-only; needs internal fallback                                                   |
-| `minkowski`                               | ✗    | ✗         | ✗                    | ✗            | Mesh-only; needs internal fallback                                                   |
+| `hull`                                    | ✗    | ✗         | ✗                    | ✗            | Adapter-side: hull of B-rep vertices, tessellating only curved children              |
+| `minkowski`                               | ✗    | ✗         | ✗                    | ✗            | Adapter-side: vertex sums for convex children; a centred sphere is an exact offset   |
 | Face / edge / vertex topology             | ✓    | ✓         | ✓                    | ✓            |                                                                                      |
 | Stable face/edge IDs across rebuild       | ~    | ?         | ~                    | ~            | Requires a naming/persistent-ID layer; verify                                        |
 | Mass properties                           | ✓    | ✓         | ?                    | ?            | Verify                                                                               |

@@ -37,6 +37,8 @@ docs/
   research.md   prior art, source-first architecture, kernel trade-offs
   kernels.md    OCCT / SolidCore / Truck capability matrix
   editor-lsp-plan.md editor and language-server plan
+examples/
+  offset-limits/ minimal scenes for the rounded offset's known limits
 scripts/
   fetch-scad-corpus.sh   fetch the pinned BOSL2 + MCAD corpus
   check-scad-corpus.sh   compatibility runs over a .scad tree
@@ -219,9 +221,10 @@ vendor/
     from the B-rep, so curved faces shade smoothly without mesh-derived
     smoothing
   - axis-aligned bounds for solids and sketches
-  - analytic ray casting: planes and surfaces of revolution of a straight line
-    (cylinders, cones) are exported as trimmed analytic faces, and B-spline or
-    NURBS faces are covered by their tessellation in the same scene
+  - analytic ray casting: planes, surfaces of revolution of a straight line
+    (cylinders, cones), tensor-product B-spline/NURBS patches and balls are all
+    exported as trimmed analytic faces. The GPU tracer covers planes,
+    cylinders, cones and spheres, and falls back to tessellation for splines
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed
@@ -350,11 +353,13 @@ vendor/
   starts it at `z = 0`; `center=true` forces centering even with the legacy
   option enabled.
 - Ray casting is a separate, backend-neutral layer. `brepscad-raycast` models
-  trimmed planes and revolved lines with trim loops in surface parameter space;
-  `TruckKernel::raycast_scene` classifies each face and covers any B-spline or
-  NURBS face with its tessellation. Cylinders are analytic because `cylinder`
-  now revolves a profile line instead of extruding a disk, which is what Truck
-  turns into a homotopy B-spline wall.
+  trimmed planes, revolved lines (cylinders, cones), tensor-product B-spline and
+  NURBS patches, and balls, all through trim loops in surface parameter space.
+  `TruckKernel::raycast_scene` classifies each face, exports B-spline and NURBS
+  faces as spline patches, and emits one exact `Surface::Sphere` for a shape it
+  knows is a ball. Cylinders are analytic because `cylinder` revolves a profile
+  line instead of extruding a disk, which is what Truck turns into a homotopy
+  B-spline wall.
 - Boolean results are tessellated at a display tolerance of at least `0.05`
   (`BOOLEAN_DISPLAY_TOLERANCE`), because master Truck can subdivide trimmed
   boolean surfaces pathologically at finer tolerances: a cylinder 0.01 taller
