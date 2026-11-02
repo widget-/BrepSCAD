@@ -200,6 +200,20 @@ pub trait Kernel {
     fn polyhedron(&self, _shape: ShapeId) -> Option<Polyhedron> {
         None
     }
+
+    /// `shape ⊕ ball(radius)`, for backends that can round a solid off.
+    fn offset(&mut self, _shape: ShapeId, _radius: f64) -> Result<ShapeId, KernelError> {
+        Err(KernelError::Unsupported("offset"))
+    }
+
+    /// The radius, when the shape is a ball.
+    ///
+    /// `minkowski` uses this to recognise the `solid ⊕ sphere` rounding idiom:
+    /// with the radius in hand it can offset the solid exactly instead of
+    /// summing sampled points.
+    fn ball_radius(&self, _shape: ShapeId) -> Option<f64> {
+        None
+    }
 }
 
 /// Version of the kernel-api crate.

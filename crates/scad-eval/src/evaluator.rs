@@ -2250,6 +2250,40 @@ impl<K: Kernel> Evaluator<'_, K> {
                         .primitive(Primitive::Polyhedron { points, faces })?
                 } else if children.len() == 1 {
                     children[0].shape
+                } else if let Some((index, radius)) =
+                    children.iter().enumerate().find_map(|(index, child)| {
+                        self.kernel
+                            .ball_radius(child.shape)
+                            .map(|radius| (index, radius))
+                    })
+                {
+                    // `solid ⊕ sphere` is the rounding idiom. Offsetting the
+                    // other child keeps every surface exact; summing sampled
+                    // points would only approximate the ball.
+                    if children.len() != 2 {
+                        return Err(bad_args(
+                            "minkowski",
+                            "needs exactly one sphere and one other solid",
+                        ));
+                    }
+                    let other = &children[1 - index];
+                    // `A ⊕ (ball + t)` is the rounded offset translated by `t`,
+                    // and the kernel builds it about the origin. Only the radius
+                    // travels with the shape, so a moved ball has to be refused
+                    // rather than quietly offset in the wrong place.
+                    let (min, max) = self.kernel.bounds(children[index].shape, self.tolerance)?;
+                    if (min[0] + max[0]).abs() > 1.0e-6
+                        || (min[1] + max[1]).abs() > 1.0e-6
+                        || (min[2] + max[2]).abs() > 1.0e-6
+                    {
+                        return Err(bad_args(
+                            "minkowski",
+                            "the sphere must be centred at the origin",
+                        ));
+                    }
+                    self.kernel.offset(other.shape, radius).map_err(|error| {
+                        bad_args("minkowski", format!("cannot offset that shape: {error}"))
+                    })?
                 } else {
                     // Convex polytopes need only their vertices, and taking them
                     // from the topology makes the sum exact instead of dependent

@@ -166,8 +166,10 @@ vendor/
   `translate` accepts 2D vectors and pads Z with zero. `rotate` accepts a
   number, an Euler vector, or `a=`/`v=` axis-angle. `multmatrix` accepts
   3x3, 3x4, 4x3, and 4x4 row-major matrices.
-- `hull` and `minkowski` for convex 3D children. Minkowski sums use the convex
-  hull of pairwise vertex sums; 2D and non-convex Minkowski are not supported.
+- `hull` and `minkowski` for convex 3D children. Minkowski sums take their
+  vertices from the B-rep rather than from tessellation, and `minkowski` with a
+  single centred `sphere(r)` is exact: it becomes a rounded offset of the other
+  child. 2D and non-convex Minkowski are not supported.
 - Nodes carry a 2D/3D dimension; transforms preserve it, booleans require 3D,
   and `linear_extrude` unions multiple 2D children into a solid.
 - `difference`, `union`, `intersection` on 3D solids and on 2D profiles.
@@ -432,6 +434,9 @@ For headless UI snapshots, see
   - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
   - `hull` and `minkowski` support convex 3D children only; 2D hulls and
     non-convex Minkowski sums are not implemented
+  - `minkowski` with a sphere is exact only for a box; the rounded offset's
+    patches are built as revolution sectors and do not share topology, so its
+    display mesh has hairline cracks at the seams
   - evaluation stops at 256 nested scopes, so deeply recursive library code
     reports a call-depth error instead of overflowing the stack
 - `color` and `render` are accepted as pass-throughs; color is not rendered.

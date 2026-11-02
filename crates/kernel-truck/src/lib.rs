@@ -3,6 +3,7 @@
 //! This first adapter covers the primitives, boolean operations, and
 //! tessellation needed by the walking-skeleton slice.
 
+mod offset;
 mod primitives;
 mod raycast;
 
@@ -107,6 +108,8 @@ enum OwnedShape {
 pub struct TruckKernel {
     shapes: Vec<OwnedShape>,
     boolean_shapes: std::collections::HashSet<u64>,
+    /// Radius of each shape that is a ball, so `minkowski` can recognise one.
+    balls: std::collections::HashMap<u64, f64>,
 }
 
 impl TruckKernel {
@@ -330,13 +333,21 @@ impl Kernel for TruckKernel {
     }
 
     fn primitive(&mut self, primitive: Primitive) -> KernelResult<ShapeId> {
+        let ball = match &primitive {
+            Primitive::Sphere { radius, .. } => Some(*radius),
+            _ => None,
+        };
         let shape = match primitive {
             Primitive::Cuboid { size } => cuboid(size)?,
             Primitive::Cylinder { radius, height } => cylinder(radius, height)?,
             Primitive::Sphere { radius, segments } => sphere(radius, segments)?,
             Primitive::Polyhedron { points, faces } => polyhedron(&points, &faces)?,
         };
-        Ok(self.insert(OwnedShape::Solid(shape)))
+        let id = self.insert(OwnedShape::Solid(shape));
+        if let Some(radius) = ball {
+            self.balls.insert(id.0, radius);
+        }
+        Ok(id)
     }
 
     fn sketch(&mut self, sketch: Sketch) -> KernelResult<ShapeId> {
@@ -406,6 +417,7 @@ impl Kernel for TruckKernel {
 
     fn transform(&mut self, shape: ShapeId, transform: Transform) -> KernelResult<ShapeId> {
         let inherited_boolean = self.boolean_shapes.contains(&shape.0);
+        let source = shape;
         let shape = self.shape(shape)?;
         let matrix = matrix4(transform);
         let transformed = match shape {
@@ -429,6 +441,13 @@ impl Kernel for TruckKernel {
         let result = self.insert(transformed);
         if inherited_boolean {
             self.boolean_shapes.insert(result.0);
+        }
+        // A ball stays a ball through a rigid motion, and `minkowski` needs to
+        // recognise it after a translate or rotate.
+        if let Some(radius) = self.balls.get(&source.0).copied() {
+            if (matrix.determinant().abs() - 1.0).abs() < 1.0e-9 {
+                self.balls.insert(result.0, radius);
+            }
         }
         Ok(result)
     }
@@ -476,6 +495,28 @@ impl Kernel for TruckKernel {
 
     fn polyhedron(&self, shape: ShapeId) -> Option<Polyhedron> {
         polyhedron_of(self.solid(shape).ok()?)
+    }
+
+    fn offset(&mut self, shape: ShapeId, radius: f64) -> KernelResult<ShapeId> {
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(KernelError::Backend(
+                "offset radius must be positive".to_owned(),
+            ));
+        }
+        let solid = self.solid(shape)?.clone();
+        let polyhedron = polyhedron_of(&solid).ok_or(KernelError::Unsupported(
+            "offset of a shape with curved faces",
+        ))?;
+        let rounded = offset::BoxShape::new(&polyhedron)
+            .and_then(|box_shape| box_shape.offset(radius))
+            .ok_or(KernelError::Unsupported(
+                "offset of a shape that is not a box",
+            ))?;
+        Ok(self.insert(OwnedShape::Solid(rounded)))
+    }
+
+    fn ball_radius(&self, shape: ShapeId) -> Option<f64> {
+        self.balls.get(&shape.0).copied()
     }
 }
 
@@ -1481,6 +1522,34 @@ mod tests {
         assert!(
             kernel.polyhedron(cylinder).is_none(),
             "curved faces have no polyhedron"
+        );
+    }
+
+    #[test]
+    fn offsets_a_box_and_rejects_curved_solids() {
+        let mut kernel = TruckKernel::new();
+        let cube = kernel
+            .primitive(Primitive::Cuboid {
+                size: [2.0, 2.0, 2.0],
+            })
+            .expect("cube");
+        let rounded = kernel.offset(cube, 0.5).expect("offset");
+        let mesh = kernel.tessellate(rounded, 0.02).expect("mesh");
+        let (min, max) = bounds(&mesh);
+        for axis in 0..3 {
+            assert!((min[axis] + 1.5).abs() < 0.02, "min = {min:?}");
+            assert!((max[axis] - 1.5).abs() < 0.02, "max = {max:?}");
+        }
+
+        let cylinder = kernel
+            .primitive(Primitive::Cylinder {
+                radius: 1.0,
+                height: 2.0,
+            })
+            .expect("cylinder");
+        assert!(
+            kernel.offset(cylinder, 0.5).is_err(),
+            "a cylinder is not a box, so it has no rounded offset yet"
         );
     }
 

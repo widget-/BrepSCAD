@@ -106,3 +106,45 @@ fn minkowski_with_a_curved_operand_still_sums() {
     assert!((extents[2] - 2.0).abs() < 0.05, "extents = {extents:?}");
     assert!(volume > 7.0, "volume = {volume}");
 }
+
+#[test]
+fn minkowski_with_a_sphere_rounds_the_other_child() {
+    let evaluation =
+        evaluate_source("minkowski() { cube([2, 2, 2], center = true); sphere(0.5); }");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let (min, max) = bounds(&evaluation.shapes[0].mesh);
+    for axis in 0..3 {
+        assert!((min[axis] + 1.5).abs() < 0.02, "min = {min:?}");
+        assert!((max[axis] - 1.5).abs() < 0.02, "max = {max:?}");
+    }
+}
+
+#[test]
+fn minkowski_rejects_a_moved_sphere() {
+    let mut kernel = TruckKernel::new();
+    let result = evaluate(
+        "minkowski() { cube([2, 2, 2], center = true); translate([3, 0, 0]) sphere(0.5); }",
+        &mut kernel,
+        0.01,
+    );
+    let error = match result {
+        Ok(_) => panic!("a moved ball cannot be offset in place"),
+        Err(error) => format!("{error}"),
+    };
+    assert!(error.contains("centred at the origin"), "{error}");
+}
+
+#[test]
+fn minkowski_needs_one_sphere_and_one_solid() {
+    let mut kernel = TruckKernel::new();
+    let result = evaluate(
+        "minkowski() { cube(1); cube(1); sphere(0.5); }",
+        &mut kernel,
+        0.01,
+    );
+    let error = match result {
+        Ok(_) => panic!("three operands cannot be offset"),
+        Err(error) => format!("{error}"),
+    };
+    assert!(error.contains("exactly one sphere"), "{error}");
+}
