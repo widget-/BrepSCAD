@@ -76,6 +76,9 @@ pub(crate) struct ViewerApp {
     evaluation_job: Option<EvaluationJob>,
     file_dialog: Option<Receiver<FileDialogResult>>,
     last_eval_ms: f64,
+    /// Avoid re-sending the viewport title every frame: `send_viewport_cmd`
+    /// requests a repaint, which would otherwise keep the event loop spinning.
+    last_title: Option<String>,
 }
 
 impl ViewerApp {
@@ -115,6 +118,7 @@ impl ViewerApp {
             evaluation_job: None,
             file_dialog: None,
             last_eval_ms: 0.0,
+            last_title: None,
         }
     }
 
@@ -498,11 +502,15 @@ impl eframe::App for ViewerApp {
             Some(path) => format!("BrepSCAD — {}", path.display()),
             None => "BrepSCAD — sample".to_owned(),
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(if self.dirty {
+        let title = if self.dirty {
             format!("{title} *")
         } else {
             title
-        }));
+        };
+        if self.last_title.as_deref() != Some(&title) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.last_title = Some(title);
+        }
 
         self.poll_file_dialog();
         self.poll_evaluation(ctx, frame);

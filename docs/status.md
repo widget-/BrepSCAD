@@ -247,6 +247,9 @@ vendor/
   fallback.
 - Analytic compute-shader preview (the top-bar checkbox) over the same packed
   scene, including planes, cylinders, cones, balls and B-spline/NURBS patches.
+- Render-on-demand: the offscreen view is redrawn only when the camera, window
+  size, mesh, scene or analytic mode changes. The viewport title is sent only
+  when it changes, because `send_viewport_cmd` requests a repaint.
 - Shapes panel showing the source-shaped tree of groups and leaf primitives.
   Clicking a leaf selects it, including cutters enclosed by other geometry.
 - Properties panel with drag-editable numeric parameters.

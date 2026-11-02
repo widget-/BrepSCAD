@@ -47,6 +47,48 @@ struct RenderTargets {
     size: [u32; 2],
 }
 
+/// Everything that changes the rendered image. The texture is reused while
+/// this stays equal, so an idle viewer costs only the egui composite.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ViewKey {
+    eye: Vec3,
+    target: Vec3,
+    fov_y: f32,
+    aspect: f32,
+    size: [u32; 2],
+}
+
+#[derive(Debug)]
+struct RedrawGate {
+    dirty: bool,
+    last: Option<ViewKey>,
+}
+
+impl RedrawGate {
+    fn new() -> Self {
+        Self {
+            dirty: true,
+            last: None,
+        }
+    }
+
+    fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Returns true when the image has to be rendered again, and records the
+    /// view it was rendered from.
+    fn should_render(&mut self, view: ViewKey) -> bool {
+        if self.dirty || self.last != Some(view) {
+            self.dirty = false;
+            self.last = Some(view);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub struct MeshRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -58,6 +100,7 @@ pub struct MeshRenderer {
     preview: ComputePreview,
     /// Draw with the compute ray tracer when the evaluation produced a scene.
     analytic: bool,
+    redraw: RedrawGate,
 }
 
 impl MeshRenderer {
@@ -158,17 +201,20 @@ impl MeshRenderer {
             targets: None,
             preview: ComputePreview::new(device),
             analytic: false,
+            redraw: RedrawGate::new(),
         }
     }
 
     /// Uploads the analytic scene used by the compute preview.
     pub fn set_scene(&mut self, device: &wgpu::Device, scene: Option<&brepscad_raycast::Scene>) {
         self.preview.set_scene(device, scene);
+        self.redraw.invalidate();
     }
 
     /// Turns the compute preview on or off; the mesh path is the fallback.
     pub fn set_analytic(&mut self, analytic: bool) {
         self.analytic = analytic;
+        self.redraw.invalidate();
     }
 
     pub fn set_mesh(&mut self, device: &wgpu::Device, mesh: &Mesh) {
@@ -176,6 +222,7 @@ impl MeshRenderer {
         self.vertex_buffer = create_vertex_buffer(device, &vertices);
         self.index_buffer = create_index_buffer(device, &indices);
         self.index_count = indices.len() as u32;
+        self.redraw.invalidate();
     }
 
     pub fn ensure_targets(
@@ -247,6 +294,7 @@ impl MeshRenderer {
             texture_id,
             size,
         });
+        self.redraw.invalidate();
     }
 
     pub fn render(
@@ -260,6 +308,16 @@ impl MeshRenderer {
             let targets = self.targets.as_ref().expect("ensure_targets first");
             (targets.size, targets.color_view.clone(), targets.texture_id)
         };
+        let view = ViewKey {
+            eye: camera.eye(),
+            target: camera.target,
+            fov_y: camera.fov_y,
+            aspect,
+            size,
+        };
+        if !self.redraw.should_render(view) {
+            return texture_id;
+        }
 
         if self.analytic && self.preview.has_scene() {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -450,6 +508,48 @@ mod tests {
         for vertex in &vertices {
             assert_eq!(vertex.normal, [0.0, 0.0, 1.0]);
         }
+    }
+
+    fn view_key(camera: &Camera, aspect: f32, size: [u32; 2]) -> ViewKey {
+        ViewKey {
+            eye: camera.eye(),
+            target: camera.target,
+            fov_y: camera.fov_y,
+            aspect,
+            size,
+        }
+    }
+
+    #[test]
+    fn redraw_gate_renders_only_when_the_view_changes() {
+        let camera = Camera::default();
+        let mut gate = RedrawGate::new();
+        let initial = view_key(&camera, 1.6, [1280, 800]);
+
+        assert!(gate.should_render(initial));
+        assert!(
+            !gate.should_render(initial),
+            "an idle view is not re-rendered"
+        );
+
+        let mut moved = camera.clone();
+        moved.orbit(glam::Vec2::new(5.0, 0.0));
+        assert!(
+            gate.should_render(view_key(&moved, 1.6, [1280, 800])),
+            "camera motion invalidates the image"
+        );
+
+        assert!(
+            gate.should_render(view_key(&moved, 1.6, [1024, 800])),
+            "a resize invalidates the image"
+        );
+        assert!(!gate.should_render(view_key(&moved, 1.6, [1024, 800])));
+
+        gate.invalidate();
+        assert!(
+            gate.should_render(view_key(&moved, 1.6, [1024, 800])),
+            "a new mesh or scene invalidates the image"
+        );
     }
 
     #[test]
