@@ -213,107 +213,26 @@ fn first_ident(node: &SyntaxNode) -> Option<String> {
 }
 
 fn collect_builtins(candidates: &mut Vec<Candidate>) {
-    for (name, detail) in BUILTINS {
+    for builtin in brepscad_eval::builtins::BUILTINS {
         candidates.push(Candidate {
-            insert: (*name).to_owned(),
-            label: (*name).to_owned(),
-            detail: (*detail).to_owned(),
+            insert: builtin.name.to_owned(),
+            label: builtin.name.to_owned(),
+            detail: builtin.signature.to_owned(),
             kind: CandidateKind::Builtin,
         });
     }
 }
 
 fn collect_specials(candidates: &mut Vec<Candidate>) {
-    for (name, detail) in [
-        ("$fn", "special variable: fragment count"),
-        ("$fa", "special variable: minimum angle"),
-        ("$fs", "special variable: minimum size"),
-        ("$t", "special variable: animation time"),
-        ("$children", "special variable: child count"),
-    ] {
+    for (name, detail) in brepscad_eval::builtins::SPECIAL_VARIABLES {
         candidates.push(Candidate {
-            insert: name.to_owned(),
-            label: name.to_owned(),
-            detail: detail.to_owned(),
+            insert: (*name).to_owned(),
+            label: (*name).to_owned(),
+            detail: (*detail).to_owned(),
             kind: CandidateKind::Special,
         });
     }
 }
-
-const BUILTINS: &[(&str, &str)] = &[
-    ("cube", "module: cube(size, center=false)"),
-    ("cylinder", "module: cylinder(h, r, ...)"),
-    ("sphere", "module: sphere(r)"),
-    ("polyhedron", "module: polyhedron(points, faces)"),
-    ("square", "module: square(size, center=false)"),
-    ("circle", "module: circle(r)"),
-    ("polygon", "module: polygon(points)"),
-    ("offset", "module: offset(r|delta)"),
-    ("linear_extrude", "module: linear_extrude(height, ...)"),
-    ("rotate_extrude", "module: rotate_extrude(angle=360)"),
-    ("resize", "module: resize(newsize)"),
-    ("translate", "module: translate(v)"),
-    ("rotate", "module: rotate(a)"),
-    ("scale", "module: scale(v)"),
-    ("multmatrix", "module: multmatrix(m)"),
-    ("mirror", "module: mirror(v)"),
-    ("difference", "module: difference()"),
-    ("union", "module: union()"),
-    ("intersection", "module: intersection()"),
-    ("hull", "module: hull()"),
-    ("minkowski", "module: minkowski()"),
-    ("color", "module: color(c)"),
-    ("render", "module: render()"),
-    ("children", "module: children()"),
-    ("let", "module: let(assignments)"),
-    ("echo", "module: echo(values)"),
-    ("assert", "module: assert(condition, message)"),
-    ("for", "module: for(variable = range)"),
-    ("if", "module: if(condition)"),
-    ("abs", "function: abs(x)"),
-    ("sign", "function: sign(x)"),
-    ("sqrt", "function: sqrt(x)"),
-    ("ln", "function: ln(x)"),
-    ("log", "function: log(x)"),
-    ("exp", "function: exp(x)"),
-    ("floor", "function: floor(x)"),
-    ("ceil", "function: ceil(x)"),
-    ("round", "function: round(x)"),
-    ("sin", "function: sin(angle)"),
-    ("cos", "function: cos(angle)"),
-    ("tan", "function: tan(angle)"),
-    ("asin", "function: asin(x)"),
-    ("acos", "function: acos(x)"),
-    ("atan", "function: atan(x)"),
-    ("sinh", "function: sinh(x)"),
-    ("cosh", "function: cosh(x)"),
-    ("tanh", "function: tanh(x)"),
-    ("asinh", "function: asinh(x)"),
-    ("acosh", "function: acosh(x)"),
-    ("atanh", "function: atanh(x)"),
-    ("pow", "function: pow(base, exponent)"),
-    ("min", "function: min(values...)"),
-    ("max", "function: max(values...)"),
-    ("norm", "function: norm(vector)"),
-    ("cross", "function: cross(a, b)"),
-    ("len", "function: len(value)"),
-    ("str", "function: str(values...)"),
-    ("chr", "function: chr(value)"),
-    ("ord", "function: ord(string)"),
-    ("concat", "function: concat(values...)"),
-    ("lookup", "function: lookup(key, table)"),
-    ("search", "function: search(match, string)"),
-    ("rands", "function: rands(min, max, count)"),
-    ("is_num", "function: is_num(value)"),
-    ("is_nan", "function: is_nan(value)"),
-    ("is_bool", "function: is_bool(value)"),
-    ("is_list", "function: is_list(value)"),
-    ("is_string", "function: is_string(value)"),
-    ("is_undef", "function: is_undef(value)"),
-    ("is_function", "function: is_function(value)"),
-    ("version", "function: version()"),
-    ("version_num", "function: version_num()"),
-];
 
 #[cfg(test)]
 mod tests {

@@ -14,6 +14,8 @@ mod profile;
 mod scope;
 mod value;
 
+pub mod builtins;
+
 use std::ops::Range;
 use std::path::PathBuf;
 
