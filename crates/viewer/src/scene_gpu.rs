@@ -13,6 +13,7 @@ pub(crate) const KIND_PLANE: u32 = 0;
 pub(crate) const KIND_CYLINDER: u32 = 1;
 pub(crate) const KIND_CONE: u32 = 2;
 pub(crate) const KIND_TRIANGLES: u32 = 3;
+pub(crate) const KIND_SPHERE: u32 = 4;
 
 /// One bounding-volume node; `meta` holds left, right, start, count.
 #[repr(C)]
@@ -143,6 +144,10 @@ fn pack_face(
             packed.params0 = point_and(apex, *half_angle_tan);
             packed.params1 = point_and(axis, TAU);
             packed.params2 = point_and(u_reference, 0.0);
+        }
+        Some(Surface::Sphere { centre, radius }) => {
+            packed.header[0] = KIND_SPHERE;
+            packed.params0 = point_and(centre, *radius);
         }
         // Spline faces have no GPU intersection yet, so they ride the
         // tessellated path like any other unmodelled surface.

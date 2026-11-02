@@ -292,13 +292,23 @@ vendor/
   `auto` parameter is not supported.
 - Truck is first because it is pure Rust, Apache-2.0, and needs no C++
   toolchain. OCCT is the likely C++ fallback; SolidCore is a watch item.
-- `$fn` below 33 builds a faceted B-rep with exactly that segment count;
-  `$fn` at 33 or above, or unset, uses analytic geometry where available.
+- `$fn` below 33 builds a faceted B-rep with exactly that segment count for
+  cylinders and 2D profiles; `$fn` at 33 or above, or unset, uses analytic
+  geometry where available. Spheres ignore `$fn` entirely — see below.
   `$fa`/`$fs` do not choose the geometry representation; they only sample
   2D profiles for CSG.
-- `sphere` is built as a faceted UV B-rep with shared edges and planar
-  triangles. Revolving a half-disc in Truck produced degenerate pole faces that
-  broke tessellation and booleans, so the faceted shell is used instead.
+- `sphere` ignores `$fn` and is built as a faceted UV B-rep with shared edges
+  and planar triangles, at a fixed 32×16. Nothing in the libraries checked uses
+  a low `$fn` on a sphere to build a polyhedron: BOSL2's code never passes a
+  literal below 16 and asks for facets through `spheroid(style = "icosa")`
+  instead, and the only low value in the corpus is MCAD's Braille dot
+  (`$fn = 8`, a render-cost shortcut). Revolving a meridian in Truck gives an
+  exact sphere, but booleans against it cost tens of seconds per attempt — a
+  cube minus a sphere went from instant to about 87 s — because shapeops meshes
+  each face and Newton-solves every intersection with a revolved B-spline arc.
+  The renderer sidesteps the facets: the kernel knows a shape is a ball and
+  `raycast_scene` emits one exact `Surface::Sphere`, so the preview and picking
+  are analytic even though the B-rep is not.
 - `cylinder` revolves a rectangular profile about the axis instead of extruding
   a disk. The vertical edge becomes four analytic `Surface::RevolutedCurve`
   patches, the radial edges are rebuilt as planar caps from the side's own
@@ -431,7 +441,8 @@ For headless UI snapshots, see
   - `rotate_extrude` requires `x >= 0`, ignores `convexity`, and has no
     negative-side profiles
   - `polyhedron` requires closed, consistently wound planar faces
-  - `sphere` is faceted; `$fn` selects coarse counts, default 32×16
+  - `sphere` ignores `$fn`: the B-rep is a fixed 32×16 polyhedron, and the
+    preview and picking trace the exact ball
   - `hull` and `minkowski` support convex 3D children only; 2D hulls and
     non-convex Minkowski sums are not implemented
   - `minkowski` with a sphere is exact only for a box; the rounded offset's

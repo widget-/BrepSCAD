@@ -1428,10 +1428,7 @@ impl<K: Kernel> Evaluator<'_, K> {
             "sphere" => {
                 args.ensure_known("sphere", &["r", "d"])?;
                 let radius = args.radius("sphere")?;
-                let segments = self.fn_segments(&args)?;
-                let shape = self
-                    .kernel
-                    .primitive(Primitive::Sphere { radius, segments })?;
+                let shape = self.kernel.primitive(Primitive::Sphere { radius })?;
                 let shape = self.apply_transform(shape, parent)?;
                 Ok(Node {
                     shape,

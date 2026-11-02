@@ -8,6 +8,7 @@ const KIND_PLANE: u32 = 0u;
 const KIND_CYLINDER: u32 = 1u;
 const KIND_CONE: u32 = 2u;
 const KIND_TRIANGLES: u32 = 3u;
+const KIND_SPHERE: u32 = 4u;
 
 const TAU: f32 = 6.283185307179586;
 const FAR: f32 = 1.0e30;
@@ -135,7 +136,50 @@ fn trace_face(face: GpuFace, origin: vec3<f32>, direction: vec3<f32>, limit: f32
     if (kind == KIND_PLANE) {
         return trace_plane(face, origin, direction, limit);
     }
+    if (kind == KIND_SPHERE) {
+        return trace_sphere(face, origin, direction, limit);
+    }
     return trace_revolved(face, origin, direction, limit, kind == KIND_CONE);
+}
+
+fn trace_sphere(
+    face: GpuFace,
+    origin: vec3<f32>,
+    direction: vec3<f32>,
+    limit: f32,
+) -> Candidate {
+    var result: Candidate;
+    result.valid = false;
+    result.distance = FAR;
+
+    let centre = face.params0.xyz;
+    let radius = face.params0.w;
+    let rest = origin - centre;
+    let a = dot(direction, direction);
+    let b = 2.0 * dot(rest, direction);
+    let c = dot(rest, rest) - radius * radius;
+    let roots = quadratic_roots(a, b, c);
+    for (var index = 0u; index < 2u; index += 1u) {
+        let distance = roots[index];
+        if (distance <= 1.0e-6 || distance >= result.distance || distance >= limit) {
+            continue;
+        }
+        let position = origin + direction * distance;
+        let normal = (position - centre) / radius;
+        // Same parameterisation as the CPU caster, so trim loops placed by
+        // either path land in the same space.
+        let u = fract(atan2(normal.y, normal.x) / TAU + 1.0) * TAU;
+        let v = acos(clamp(normal.z, -1.0, 1.0));
+        let uv = vec2<f32>(u, v);
+        if (!inside_trims(face, uv)) {
+            continue;
+        }
+        result.distance = distance;
+        result.uv = uv;
+        result.normal = orient(face, normal);
+        result.valid = true;
+    }
+    return result;
 }
 
 fn trace_plane(face: GpuFace, origin: vec3<f32>, direction: vec3<f32>, limit: f32) -> Candidate {

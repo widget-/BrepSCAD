@@ -432,20 +432,19 @@ const REVOLVE_DIVISION: usize = 4;
 const SPHERE_SEGMENTS: usize = 32;
 const SPHERE_RINGS: usize = 16;
 
-pub(crate) fn sphere(radius: f64, segments: Option<usize>) -> KernelResult<Solid> {
+pub(crate) fn sphere(radius: f64) -> KernelResult<Solid> {
     if radius <= 0.0 {
         return Err(KernelError::Backend(
             "sphere radius must be positive".to_owned(),
         ));
     }
 
-    let (segments, rings) = match segments {
-        Some(segments) => {
-            let segments = segments.max(3);
-            (segments, (segments / 2).max(3))
-        }
-        None => (SPHERE_SEGMENTS, SPHERE_RINGS),
-    };
+    // `$fn` is deliberately ignored. In every library checked (BOSL2, MCAD) it
+    // is a smoothness knob on spheres, never a request for a polyhedron —
+    // BOSL2 asks for facets through `spheroid(style = "icosa")` instead. The
+    // preview draws spheres analytically (see `raycast_scene`), so this facet
+    // count only decides how fine the B-rep is for booleans.
+    let (segments, rings) = (SPHERE_SEGMENTS, SPHERE_RINGS);
     let north = builder::vertex(Point3::new(0.0, 0.0, radius));
     let south = builder::vertex(Point3::new(0.0, 0.0, -radius));
 

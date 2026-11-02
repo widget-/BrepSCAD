@@ -83,12 +83,21 @@ fn fn_inherits_through_transform() {
 }
 
 #[test]
-fn fn_applies_to_spheres() {
+fn fn_does_not_change_spheres() {
+    // `$fn` on a sphere is a smoothness knob in the libraries we checked, never
+    // a request for a polyhedron, so it no longer reaches the geometry at all.
     let coarse = volume("sphere(r = 1, $fn = 8);");
     let default = volume("sphere(r = 1);");
+    let expected = 4.0 / 3.0 * std::f64::consts::PI;
 
-    assert!(coarse > 0.0, "coarse volume = {coarse}");
-    assert!(coarse < default, "coarse = {coarse}, default = {default}");
+    assert!(
+        (coarse - default).abs() < 1.0e-9,
+        "coarse = {coarse}, default = {default}"
+    );
+    assert!(
+        (default - expected).abs() < expected * 0.02,
+        "default volume = {default}"
+    );
 }
 
 #[test]

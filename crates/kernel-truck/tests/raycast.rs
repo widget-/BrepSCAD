@@ -251,3 +251,45 @@ fn spline_walls_are_extracted_and_match_the_mesh() {
         }
     }
 }
+
+#[test]
+fn sphere_scene_is_one_analytic_ball() {
+    let mut kernel = TruckKernel::new();
+    let sphere = kernel
+        .primitive(Primitive::Sphere { radius: 1.0 })
+        .expect("sphere");
+    let scene = kernel.raycast_scene(sphere, 0.05).expect("scene");
+    assert_eq!(
+        scene.faces().len(),
+        1,
+        "a ball is one exact sphere, not a patchwork"
+    );
+
+    let hit = scene
+        .cast(&Ray::new([0.0, 0.0, 5.0], [0.0, 0.0, -1.0]))
+        .expect("hit");
+    assert!(
+        (hit.distance - 4.0).abs() < 1.0e-6,
+        "distance = {}",
+        hit.distance
+    );
+    assert!(
+        (hit.normal[2] - 1.0).abs() < 1.0e-6,
+        "normal = {:?}",
+        hit.normal
+    );
+
+    // A moved ball traces its own centre rather than the origin.
+    let moved = kernel
+        .transform(sphere, Transform::from_translation([2.0, 0.0, 0.0]))
+        .expect("translate");
+    let scene = kernel.raycast_scene(moved, 0.05).expect("scene");
+    let hit = scene
+        .cast(&Ray::new([2.0, 0.0, 5.0], [0.0, 0.0, -1.0]))
+        .expect("hit");
+    assert!(
+        (hit.distance - 4.0).abs() < 1.0e-6,
+        "distance = {}",
+        hit.distance
+    );
+}

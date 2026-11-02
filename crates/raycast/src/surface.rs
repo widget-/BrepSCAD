@@ -53,6 +53,9 @@ pub enum Surface {
     },
     /// A tensor-product B-spline or NURBS patch.
     Spline(std::sync::Arc<SplineSurface>),
+    /// A sphere. `u` is the angle around the polar axis and `v` the polar
+    /// angle, so a whole sphere needs no trim loops.
+    Sphere { centre: [f64; 3], radius: f64 },
 }
 
 impl Surface {
@@ -60,6 +63,32 @@ impl Surface {
     pub(crate) fn intersect(&self, ray: &Ray, out: &mut Vec<SurfaceHit>) {
         match self {
             Surface::Spline(surface) => surface.intersect(ray, out),
+            Surface::Sphere { centre, radius } => {
+                let rest = sub(ray.origin, *centre);
+                let a = dot(ray.direction, ray.direction);
+                let b = 2.0 * dot(rest, ray.direction);
+                let c = dot(rest, rest) - radius * radius;
+                for t in quadratic_roots(a, b, c) {
+                    if t <= 0.0 {
+                        continue;
+                    }
+                    let position = along(ray.origin, ray.direction, t);
+                    let offset = sub(position, *centre);
+                    let length = norm(offset);
+                    if length < 1.0e-12 {
+                        continue;
+                    }
+                    let normal = scale(offset, 1.0 / length);
+                    let u = normal[1].atan2(normal[0]).rem_euclid(TAU);
+                    let v = normal[2].clamp(-1.0, 1.0).acos();
+                    out.push(SurfaceHit {
+                        distance: t,
+                        position,
+                        normal,
+                        uv: [u, v],
+                    });
+                }
+            }
             Surface::Plane {
                 origin,
                 normal,

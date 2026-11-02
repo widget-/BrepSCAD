@@ -22,7 +22,6 @@ pub enum Primitive {
     },
     Sphere {
         radius: f64,
-        segments: Option<usize>,
     },
     Polyhedron {
         points: Vec<[f64; 3]>,

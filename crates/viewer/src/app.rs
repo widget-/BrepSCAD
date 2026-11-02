@@ -92,6 +92,7 @@ impl ViewerApp {
         let mut camera = Camera::default();
         camera.fit(&mesh);
         let mut renderer = MeshRenderer::new(&render_state.device, &mesh);
+        renderer.set_scene(&render_state.device, evaluation.scene.as_ref());
         renderer.set_analytic(true);
 
         Self {

@@ -144,10 +144,41 @@ impl TruckKernel {
     /// lines) are exported exactly; the rest are covered by their tessellation
     /// at `tolerance`.
     pub fn raycast_scene(&self, id: ShapeId, tolerance: f64) -> Option<brepscad_raycast::Scene> {
+        if let Some(radius) = self.ball_radius(id) {
+            if let Some(scene) = self.ball_scene(id, radius, tolerance) {
+                return Some(scene);
+            }
+        }
         match self.shape(id).ok()? {
             OwnedShape::Solid(solid) => Some(raycast::scene_from_solid(solid, tolerance)),
             OwnedShape::Face(_) | OwnedShape::Faces(_) => None,
         }
+    }
+
+    /// One exact sphere, for a shape the kernel knows is a ball.
+    ///
+    /// The B-rep stays a faceted polyhedron, which is what keeps booleans fast,
+    /// but the preview and picking trace the exact ball, so the facets never
+    /// show.
+    fn ball_scene(
+        &self,
+        id: ShapeId,
+        radius: f64,
+        tolerance: f64,
+    ) -> Option<brepscad_raycast::Scene> {
+        let (min, max) = self.bounds(id, tolerance).ok()?;
+        let centre = [
+            (min[0] + max[0]) / 2.0,
+            (min[1] + max[1]) / 2.0,
+            (min[2] + max[2]) / 2.0,
+        ];
+        Some(brepscad_raycast::Scene::new(vec![
+            brepscad_raycast::Face::new(
+                brepscad_raycast::Surface::Sphere { centre, radius },
+                brepscad_raycast::TrimRegion::new(Vec::new()),
+                (min, max),
+            ),
+        ]))
     }
 
     fn faces(&self, id: ShapeId) -> KernelResult<&[Face]> {
@@ -334,13 +365,13 @@ impl Kernel for TruckKernel {
 
     fn primitive(&mut self, primitive: Primitive) -> KernelResult<ShapeId> {
         let ball = match &primitive {
-            Primitive::Sphere { radius, .. } => Some(*radius),
+            Primitive::Sphere { radius } => Some(*radius),
             _ => None,
         };
         let shape = match primitive {
             Primitive::Cuboid { size } => cuboid(size)?,
             Primitive::Cylinder { radius, height } => cylinder(radius, height)?,
-            Primitive::Sphere { radius, segments } => sphere(radius, segments)?,
+            Primitive::Sphere { radius } => sphere(radius)?,
             Primitive::Polyhedron { points, faces } => polyhedron(&points, &faces)?,
         };
         let id = self.insert(OwnedShape::Solid(shape));
@@ -992,10 +1023,7 @@ mod tests {
     fn sphere_is_centered_and_round() {
         let mut kernel = TruckKernel::new();
         let sphere = kernel
-            .primitive(Primitive::Sphere {
-                radius: 1.0,
-                segments: None,
-            })
+            .primitive(Primitive::Sphere { radius: 1.0 })
             .expect("sphere");
         let mesh = kernel.tessellate(sphere, 0.01).expect("tessellation");
 
@@ -1022,10 +1050,7 @@ mod tests {
             })
             .expect("cube");
         let sphere = kernel
-            .primitive(Primitive::Sphere {
-                radius: 1.2,
-                segments: None,
-            })
+            .primitive(Primitive::Sphere { radius: 1.2 })
             .expect("sphere");
         let result = kernel
             .boolean(BooleanOp::Difference, cube, sphere)
