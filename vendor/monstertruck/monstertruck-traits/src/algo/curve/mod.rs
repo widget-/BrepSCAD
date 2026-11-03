@@ -22,6 +22,56 @@ where
     res
 }
 
+/// Precomputed points for repeated [`presearch`] queries on the same curve.
+///
+/// Callers that probe one curve at many points can build this once and call
+/// [`hint`](Self::hint) per point. The hint is selected with the same sample
+/// parameters, evaluation order, and strict-`<` tie-break as [`presearch`], so
+/// replacing a no-hint search with `Some(hint)` is geometrically identical.
+#[derive(Clone, Debug)]
+pub struct PresearchSamples<P> {
+    samples: Vec<(f64, P)>,
+}
+
+impl<P> PresearchSamples<P>
+where P: MetricSpace<Metric = f64> + Copy
+{
+    /// Returns the presearch hint for `point`.
+    #[inline]
+    pub fn hint(&self, point: P) -> f64 {
+        let mut res = self.samples[0].0;
+        let mut min = f64::INFINITY;
+        for &(t, sample) in &self.samples {
+            let dist = sample.distance2(point);
+            if dist < min {
+                min = dist;
+                res = t;
+            }
+        }
+        res
+    }
+}
+
+/// Builds the reusable sample set for [`presearch`] over `range`.
+#[inline]
+pub fn presearch_samples<C>(
+    curve: &C,
+    range: (f64, f64),
+    division: usize,
+) -> PresearchSamples<C::Point>
+where
+    C: ParametricCurve,
+    C::Point: MetricSpace<Metric = f64> + Copy, {
+    let (t0, t1) = range;
+    let mut samples = Vec::with_capacity(division + 1);
+    for i in 0..=division {
+        let p = i as f64 / division as f64;
+        let t = t0 * (1.0 - p) + t1 * p;
+        samples.push((t, curve.evaluate(t)));
+    }
+    PresearchSamples { samples }
+}
+
 /// Searches the nearest parameter by Newton's method.
 pub fn search_nearest_parameter<C>(
     curve: &C,

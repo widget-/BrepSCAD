@@ -37,7 +37,11 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, ops::Bound};
 
 const INCLUDE_CURVE_TRIALS: usize = 100;
-const PRESEARCH_DIVISION: usize = 50;
+/// Default number of subdivisions used by the curve and surface presearch scans.
+///
+/// PATCH(BrepSCAD): exposed so cache-aware callers can precompute exactly the
+/// same samples as [`nurbs`] search without duplicating the constant.
+pub const PRESEARCH_DIVISION: usize = 50;
 
 /// re-export `monstertruck_core`
 pub mod base {

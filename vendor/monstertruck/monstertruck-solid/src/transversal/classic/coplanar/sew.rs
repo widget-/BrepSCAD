@@ -1,9 +1,11 @@
 //! Merging the coincident vertices and edges two boolean operands leave behind.
 
 use super::super::super::integrate::{ShapeOpsCurve, ShapeOpsSurface};
+use monstertruck_geometry::PRESEARCH_DIVISION;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::compress::{CompressedEdge, CompressedEdgeIndex, CompressedShell};
 use monstertruck_topology::*;
+use monstertruck_traits::algo::curve::{PresearchSamples, presearch_samples};
 use std::collections::HashSet;
 
 pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -59,29 +61,42 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         curve.subs((t0 + t1) / 2.0)
     };
     let mut edges: Vec<CompressedEdge<C>> = Vec::new();
+    let mut caches: Vec<Option<PresearchSamples<Point3>>> = Vec::new();
     let edge_map: Vec<(usize, bool)> = compressed
         .edges
         .iter()
         .map(|edge| {
             let (a, b) = edge.vertices;
             let m = middle(&edge.curve);
-            edges
-                .iter()
-                .position(|known| {
-                    (known.vertices == (a, b) || known.vertices == (b, a))
-                        && known
-                            .curve
-                            .search_nearest_parameter(m, None, 30)
-                            .is_some_and(|t| known.curve.subs(t).distance(m) < tol)
-                })
-                .map(|k| (k, edges[k].vertices == (a, b)))
-                .unwrap_or_else(|| {
+            let mut found = None;
+            for (k, known) in edges.iter().enumerate() {
+                if known.vertices != (a, b) && known.vertices != (b, a) {
+                    continue;
+                }
+                let samples = caches[k].get_or_insert_with(|| {
+                    presearch_samples(&known.curve, known.curve.range_tuple(), PRESEARCH_DIVISION)
+                });
+                let hint = samples.hint(m);
+                if known
+                    .curve
+                    .search_nearest_parameter(m, Some(hint), 30)
+                    .is_some_and(|t| known.curve.subs(t).distance(m) < tol)
+                {
+                    found = Some((k, known.vertices == (a, b)));
+                    break;
+                }
+            }
+            match found {
+                Some(index) => index,
+                None => {
                     edges.push(CompressedEdge {
                         vertices: (a, b),
                         curve: edge.curve.clone(),
                     });
+                    caches.push(None);
                     (edges.len() - 1, true)
-                })
+                }
+            }
         })
         .collect();
     for face in &mut compressed.faces {
@@ -132,12 +147,14 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             let (a, b) = edge.vertices;
             let (t0, t1) = edge.curve.range_tuple();
             let margin = (t1 - t0) * 1.0e-9;
+            let samples = presearch_samples(&edge.curve, (t0, t1), PRESEARCH_DIVISION);
             for &vertex in &boundary_vertices {
                 if vertex == a || vertex == b {
                     continue;
                 }
                 let point = compressed.vertices[vertex];
-                let Some(t) = edge.curve.search_nearest_parameter(point, None, 30) else {
+                let hint = samples.hint(point);
+                let Some(t) = edge.curve.search_nearest_parameter(point, Some(hint), 30) else {
                     continue;
                 };
                 if edge.curve.subs(t).distance(point) > tol {
