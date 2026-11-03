@@ -1,0 +1,29 @@
+[package]
+name = "monstertruck-topology"
+version = "0.4.1"
+authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Topological data structures: vertices, edges, wires, faces, shells, and solids"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+keywords = ["truck", "graphics"]
+categories = ["graphics"]
+
+[features]
+default = ["rclite"]
+nightly = ["parking_lot/nightly"]
+rkyv = ["dep:rkyv", "monstertruck-core/rkyv"]
+
+[dependencies]
+parking_lot = { workspace = true }
+rayon = { workspace = true }
+rclite = { workspace = true, optional = true }
+rkyv = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+monstertruck-core = { workspace = true }
+monstertruck-traits = { workspace = true }
+

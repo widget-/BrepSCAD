@@ -1,0 +1,47 @@
+[package]
+name = "monstertruck-meshing"
+version = "0.4.1"
+authors = ["Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Tessellation and meshing algorithms for B-rep shapes"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+keywords = ["truck", "graphics", "mesh"]
+categories = ["graphics"]
+
+[features]
+analyzers = []
+filters = []
+tessellation = ["spade", "filters"]
+# Legacy-VTK mesh I/O, off by default: it is only needed to write `.vtu`.
+# `vtkio` no longer drags `lz4_flex` (RUSTSEC-2026-0041) -- the workspace
+# dependency drops its compression feature, so the advisory is absent from the
+# lockfile whether this feature is on or off.
+vtk = ["vtkio"]
+default = ["analyzers", "filters", "tessellation"]
+
+[dependencies]
+# `web_time::Instant` is `std::time::Instant` on native and falls back
+# to `performance.now()` on wasm32-unknown-unknown (where std::time::*
+# panics).
+web-time = { workspace = true }
+array-macro = { workspace = true }
+derive_more = { workspace = true }
+itertools = { workspace = true }
+# Structured, digest-safe face-drop diagnostics (tessellation). `log` is a
+# zero-cost facade when no logger is installed, so it never changes output or
+# behavior in tests; logger-equipped consumers see dropped-face warnings.
+log = { workspace = true }
+rustc-hash = { workspace = true }
+spade = { workspace = true, optional = true }
+monstertruck-core = { workspace = true }
+monstertruck-geometry = { workspace = true }
+monstertruck-mesh = { workspace = true }
+monstertruck-topology = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+vtkio = { workspace = true, optional = true }
+

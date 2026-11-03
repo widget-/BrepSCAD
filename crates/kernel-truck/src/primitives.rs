@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use brepscad_kernel_api::{KernelError, ProfileRegion};
-use truck_modeling::*;
+use monstertruck_modeling::*;
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
 
@@ -199,9 +199,9 @@ pub(crate) fn cuboid(size: [f64; 3]) -> KernelResult<Solid> {
     }
 
     let vertex = builder::vertex(Point3::new(-size[0] / 2.0, -size[1] / 2.0, -size[2] / 2.0));
-    let edge = builder::tsweep(&vertex, Vector3::unit_x() * size[0]);
-    let face = builder::tsweep(&edge, Vector3::unit_y() * size[1]);
-    Ok(builder::tsweep(&face, Vector3::unit_z() * size[2]))
+    let edge = builder::extrude(&vertex, Vector3::unit_x() * size[0]);
+    let face = builder::extrude(&edge, Vector3::unit_y() * size[1]);
+    Ok(builder::extrude(&face, Vector3::unit_z() * size[2]))
 }
 
 pub(crate) fn square(size: [f64; 2]) -> KernelResult<Face> {
@@ -227,11 +227,11 @@ pub(crate) fn circle(radius: f64) -> KernelResult<Face> {
     }
 
     let vertex = builder::vertex(Point3::new(radius, 0.0, 0.0));
-    let wire = builder::rsweep(
+    let wire = builder::revolve(
         &vertex,
         Point3::origin(),
         Vector3::unit_z(),
-        Rad(std::f64::consts::TAU),
+        builder::SweepAngle::Closed,
         2,
     );
     builder::try_attach_plane(vec![wire])
@@ -290,17 +290,17 @@ pub(crate) fn cylinder(radius: f64, height: f64) -> KernelResult<Solid> {
     }
 
     // Revolving the generator line gives the side as analytic
-    // `Surface::RevolutedCurve` patches. Extruding a disk instead would leave a
+    // `Surface::RevolutionSurface` patches. Extruding a disk instead would leave a
     // homotopy B-spline wall, which the boolean engine subdivides slowly and
     // the ray caster can only approximate.
     let bottom = builder::vertex(Point3::new(radius, 0.0, -height / 2.0));
     let top = builder::vertex(Point3::new(radius, 0.0, height / 2.0));
     let generator = builder::line(&bottom, &top);
-    let side: Shell = builder::rsweep(
+    let side: Shell = builder::revolve(
         &generator,
         Point3::origin(),
         Vector3::unit_z(),
-        Rad(std::f64::consts::TAU),
+        builder::SweepAngle::Closed,
         REVOLVE_DIVISION,
     );
 
@@ -458,11 +458,11 @@ pub(crate) fn sphere(radius: f64) -> KernelResult<Solid> {
     let high = builder::vertex(Point3::new(rail, 0.0, height));
     let low = builder::vertex(Point3::new(rail, 0.0, -height));
     let meridian: Edge = builder::circle_arc(&high, &low, Point3::new(radius, 0.0, 0.0));
-    let band: Shell = builder::rsweep(
+    let band: Shell = builder::revolve(
         &meridian,
         Point3::origin(),
         Vector3::unit_z(),
-        Rad(std::f64::consts::TAU),
+        builder::SweepAngle::Closed,
         SPHERE_DIVISION,
     );
 

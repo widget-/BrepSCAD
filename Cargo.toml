@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor/truck-*"]
+exclude = ["vendor/truck-*", "vendor/monstertruck", "vendor/monstertruck-*"]
 members = [
     "crates/cli",
     "crates/kernel-api",
@@ -22,9 +22,10 @@ license = "BSD-3-Clause"
 anyhow = "1"
 rowan = "0.17"
 thiserror = "2"
-truck-meshalgo = { version = "0.4", default-features = false, features = ["analyzers", "tessellation"] }
-truck-modeling = "0.6"
-truck-shapeops = { version = "0.4", default-features = false }
+monstertruck-geometry = "0.4"
+monstertruck-meshing = { version = "0.4", default-features = false, features = ["analyzers", "tessellation"] }
+monstertruck-modeling = "0.4"
+monstertruck-solid = "0.4"
 clipper2-rust = "1.2"
 
 brepscad-kernel-api = { path = "crates/kernel-api" }
@@ -34,12 +35,20 @@ brepscad-eval = { path = "crates/scad-eval" }
 brepscad-syntax = { path = "crates/scad-syntax" }
 
 [patch.crates-io]
-truck-base = { path = "vendor/truck-base" }
-truck-derivers = { path = "vendor/truck-derivers" }
-truck-geotrait = { path = "vendor/truck-geotrait" }
-truck-geometry = { path = "vendor/truck-geometry" }
-truck-topology = { path = "vendor/truck-topology" }
-truck-polymesh = { path = "vendor/truck-polymesh" }
-truck-meshalgo = { path = "vendor/truck-meshalgo" }
-truck-modeling = { path = "vendor/truck-modeling" }
-truck-shapeops = { path = "vendor/truck-shapeops" }
+monstertruck-core = { path = "vendor/monstertruck/monstertruck-core" }
+monstertruck-derive = { path = "vendor/monstertruck/monstertruck-derive" }
+monstertruck-geometry = { path = "vendor/monstertruck/monstertruck-geometry" }
+monstertruck-mesh = { path = "vendor/monstertruck/monstertruck-mesh" }
+monstertruck-meshing = { path = "vendor/monstertruck/monstertruck-meshing" }
+monstertruck-modeling = { path = "vendor/monstertruck/monstertruck-modeling" }
+monstertruck-solid = { path = "vendor/monstertruck/monstertruck-solid" }
+monstertruck-topology = { path = "vendor/monstertruck/monstertruck-topology" }
+monstertruck-traits = { path = "vendor/monstertruck/monstertruck-traits" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+debug-assertions = false
+overflow-checks = false

@@ -3,6 +3,11 @@
 This file tracks the current state. Dated snapshots live in
 [`notes/`](notes/).
 
+> Branch `wip/monstertruck` replaces the Truck stack with the `monstertruck`
+> fork. See [`notes/2026-11-03.md`](notes/2026-11-03.md) and
+> [`../vendor/README.md`](../vendor/README.md). The rest of this file describes
+> `main` until that trial is accepted.
+
 ## What this project is
 
 A B-rep-first visual editor for OpenSCAD-style `.scad` source. The `.scad`
@@ -45,8 +50,9 @@ scripts/
   check-scad-corpus.sh   compatibility runs over a .scad tree
   screenshot-viewer.sh   headless UI snapshots
 vendor/
-  README.md     which Truck crates are vendored and what changed in each
-  truck-*/      Truck master stack, patched for boolean robustness
+  README.md     which Truck/monstertruck crates are vendored and what changed
+  truck-*/      Truck master stack, patched for boolean robustness (main)
+  monstertruck/ PR #31 stack, patched for boolean robustness (trial)
 ```
 
 ## What works
@@ -223,13 +229,17 @@ vendor/
     smoothing
   - axis-aligned bounds for solids and sketches
   - analytic ray casting: planes, surfaces of revolution of a straight line
-    (cylinders, cones), tensor-product B-spline/NURBS patches and balls are all
+    (cylinders, cones), tensor-product B-spline/NURBS patches, balls, and
+    monstertruck's `SphericalSurface`/`ToroidalSurface` carriers are all
     exported as trimmed analytic faces. A revolution of a circular arc is an
     oriented closed-form sphere; other smooth curves (tori, revolved profiles,
-    hyperboloids) become exact NURBS patches. Generic spline subpatches are
-    bounded by their control-point hulls and Newton is clamped to the subpatch;
-    the GPU tracer evaluates them directly, so tessellation is only a fallback
-    for a patch whose degree exceeds its basis window.
+    hyperboloids) become exact NURBS patches. A `ToroidalSurface` is exported as
+    its exact rational quadratic net, with trim loops scaled to the net's
+    parameter range; a `SphericalSurface` uses the closed-form sphere. Generic
+    spline subpatches are bounded by their control-point hulls and Newton is
+    clamped to the subpatch; the GPU tracer evaluates them directly, so
+    tessellation is only a fallback for a patch whose degree exceeds its basis
+    window or for a T-spline.
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed

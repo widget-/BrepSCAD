@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b640dbc5eeff8284b739fc8640b9cdae6881efdf5fb7a4979512d5ec055ae296 # shrinks to p0 = [0.0, 0.0, 0.0], p1 = [0.0, 0.0, 7.7418357854111015], tangent = [0.0, 7.373666772578642, 2.1034029101238674], t = 0.9999941892934504
+cc 4332f70c600fd8db8b5c7676c2e13e0969c153256279a8133af27e1eb4841535 # CI PR #77: test_circle_arc_by_start_tangent radius-consistency flake (p0 = [1.5216234473456494, 2.1295426361946435, 0.7674837711272474], ...)
