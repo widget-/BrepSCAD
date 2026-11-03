@@ -95,6 +95,15 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         None => (shell0, shell1),
     };
     let flat = imprinted.is_some();
+    let planar = |shell: &Shell<Point3, C, S>| {
+        shell.face_iter().all(|face| {
+            matches!(
+                face.surface().try_into_analytic_surface_kind(),
+                Some(AnalyticSurfaceKind::Plane(_))
+            )
+        })
+    };
+    let planar_pair = planar(shell0) && planar(shell1);
     let poly_shell0 = shell0.triangulation(tol);
     let poly_shell1 = shell1.triangulation(tol);
     let altshell0: AltCurveShell<C, S> =
@@ -244,6 +253,12 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
     match flat {
         true => Some([coplanar::sew(&and, tol)?, coplanar::sew(&or, tol)?]),
+        // PATCH(BrepSCAD): an all-planar non-coplanar pair can still leave
+        // split edges; run the general sew for those.
+        false if planar_pair => Some([
+            coplanar::sew(&and, tol).unwrap_or(and),
+            coplanar::sew(&or, tol).unwrap_or(or),
+        ]),
         false => Some([and, or]),
     }
 }

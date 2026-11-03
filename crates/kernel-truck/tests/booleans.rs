@@ -652,7 +652,6 @@ fn half_space_difference_of_a_chamfered_box_is_closed() {
 /// The bin's outer corner chamfer plus an open-top cavity. The half-space cut
 /// crosses the chamfered walls; the cut face must remain planar.
 #[test]
-#[ignore = "reproduces the chamfered-cup split-edge issue; the planar-only sew is not general"]
 fn half_space_difference_of_a_chamfered_cup_has_a_flat_cut() {
     let mut kernel = TruckKernel::new();
     let outer = chamfered_box(&mut kernel, 10.0, 2.0, [0.0; 3]);

@@ -43,6 +43,10 @@ Local patches:
 - `monstertruck-solid/src/transversal/classic/coplanar/sew.rs` splits boundary
   edges at boundary vertices that lie on them, then re-merges the resulting
   edges. This closes split-edge topology left by independently divided faces.
+- `monstertruck-solid/src/transversal/classic/mod.rs` also runs that sew for
+  non-coplanar pairs when both operands are entirely planar. Mixed
+  planar/curved pairs stay untouched; sewing them regresses the cube/cylinder
+  corner case.
 - `monstertruck-topology/src/shell.rs` and `src/solid/mod.rs` use
   `Face::new_unchecked` / `Solid::new_unchecked` in `try_mapped`, so mapping a
   boolean result does not reject non-simple wires or open shells.
