@@ -60,6 +60,11 @@ Local patches:
 - `monstertruck-topology/src/shell.rs` and `src/solid/mod.rs` use
   `Face::new_unchecked` / `Solid::new_unchecked` in `try_mapped`, so mapping a
   boolean result does not reject non-simple wires or open shells.
+- `monstertruck-geometry/src/nurbs/mod.rs` and `knot_vector.rs` shrink the
+  inline `BasisWindow` from 32 to 8 f64 slots. The old 32-slot window moved
+  256 bytes through the B-spline evaluation hot path; snap-only debug dropped
+  from 22.3 s to 18.8 s and full debug from 22.7 s to 18.9 s with identical
+  geometry.
 - `monstertruck-core/src/derivatives.rs` lowers `MAX_DER_ORDER` from 31 to 8.
   `SurfaceDerivatives` stores a fixed 32x32 array and zeroed/copied it on every
   evaluation; 8 covers the in-tree derivative orders and cuts that buffer by
