@@ -193,6 +193,7 @@ fn pack_face(
                 return pack_triangles(face, vertices);
             }
             packed.params1[3] = face.trims.u_period().unwrap_or(0.0) as f32;
+            packed.params3[3] = face.trims.v_period().unwrap_or(0.0) as f32;
         }
         // Only faces with no modelled surface ride the tessellated path.
         None => return pack_triangles(face, vertices),
@@ -488,9 +489,10 @@ mod tests {
         .expect("bilinear surface");
         let face = Face::new(
             Surface::Spline(Arc::new(surface)),
-            TrimRegion::with_u_period(
+            TrimRegion::with_periods(
                 vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
-                TAU,
+                Some(TAU),
+                Some(TAU),
             ),
             ([-0.1, -0.1, -0.1], [1.1, 1.1, 0.1]),
         );
@@ -502,6 +504,7 @@ mod tests {
         assert_eq!(spline.spline1, [4, 4, 0, 0]);
         assert_eq!(spline.spline2[0], 4, "two subdivisions in each direction");
         assert!((spline.params1[3] - TAU as f32).abs() < 1e-6, "u period");
+        assert!((spline.params3[3] - TAU as f32).abs() < 1e-6, "v period");
         assert_eq!(packed.knots.len(), 8);
         assert_eq!(packed.control.len(), 4);
         assert_eq!(packed.patches.len(), 4);

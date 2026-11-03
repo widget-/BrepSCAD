@@ -232,6 +232,7 @@ version = "0.1.0"
 dependencies = [
  "brepscad-kernel-api",
  "brepscad-raycast",
+ "monstertruck-geometry",
  "monstertruck-meshing",
  "monstertruck-modeling",
  "monstertruck-solid",

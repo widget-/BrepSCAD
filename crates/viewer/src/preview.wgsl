@@ -660,7 +660,8 @@ fn inside_trims(face: GpuFace, uv: vec2<f32>) -> bool {
     if (count == 0u) {
         return true;
     }
-    let period = face.params1.w;
+    let u_period = face.params1.w;
+    let v_period = face.params3.w;
     var inside = false;
     for (var index = 0u; index < count; index += 1u) {
         let range = trim_loops[first + index].range;
@@ -668,10 +669,14 @@ fn inside_trims(face: GpuFace, uv: vec2<f32>) -> bool {
             continue;
         }
         var u = uv.x;
-        if (period > 0.0) {
-            u = unwrap_near(u, range, period);
+        if (u_period > 0.0) {
+            u = unwrap_near(u, range, u_period, 0u);
         }
-        if (point_in_loop(range, vec2<f32>(u, uv.y))) {
+        var v = uv.y;
+        if (v_period > 0.0) {
+            v = unwrap_near(v, range, v_period, 1u);
+        }
+        if (point_in_loop(range, vec2<f32>(u, v))) {
             inside = !inside;
         }
     }
@@ -695,20 +700,21 @@ fn point_in_loop(range: vec2<u32>, point: vec2<f32>) -> bool {
     return inside;
 }
 
-/// Mirrors the CPU caster: test `u` at the periodic image nearest the loop.
-fn unwrap_near(u: f32, range: vec2<u32>, period: f32) -> f32 {
+/// Mirrors the CPU caster: test a parameter at the periodic image nearest the
+/// loop. `component` is 0 for `u`, 1 for `v`.
+fn unwrap_near(value: f32, range: vec2<u32>, period: f32, component: u32) -> f32 {
     var low = FAR;
     var high = -FAR;
     for (var index = 0u; index < range.y; index += 1u) {
-        let value = trim_points[range.x + index].x;
-        low = min(low, value);
-        high = max(high, value);
+        let sample = trim_points[range.x + index][component];
+        low = min(low, sample);
+        high = max(high, sample);
     }
     let centre = (low + high) * 0.5;
-    var best = u;
-    var best_distance = abs(u - centre);
+    var best = value;
+    var best_distance = abs(value - centre);
     for (var shift = -2; shift <= 2; shift += 1) {
-        let candidate = u + f32(shift) * period;
+        let candidate = value + f32(shift) * period;
         let distance = abs(candidate - centre);
         if (distance < best_distance) {
             best = candidate;

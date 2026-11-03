@@ -22,6 +22,7 @@ license = "BSD-3-Clause"
 anyhow = "1"
 rowan = "0.17"
 thiserror = "2"
+monstertruck-geometry = "0.4"
 monstertruck-meshing = { version = "0.4", default-features = false, features = ["analyzers", "tessellation"] }
 monstertruck-modeling = "0.4"
 monstertruck-solid = "0.4"

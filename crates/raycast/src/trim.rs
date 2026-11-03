@@ -11,6 +11,9 @@ pub struct TrimRegion {
     /// Period of the `u` parameter for surfaces of revolution; `None` when `u`
     /// is not periodic (planes).
     u_period: Option<f64>,
+    /// Period of the `v` parameter for doubly-periodic surfaces such as a
+    /// torus; `None` otherwise.
+    v_period: Option<f64>,
 }
 
 impl TrimRegion {
@@ -18,6 +21,7 @@ impl TrimRegion {
         Self {
             loops,
             u_period: None,
+            v_period: None,
         }
     }
 
@@ -26,6 +30,20 @@ impl TrimRegion {
         Self {
             loops,
             u_period: Some(u_period),
+            v_period: None,
+        }
+    }
+
+    /// A region whose `u` and `v` parameters both wrap, for a torus.
+    pub fn with_periods(
+        loops: Vec<Vec<[f64; 2]>>,
+        u_period: Option<f64>,
+        v_period: Option<f64>,
+    ) -> Self {
+        Self {
+            loops,
+            u_period,
+            v_period,
         }
     }
 
@@ -36,6 +54,11 @@ impl TrimRegion {
     /// Period of the `u` parameter, when it wraps.
     pub fn u_period(&self) -> Option<f64> {
         self.u_period
+    }
+
+    /// Period of the `v` parameter, when it wraps.
+    pub fn v_period(&self) -> Option<f64> {
+        self.v_period
     }
 
     pub fn is_empty(&self) -> bool {
@@ -53,10 +76,14 @@ impl TrimRegion {
                 continue;
             }
             let u = match self.u_period {
-                Some(period) => unwrap_near(uv[0], loop_, period),
+                Some(period) => unwrap_near(uv[0], loop_, period, 0),
                 None => uv[0],
             };
-            if point_in_polygon(loop_, [u, uv[1]]) {
+            let v = match self.v_period {
+                Some(period) => unwrap_near(uv[1], loop_, period, 1),
+                None => uv[1],
+            };
+            if point_in_polygon(loop_, [u, v]) {
                 inside = !inside;
             }
         }
@@ -64,25 +91,26 @@ impl TrimRegion {
     }
 }
 
-/// Shifts `u` by whole periods so it is tested near the loop it belongs to.
-fn unwrap_near(u: f64, loop_: &[[f64; 2]], period: f64) -> f64 {
-    if !u.is_finite() || period <= 0.0 {
-        return u;
+/// Shifts one parameter by whole periods so it is tested near the loop it
+/// belongs to.
+fn unwrap_near(value: f64, loop_: &[[f64; 2]], period: f64, component: usize) -> f64 {
+    if !value.is_finite() || period <= 0.0 {
+        return value;
     }
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     for point in loop_ {
-        min = min.min(point[0]);
-        max = max.max(point[0]);
+        min = min.min(point[component]);
+        max = max.max(point[component]);
     }
     if !min.is_finite() || !max.is_finite() {
-        return u;
+        return value;
     }
     let centre = (min + max) / 2.0;
-    let mut best = u;
-    let mut best_distance = (u - centre).abs();
+    let mut best = value;
+    let mut best_distance = (value - centre).abs();
     for shift in -2..=2 {
-        let candidate = u + shift as f64 * period;
+        let candidate = value + shift as f64 * period;
         let distance = (candidate - centre).abs();
         if distance < best_distance {
             best = candidate;
@@ -140,6 +168,24 @@ mod tests {
         ]);
         assert!(!region.contains([0.0, 0.0]));
         assert!(region.contains([1.5, 0.0]));
+    }
+
+    #[test]
+    fn periodic_v_tests_the_nearest_image() {
+        // A loop just below the v seam.
+        let region = TrimRegion::with_periods(
+            vec![vec![
+                [0.0, 6.0],
+                [1.0, 6.0],
+                [1.0, TAU + 0.1],
+                [0.0, TAU + 0.1],
+            ]],
+            None,
+            Some(TAU),
+        );
+        assert!(region.contains([0.5, 6.05]));
+        assert!(region.contains([0.5, 0.05]));
+        assert!(!region.contains([0.5, 3.0]));
     }
 
     #[test]

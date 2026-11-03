@@ -229,13 +229,17 @@ vendor/
     smoothing
   - axis-aligned bounds for solids and sketches
   - analytic ray casting: planes, surfaces of revolution of a straight line
-    (cylinders, cones), tensor-product B-spline/NURBS patches and balls are all
+    (cylinders, cones), tensor-product B-spline/NURBS patches, balls, and
+    monstertruck's `SphericalSurface`/`ToroidalSurface` carriers are all
     exported as trimmed analytic faces. A revolution of a circular arc is an
     oriented closed-form sphere; other smooth curves (tori, revolved profiles,
-    hyperboloids) become exact NURBS patches. Generic spline subpatches are
-    bounded by their control-point hulls and Newton is clamped to the subpatch;
-    the GPU tracer evaluates them directly, so tessellation is only a fallback
-    for a patch whose degree exceeds its basis window.
+    hyperboloids) become exact NURBS patches. A `ToroidalSurface` is exported as
+    its exact rational quadratic net, with trim loops scaled to the net's
+    parameter range; a `SphericalSurface` uses the closed-form sphere. Generic
+    spline subpatches are bounded by their control-point hulls and Newton is
+    clamped to the subpatch; the GPU tracer evaluates them directly, so
+    tessellation is only a fallback for a patch whose degree exceeds its basis
+    window or for a T-spline.
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed

@@ -10,6 +10,7 @@ publish = false
 brepscad-kernel-api.workspace = true
 brepscad-raycast.workspace = true
 
+monstertruck-geometry.workspace = true
 monstertruck-meshing.workspace = true
 monstertruck-modeling.workspace = true
 monstertruck-solid.workspace = true
