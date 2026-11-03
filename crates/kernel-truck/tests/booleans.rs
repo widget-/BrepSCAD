@@ -127,6 +127,41 @@ fn boundary_edge_endpoints(mesh: &Mesh) -> Vec<([f64; 3], [f64; 3])> {
         .collect()
 }
 
+fn chamfered_box(kernel: &mut TruckKernel, size: f64, chamfer: f64, at: [f64; 3]) -> ShapeId {
+    let h = size / 2.0;
+    let c = chamfer;
+    let mut points = Vec::new();
+    for z in [-h, h] {
+        points.extend([
+            [h, -h + c, z],
+            [h, h - c, z],
+            [h - c, h, z],
+            [-h + c, h, z],
+            [-h, h - c, z],
+            [-h, -h + c, z],
+            [-h + c, -h, z],
+            [h - c, -h, z],
+        ]);
+    }
+    let mut faces = Vec::new();
+    faces.push((0..8).rev().collect::<Vec<_>>());
+    faces.push((8..16).collect::<Vec<_>>());
+    for index in 0..8 {
+        let next = (index + 1) % 8;
+        faces.push(vec![index, next, 8 + next, 8 + index]);
+    }
+    let shape = kernel
+        .primitive(Primitive::Polyhedron { points, faces })
+        .expect("chamfered box");
+    if at == [0.0; 3] {
+        shape
+    } else {
+        kernel
+            .transform(shape, Transform::from_translation(at))
+            .expect("translate chamfered box")
+    }
+}
+
 /// A sphere poking through all six faces of a cube used to spend almost all of
 /// its time in a 101x101 parameter presearch, and the search's seam choice
 /// decided whether the sphere patches were trimmed correctly. The two boolean
@@ -582,6 +617,61 @@ fn half_space_difference_of_a_notched_cup_has_a_flat_cut() {
     assert_close(max, [5.0, 5.0, 5.0]);
     let volume = signed_volume(&mesh);
     assert!((volume - 352.0).abs() < 1.0, "volume = {volume}");
+
+    for (a, b) in boundary_edge_endpoints(&mesh) {
+        if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
+            assert!(
+                a[1].abs() < 1.0e-6 && b[1].abs() < 1.0e-6,
+                "non-planar cut edge: {a:?}..{b:?}"
+            );
+        }
+    }
+}
+
+/// A chamfered octagonal prism cut by the same half-space box as back_half.
+/// The outer corner chamfer is the bin feature that reproduced the non-planar
+/// cut loop.
+#[test]
+fn half_space_difference_of_a_chamfered_box_is_closed() {
+    let mut kernel = TruckKernel::new();
+    let chamfered = chamfered_box(&mut kernel, 10.0, 2.0, [0.0; 3]);
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, chamfered, cutter)
+        .expect("chamfered half-space difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 460.0).abs() < 1.0, "volume = {volume}");
+    assert_eq!(welded_boundary_edges(&mesh), 0, "chamfered cut is closed");
+}
+
+/// The bin's outer corner chamfer plus an open-top cavity. The half-space cut
+/// crosses the chamfered walls; the cut face must remain planar.
+#[test]
+#[ignore = "reproduces the chamfered-cup split-edge issue; the planar-only sew is not general"]
+fn half_space_difference_of_a_chamfered_cup_has_a_flat_cut() {
+    let mut kernel = TruckKernel::new();
+    let outer = chamfered_box(&mut kernel, 10.0, 2.0, [0.0; 3]);
+    // Cavity cuts through the top but leaves a 2 mm floor.
+    let cavity = cube(&mut kernel, [6.0, 6.0, 10.0], [0.0, 0.0, 2.0]);
+    let cup = kernel
+        .boolean(BooleanOp::Difference, outer, cavity)
+        .expect("chamfered cup");
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, cup, cutter)
+        .expect("chamfered half-space cup");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 316.0).abs() < 1.0, "volume = {volume}");
 
     for (a, b) in boundary_edge_endpoints(&mesh) {
         if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
