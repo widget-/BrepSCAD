@@ -4,7 +4,10 @@ use num_traits::NumCast;
 use std::fmt::Debug;
 
 /// Maximum order that guarantees differential calculations
-pub const MAX_DER_ORDER: usize = 31;
+// PATCH(BrepSCAD): 31 made each `SurfaceDerivatives` a 32x32 array, and every
+// evaluation zeroed and copied roughly 24 KiB. All in-tree derivative requests
+// are <= 5; 8 keeps headroom while shrinking the fixed buffer by about 12x.
+pub const MAX_DER_ORDER: usize = 8;
 
 /// Calculation results of curve differentiation
 #[derive(Clone, Copy, PartialEq)]
