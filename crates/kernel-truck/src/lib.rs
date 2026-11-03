@@ -14,9 +14,9 @@ use brepscad_kernel_api::{
     BooleanOp, Capabilities, Kernel, KernelError, Mesh, Polyhedron, Primitive, ProfileRegion,
     ShapeId, Sketch, Transform,
 };
+use monstertruck_meshing::prelude::*;
+use monstertruck_modeling::*;
 use primitives::{cuboid, cylinder, polyhedron, sphere};
-use truck_meshalgo::prelude::*;
-use truck_modeling::*;
 
 type KernelResult<T> = std::result::Result<T, KernelError>;
 
@@ -84,12 +84,12 @@ fn disjoint(a: &Solid, b: &Solid) -> bool {
 
 fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
     catch_unwind(AssertUnwindSafe(|| match op {
-        BooleanOp::Union => truck_shapeops::or(a, b, tolerance),
-        BooleanOp::Intersection => truck_shapeops::and(a, b, tolerance),
+        BooleanOp::Union => monstertruck_solid::or(a, b, tolerance).ok(),
+        BooleanOp::Intersection => monstertruck_solid::and(a, b, tolerance).ok(),
         BooleanOp::Difference => {
             let mut inverted = b.clone();
             inverted.not();
-            truck_shapeops::and(a, &inverted, tolerance)
+            monstertruck_solid::and(a, &inverted, tolerance).ok()
         }
     }))
     .ok()
@@ -674,7 +674,7 @@ pub(crate) fn tessellate_face(face: &Face, tolerance: f64) -> PolygonMesh {
 
 fn extrude_face(face: &Face, height: f64) -> Solid {
     let centered = builder::translated(face, Vector3::new(0.0, 0.0, -height / 2.0));
-    builder::tsweep(&centered, Vector3::new(0.0, 0.0, height))
+    builder::extrude(&centered, Vector3::new(0.0, 0.0, height))
 }
 
 fn revolve_face(face: &Face, start: f64, angle: f64) -> Solid {
@@ -694,11 +694,16 @@ fn revolve_face(face: &Face, start: f64, angle: f64) -> Solid {
     } else {
         1
     };
-    let mut solid = builder::rsweep(
+    let sweep = if division == 2 {
+        builder::SweepAngle::Closed
+    } else {
+        builder::SweepAngle::Partial(Rad(angle))
+    };
+    let mut solid = builder::revolve(
         &profile,
         Point3::origin(),
         Vector3::unit_z(),
-        Rad(angle),
+        sweep,
         division,
     );
     if angle > 0.0 {

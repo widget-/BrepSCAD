@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use brepscad_kernel_api::Polyhedron;
-use truck_meshalgo::prelude::*;
-use truck_modeling::*;
+use monstertruck_meshing::prelude::*;
+use monstertruck_modeling::*;
 
 /// Divisions per revolution sector.
 const SWEEP_DIVISION: usize = 4;
@@ -153,7 +153,13 @@ impl BoxShape {
             let low = builder::vertex(start + from * radius);
             let high = builder::vertex(end + from * radius);
             let generator = builder::line(&low, &high);
-            let patch: Shell = builder::rsweep(&generator, start, axis, Rad(angle), SWEEP_DIVISION);
+            let patch: Shell = builder::revolve(
+                &generator,
+                start,
+                axis,
+                builder::SweepAngle::Partial(Rad(angle)),
+                SWEEP_DIVISION,
+            );
             for face in patch.face_iter().cloned() {
                 faces.push(face_outwards(
                     face,
@@ -180,7 +186,13 @@ impl BoxShape {
             let equator = builder::vertex(centre + first * radius);
             let transit = (middle + first).normalize();
             let arc: Edge = builder::circle_arc(&pole, &equator, centre + transit * radius);
-            let patch: Shell = builder::rsweep(&arc, centre, middle, Rad(angle), SWEEP_DIVISION);
+            let patch: Shell = builder::revolve(
+                &arc,
+                centre,
+                middle,
+                builder::SweepAngle::Partial(Rad(angle)),
+                SWEEP_DIVISION,
+            );
             for face in patch.face_iter().cloned() {
                 faces.push(face_outwards(face, |point| point - centre, tolerance));
             }

@@ -3,6 +3,11 @@
 This file tracks the current state. Dated snapshots live in
 [`notes/`](notes/).
 
+> Branch `wip/monstertruck` replaces the Truck stack with the `monstertruck`
+> fork. See [`notes/2026-11-03.md`](notes/2026-11-03.md) and
+> [`../vendor/README.md`](../vendor/README.md). The rest of this file describes
+> `main` until that trial is accepted.
+
 ## What this project is
 
 A B-rep-first visual editor for OpenSCAD-style `.scad` source. The `.scad`
@@ -45,8 +50,9 @@ scripts/
   check-scad-corpus.sh   compatibility runs over a .scad tree
   screenshot-viewer.sh   headless UI snapshots
 vendor/
-  README.md     which Truck crates are vendored and what changed in each
-  truck-*/      Truck master stack, patched for boolean robustness
+  README.md     which Truck/monstertruck crates are vendored and what changed
+  truck-*/      Truck master stack, patched for boolean robustness (main)
+  monstertruck-*/ monstertruck fork, patched for boolean robustness (trial)
 ```
 
 ## What works

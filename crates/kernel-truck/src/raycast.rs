@@ -8,8 +8,8 @@
 use std::f64::consts::TAU;
 
 use brepscad_raycast::{Face as RaycastFace, Scene, Surface as RaycastSurface, TrimRegion};
-use truck_meshalgo::prelude::*;
-use truck_modeling::*;
+use monstertruck_meshing::prelude::*;
+use monstertruck_modeling::*;
 
 /// Sampling tolerance for trim polylines, in model units.
 const TRIM_TOLERANCE: f64 = 1.0e-3;
@@ -87,7 +87,7 @@ impl Parameterization {
                 ])
             }
             Self::Spline { surface, .. } => match **surface {
-                Surface::BSplineSurface(ref patch) => patch
+                Surface::BsplineSurface(ref patch) => patch
                     .search_parameter(point, None, TRIM_SEARCH_TRIALS)
                     .map(|(u, v)| [u, v]),
                 Surface::NurbsSurface(ref patch) => patch
@@ -210,7 +210,7 @@ fn analytic_face(face: &Face) -> Option<RaycastFace> {
 /// is the same distance from the revolution origin, and the resulting surface
 /// is a sphere centred there.
 fn revolved_sphere(
-    revolved: &RevolutedCurve<Curve>,
+    revolved: &RevolutionSurface<Curve>,
     matrix: Matrix4,
 ) -> Option<(Point3, f64, Vector3, Vector3)> {
     let axis = matrix.transform_vector(revolved.axis()).normalize();
@@ -255,14 +255,14 @@ fn revolved_sphere(
 /// direction becomes `u`, scaled to `[0, TAU]`, and the generatrix keeps its
 /// own parameter as `v`.
 fn revolved_spline(
-    revolved: &RevolutedCurve<Curve>,
+    revolved: &RevolutionSurface<Curve>,
     matrix: Matrix4,
 ) -> Option<(RaycastSurface, Parameterization)> {
     let curve = revolved.entity_curve();
     let (degree, knots, control) = match curve {
-        Curve::BSplineCurve(curve) => (
+        Curve::BsplineCurve(curve) => (
             curve.degree(),
-            curve.knot_vec().clone(),
+            curve.knot_vector().clone(),
             curve
                 .control_points()
                 .iter()
@@ -271,7 +271,7 @@ fn revolved_spline(
         ),
         Curve::NurbsCurve(curve) => (
             curve.degree(),
-            curve.knot_vec().clone(),
+            curve.knot_vector().clone(),
             curve
                 .control_points()
                 .iter()
@@ -280,13 +280,14 @@ fn revolved_spline(
         ),
         Curve::Line(line) => (
             1,
-            KnotVec::from(vec![0.0, 0.0, 1.0, 1.0]),
+            KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]),
             vec![
                 [line.front().x, line.front().y, line.front().z, 1.0],
                 [line.back().x, line.back().y, line.back().z, 1.0],
             ],
         ),
         Curve::IntersectionCurve(_) => return None,
+        Curve::ParameterCurve(_) => return None,
     };
     let base = brepscad_raycast::SplineSurface::from_revolution(
         position(revolved.origin()),
@@ -308,10 +309,10 @@ fn revolved_spline(
     for (index, control) in mapped.control_points().iter().enumerate() {
         grid[index / nv][index % nv] = Vector4::new(control[0], control[1], control[2], control[3]);
     }
-    let surface = Surface::NurbsSurface(NurbsSurface::new(BSplineSurface::new(
+    let surface = Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new(
         (
-            KnotVec::from(knots_u.to_vec()),
-            KnotVec::from(knots_v.to_vec()),
+            KnotVector::from(knots_u.to_vec()),
+            KnotVector::from(knots_v.to_vec()),
         ),
         grid,
     )));
@@ -342,8 +343,8 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
     match surface {
         Surface::Plane(plane) => {
             let origin = plane.origin();
-            let u_axis = plane.u_axis();
-            let v_axis = plane.v_axis();
+            let u_axis = plane.axis_u();
+            let v_axis = plane.axis_v();
             Some((
                 RaycastSurface::Plane {
                     origin: position(origin),
@@ -358,7 +359,7 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
                 },
             ))
         }
-        Surface::RevolutedCurve(processor) => {
+        Surface::RevolutionSurface(processor) => {
             let revolved = processor.entity();
             let matrix = *processor.transform();
             let Curve::Line(line) = revolved.entity_curve() else {
@@ -455,10 +456,10 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
                 },
             ))
         }
-        Surface::BSplineSurface(patch) => {
+        Surface::BsplineSurface(patch) => {
             let spline = spline_from(
                 patch.degrees(),
-                patch.knot_vecs(),
+                patch.knot_vectors(),
                 patch
                     .control_points()
                     .iter()
@@ -477,7 +478,7 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
         Surface::NurbsSurface(patch) => {
             let spline = spline_from(
                 patch.degrees(),
-                patch.knot_vecs(),
+                patch.knot_vectors(),
                 patch
                     .control_points()
                     .iter()
@@ -493,13 +494,16 @@ fn classify(surface: &Surface) -> Option<(RaycastSurface, Parameterization)> {
                 },
             ))
         }
+        // T-splines and the analytic sphere/torus carriers are not modelled by
+        // the ray caster; they fall back to their tessellation.
+        _ => None,
     }
 }
 
 /// Convert a Truck patch into the caster's neutral spline surface.
 fn spline_from(
     degrees: (usize, usize),
-    knots: &(KnotVec, KnotVec),
+    knots: &(KnotVector, KnotVector),
     control: impl Iterator<Item = [f64; 4]>,
 ) -> Option<brepscad_raycast::SplineSurface> {
     brepscad_raycast::SplineSurface::new(
