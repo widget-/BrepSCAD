@@ -519,3 +519,37 @@ fn half_space_difference_of_a_compound_of_open_cups_has_a_flat_cut() {
         }
     }
 }
+
+/// A cup whose cavity opens through the +Y wall, so the half-space cut plane
+/// passes through the opening. This is the bin's side-snap topology in
+/// miniature.
+#[test]
+fn half_space_difference_of_a_y_side_opening_cup_has_a_flat_cut() {
+    let mut kernel = TruckKernel::new();
+    let outer = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    // Cavity cuts through the +Y wall and the top, leaving a 2 mm floor.
+    let cavity = cube(&mut kernel, [6.0, 10.0, 10.0], [0.0, 2.0, 2.0]);
+    let cup = kernel
+        .boolean(BooleanOp::Difference, outer, cavity)
+        .expect("y-side-opening cup");
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, cup, cutter)
+        .expect("half-space y-side cup");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 260.0).abs() < 1.0, "volume = {volume}");
+
+    for (a, b) in boundary_edge_endpoints(&mesh) {
+        if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
+            assert!(
+                a[1].abs() < 1.0e-6 && b[1].abs() < 1.0e-6,
+                "non-planar cut edge: {a:?}..{b:?}"
+            );
+        }
+    }
+}
