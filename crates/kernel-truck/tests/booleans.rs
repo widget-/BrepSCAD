@@ -224,3 +224,56 @@ fn coplanar_overlapping_union_keeps_both_operands() {
     let volume = signed_volume(&mesh);
     assert!((volume - 12.0).abs() < 0.1, "volume = {volume}");
 }
+
+/// A cutter that spans the subject in two axes leaves the slab it does not
+/// reach. The classic backend can return the intersection instead, so the
+/// adapter's slab recovery has to keep the untouched slab.
+#[test]
+fn difference_with_a_slab_cutter_keeps_the_remaining_slab() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    let cutter = cube(&mut kernel, [12.0, 12.0, 7.0], [0.0, 0.0, 2.5]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, block, cutter)
+        .expect("slab difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, -5.0, -5.0]);
+    assert_close(max, [5.0, 5.0, -1.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 400.0).abs() < 1.0, "volume = {volume}");
+}
+
+/// A sub-millimetre cutter can be reduced to nothing by the backend. The
+/// adapter keeps the subject rather than failing the whole model.
+#[test]
+fn difference_with_a_tiny_cutter_keeps_the_subject() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    let sliver = cube(&mut kernel, [0.01; 3], [4.995, 4.995, 4.995]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, block, sliver)
+        .expect("tiny difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, -5.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 1000.0).abs() < 1.0, "volume = {volume}");
+}
+
+/// A cutter that covers the whole subject must leave an empty solid, not the
+/// subject unchanged.
+#[test]
+fn difference_with_a_covering_cutter_is_empty() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [2.0; 3], [0.0; 3]);
+    let cutter = cube(&mut kernel, [4.0; 3], [0.0; 3]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, block, cutter)
+        .expect("covered difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+    assert_eq!(mesh.triangle_count(), 0);
+}

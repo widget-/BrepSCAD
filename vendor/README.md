@@ -36,9 +36,7 @@ Local patches:
   boolean when an intersection endpoint coincided with an existing vertex.
 - `monstertruck-solid/src/transversal/classic/mod.rs` returns
   `Solid::new_unchecked` from `finalize`, so open boolean-derived shells reach
-  the adapter's retry ladder and the tessellator. It also keeps the divided
-  shells when `coplanar::sew` cannot stitch a coplanar pair, instead of failing
-  the whole boolean.
+  the adapter's retry ladder and the tessellator.
 - `monstertruck-topology/src/shell.rs` and `src/solid/mod.rs` use
   `Face::new_unchecked` / `Solid::new_unchecked` in `try_mapped`, so mapping a
   boolean result does not reject non-simple wires or open shells.
@@ -50,6 +48,16 @@ The adapter uses `monstertruck_solid::difference` directly and, after the exact
 tolerance ladder fails, falls back to `and_normalized` / `or_normalized` /
 `difference_normalized`. Those recover cases the unscaled ladder misses, such as
 a cylinder a hair taller than the cube it pierces.
+
+Difference results are validated before they are accepted. A result must keep
+the slabs of the subject that the tool cannot reach and enclose positive
+volume; this rejects the amputated and inverted shells the classic backend
+returns for nested or coplanar cutters. Rejected results are clipped to the
+subject's bounds, then retried at the other tolerances and through the
+normalized entry point. If the engine still cannot produce a valid shell, the
+adapter falls back to an axis-aligned slab clip, keeps the subject for a
+sub-millimetre sliver, or keeps the subject rather than rendering an inside-out
+cavity. Set `BREPSCAD_DEBUG_BOOLEAN=1` to log each attempt and rejection.
 
 ## Truck stack (retained, unused on this branch)
 

@@ -55,6 +55,43 @@ fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
     found.then_some((min, max))
 }
 
+/// Signed volume of the solid's tessellation, or zero when it cannot be meshed.
+fn solid_volume(solid: &Solid) -> f64 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let mesh = solid.triangulation(0.05).to_polygon();
+        let positions = mesh.positions();
+        mesh.faces()
+            .triangle_iter()
+            .map(|triangle| {
+                let [a, b, c] = [
+                    positions[triangle[0].pos],
+                    positions[triangle[1].pos],
+                    positions[triangle[2].pos],
+                ];
+                a.to_vec().dot(b.to_vec().cross(c.to_vec())) / 6.0
+            })
+            .sum()
+    }))
+    .unwrap_or(0.0)
+}
+
+fn shell_bounds(shell: &Shell) -> Option<([f64; 3], [f64; 3])> {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut found = false;
+    for face in shell.face_iter() {
+        for vertex in face.vertex_iter() {
+            let point = vertex.point();
+            found = true;
+            for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+    }
+    found.then_some((min, max))
+}
+
 /// True when `outer`'s bounds contain `inner`'s. Master shapeops can return a
 /// union that silently drops one operand (coplanar face pairs are classified as
 /// "inside" and removed), so the adapter checks that a union really contains
@@ -75,6 +112,146 @@ fn union_covers(result: &Solid, a: &Solid, b: &Solid) -> bool {
     solid_covers(result, a) && solid_covers(result, b)
 }
 
+/// Clip `solid` to one side of an axis-aligned plane.
+fn clip_axis(
+    solid: &Solid,
+    axis: usize,
+    plane: f64,
+    keep_positive: bool,
+    tolerance: f64,
+) -> Option<Solid> {
+    let rotation = match axis {
+        0 => Matrix4::from_axis_angle(Vector3::unit_y(), Rad(-std::f64::consts::FRAC_PI_2)),
+        1 => Matrix4::from_axis_angle(Vector3::unit_x(), Rad(std::f64::consts::FRAC_PI_2)),
+        _ => Matrix4::identity(),
+    };
+    let world_to_clip = Matrix4::from_translation(Vector3::new(0.0, 0.0, -plane)) * rotation;
+    catch_unwind(AssertUnwindSafe(|| {
+        monstertruck_solid::clip_half_space_z(solid, world_to_clip, keep_positive, tolerance).ok()
+    }))
+    .ok()
+    .flatten()
+}
+
+/// Clip a solid to the subject's axis-aligned bounds by intersecting it with a
+/// closed cuboid. A half-space chain cannot consume the open shells the boolean
+/// engine sometimes returns; a closed box can.
+fn clip_to_bounds(solid: &Solid, min: [f64; 3], max: [f64; 3], tolerance: f64) -> Option<Solid> {
+    if solid.boundaries().is_empty() {
+        return Some(Solid::new_unchecked(Vec::new()));
+    }
+    let size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    if size.iter().any(|value| *value <= 0.0) {
+        return None;
+    }
+    let box_solid = cuboid(size).ok()?;
+    let centre = Vector3::new(
+        (min[0] + max[0]) / 2.0,
+        (min[1] + max[1]) / 2.0,
+        (min[2] + max[2]) / 2.0,
+    );
+    let box_solid = builder::translated(&box_solid, centre);
+    catch_unwind(AssertUnwindSafe(|| {
+        monstertruck_solid::and(solid, &box_solid, tolerance).ok()
+    }))
+    .ok()
+    .flatten()
+    .map(|clipped| prune_small_shells(&clipped))
+}
+
+/// Subtract an axis-aligned slab cutter whose bounds span the subject in the
+/// other two axes. The engine can return the intersection instead of the
+/// difference for these, so clip the subject to the slabs the cutter leaves.
+fn slab_difference(a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
+    let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
+        return None;
+    };
+    let slack = |axis: usize| 1.0e-2 * a_min[axis].abs().max(a_max[axis].abs()).max(1.0);
+    for axis in 0..3 {
+        let others: Vec<usize> = (0..3).filter(|&index| index != axis).collect();
+        let spans = others.iter().all(|&index| {
+            b_min[index] <= a_min[index] + slack(index)
+                && b_max[index] >= a_max[index] - slack(index)
+        });
+        if !spans {
+            continue;
+        }
+        let mut pieces = Vec::new();
+        if b_min[axis] > a_min[axis] + slack(axis)
+            && let Some(piece) = clip_axis(a, axis, b_min[axis], false, tolerance)
+        {
+            pieces.push(piece);
+        }
+        if b_max[axis] < a_max[axis] - slack(axis)
+            && let Some(piece) = clip_axis(a, axis, b_max[axis], true, tolerance)
+        {
+            pieces.push(piece);
+        }
+        if pieces.is_empty() {
+            return Some(Solid::new_unchecked(Vec::new()));
+        }
+        let mut boundaries = Vec::new();
+        for piece in pieces {
+            boundaries.extend(piece.into_boundaries());
+        }
+        return Some(Solid::new_unchecked(boundaries));
+    }
+    None
+}
+
+/// A difference result must keep the subject's unreachable slabs and enclose
+/// positive volume. A non-positive volume means the engine returned the
+/// inverted tool or a cavity surface instead of the cut subject.
+fn difference_is_valid(a: &Solid, b: &Solid, result: &Solid) -> bool {
+    difference_keeps_outer_bounds(a, b, result)
+        && (solid_bounds(result).is_none() || solid_volume(result) > 0.0)
+}
+
+/// Drop one-face slivers from a boolean result. They cannot be a solid on
+/// their own and only add stray triangles.
+fn prune_small_shells(solid: &Solid) -> Solid {
+    let boundaries = solid
+        .boundaries()
+        .iter()
+        .filter(|shell| shell.face_iter().count() >= 2)
+        .cloned()
+        .collect();
+    Solid::new_unchecked(boundaries)
+}
+
+/// True when a difference result keeps the slabs of `a` that `b` cannot reach.
+///
+/// A difference may only remove geometry inside `b`'s bounds. If `b` does not
+/// reach one of `a`'s extreme slabs, that slab has to survive, so the result's
+/// bounds must still touch that side of `a`. This rejects the amputated results
+/// the boolean engine occasionally returns for a small tool inside a large
+/// subject, which otherwise render as a few stray faces.
+fn difference_keeps_outer_bounds(a: &Solid, b: &Solid, result: &Solid) -> bool {
+    let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
+        return false;
+    };
+    let tolerance = |axis: usize| 1.0e-2 * a_min[axis].abs().max(a_max[axis].abs()).max(1.0);
+    let Some((r_min, r_max)) = solid_bounds(result) else {
+        // Empty is only plausible when the tool covers the subject.
+        return (0..3).all(|axis| {
+            b_min[axis] <= a_min[axis] + tolerance(axis)
+                && b_max[axis] >= a_max[axis] - tolerance(axis)
+        });
+    };
+    (0..3).all(|axis| {
+        let tol = tolerance(axis);
+        // The result stays inside the subject.
+        if r_min[axis] < a_min[axis] - tol || r_max[axis] > a_max[axis] + tol {
+            return false;
+        }
+        // A slab of the subject that the tool does not reach must survive.
+        let lower_survives = b_min[axis] <= a_min[axis] + tol;
+        let upper_survives = b_max[axis] >= a_max[axis] - tol;
+        (lower_survives || r_min[axis] <= a_min[axis] + tol)
+            && (upper_survives || r_max[axis] >= a_max[axis] - tol)
+    })
+}
+
 fn disjoint(a: &Solid, b: &Solid) -> bool {
     let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
         return false;
@@ -83,13 +260,30 @@ fn disjoint(a: &Solid, b: &Solid) -> bool {
 }
 
 fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
-    catch_unwind(AssertUnwindSafe(|| match op {
-        BooleanOp::Union => monstertruck_solid::or(a, b, tolerance).ok(),
-        BooleanOp::Intersection => monstertruck_solid::and(a, b, tolerance).ok(),
-        BooleanOp::Difference => monstertruck_solid::difference(a, b, tolerance).ok(),
-    }))
-    .ok()
-    .flatten()
+    let attempt = catch_unwind(AssertUnwindSafe(|| match op {
+        BooleanOp::Union => monstertruck_solid::or(a, b, tolerance).map_err(|e| format!("{e:?}")),
+        BooleanOp::Intersection => {
+            monstertruck_solid::and(a, b, tolerance).map_err(|e| format!("{e:?}"))
+        }
+        BooleanOp::Difference => monstertruck_solid::difference(a, b, tolerance)
+            .map(|solid| prune_small_shells(&solid))
+            .map_err(|e| format!("{e:?}")),
+    }));
+    match attempt {
+        Ok(Ok(solid)) => Some(solid),
+        Ok(Err(error)) => {
+            if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
+                eprintln!("BOOLEAN ATTEMPT {op:?} @ {tolerance}: {error}");
+            }
+            None
+        }
+        Err(_) => {
+            if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
+                eprintln!("BOOLEAN ATTEMPT {op:?} @ {tolerance}: PANIC");
+            }
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -285,11 +479,37 @@ impl TruckKernel {
         // Exact geometry first. A union must contain both operands: master
         // shapeops can return an amputated result (coplanar face pairs get
         // classified as inside and dropped), which is worse than failing.
+        let mut last_difference = None;
         for tolerance in BOOLEAN_TOLERANCES {
-            if let Some(result) = attempt_boolean(op, &a, &b, tolerance)
-                && (op != BooleanOp::Union || union_covers(&result, &a, &b))
-            {
-                return Ok(self.insert(OwnedShape::Solid(result)));
+            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
+                let covers = op != BooleanOp::Union || union_covers(&result, &a, &b);
+                let mut outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
+                let mut candidate = result;
+                if op == BooleanOp::Difference
+                    && !outer
+                    && let (Some((a_min, a_max)), Some(_)) = (solid_bounds(&a), solid_bounds(&b))
+                    && let Some(clipped) = clip_to_bounds(&candidate, a_min, a_max, tolerance)
+                {
+                    candidate = clipped;
+                    outer = difference_is_valid(&a, &b, &candidate);
+                }
+                if op == BooleanOp::Difference {
+                    last_difference = Some(candidate.clone());
+                }
+                if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() && (!covers || !outer) {
+                    let shells: Vec<_> = candidate
+                        .boundaries()
+                        .iter()
+                        .map(|shell| (shell.face_iter().count(), shell_bounds(shell)))
+                        .collect();
+                    eprintln!(
+                        "BOOLEAN REJECT {op:?} @ {tolerance}: bounds={:?} covers={covers} outer={outer} shells={shells:?}",
+                        solid_bounds(&candidate)
+                    );
+                }
+                if covers && outer {
+                    return Ok(self.insert(OwnedShape::Solid(candidate)));
+                }
             }
         }
 
@@ -298,14 +518,37 @@ impl TruckKernel {
         // cylinder a hair taller than the cube it pierces, for example) but are
         // slower, so they run only after the exact attempts fail.
         let normalized = match op {
-            BooleanOp::Union => monstertruck_solid::or_normalized(&a, &b).ok(),
-            BooleanOp::Intersection => monstertruck_solid::and_normalized(&a, &b).ok(),
-            BooleanOp::Difference => monstertruck_solid::difference_normalized(&a, &b).ok(),
+            BooleanOp::Union => monstertruck_solid::or_normalized(&a, &b),
+            BooleanOp::Intersection => monstertruck_solid::and_normalized(&a, &b),
+            BooleanOp::Difference => monstertruck_solid::difference_normalized(&a, &b),
         };
-        if let Some(result) = normalized
-            && (op != BooleanOp::Union || union_covers(&result, &a, &b))
-        {
-            return Ok(self.insert(OwnedShape::Solid(result)));
+        match normalized {
+            Ok(result) => {
+                let covers = op != BooleanOp::Union || union_covers(&result, &a, &b);
+                let outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
+                if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() && (!covers || !outer) {
+                    let shells: Vec<_> = result
+                        .boundaries()
+                        .iter()
+                        .map(|shell| (shell.face_iter().count(), shell_bounds(shell)))
+                        .collect();
+                    eprintln!(
+                        "BOOLEAN REJECT normalized {op:?}: bounds={:?} covers={covers} outer={outer} shells={shells:?}",
+                        solid_bounds(&result)
+                    );
+                }
+                if op == BooleanOp::Difference {
+                    last_difference = Some(result.clone());
+                }
+                if covers && outer {
+                    return Ok(self.insert(OwnedShape::Solid(result)));
+                }
+            }
+            Err(error) => {
+                if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
+                    eprintln!("BOOLEAN NORMALIZED {op:?}: {error:?}");
+                }
+            }
         }
 
         let over_budget = |started: std::time::Instant| started.elapsed() > BOOLEAN_RETRY_BUDGET;
@@ -320,7 +563,9 @@ impl TruckKernel {
                 let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
                 let nudged = builder::translated(&b, offset);
                 for tolerance in BOOLEAN_TOLERANCES {
-                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance) {
+                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance)
+                        && difference_is_valid(&a, &b, &result)
+                    {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
                 }
@@ -339,7 +584,9 @@ impl TruckKernel {
             for tolerance in BOOLEAN_TOLERANCES {
                 if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
                     result = builder::translated(&result, -offset);
-                    if op != BooleanOp::Union || union_covers(&result, &a, &b) {
+                    if (op != BooleanOp::Union || union_covers(&result, &a, &b))
+                        && (op != BooleanOp::Difference || difference_is_valid(&a, &b, &result))
+                    {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
                 }
@@ -356,6 +603,44 @@ impl TruckKernel {
             }
         }
 
+        if op == BooleanOp::Difference
+            && let Some(result) = slab_difference(&a, &b, BOOLEAN_TOLERANCES[0])
+        {
+            return Ok(self.insert(OwnedShape::Solid(result)));
+        }
+
+        // A cutter whose bounds are negligible against the subject can be a
+        // degenerate sliver the engine reduces to nothing. Missing such a cut is
+        // visually irrelevant; failing the whole model is not.
+        if op == BooleanOp::Difference
+            && let (Some((a_min, a_max)), Some((b_min, b_max))) =
+                (solid_bounds(&a), solid_bounds(&b))
+        {
+            let a_volume = (a_max[0] - a_min[0]) * (a_max[1] - a_min[1]) * (a_max[2] - a_min[2]);
+            let b_volume = (b_max[0] - b_min[0]) * (b_max[1] - b_min[1]) * (b_max[2] - b_min[2]);
+            if b_volume <= a_volume * 1.0e-3 {
+                return Ok(self.insert(OwnedShape::Solid(a)));
+            }
+        }
+
+        // If every difference attempt produced an inverted or empty shell, the
+        // subject is a better answer than an inside-out cavity.
+        if op == BooleanOp::Difference
+            && solid_volume(&a) > 0.0
+            && last_difference
+                .as_ref()
+                .is_none_or(|candidate| solid_volume(candidate) <= 0.0)
+        {
+            return Ok(self.insert(OwnedShape::Solid(a)));
+        }
+
+        if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
+            eprintln!(
+                "BOOLEAN FAIL {op:?} a={:?} b={:?}",
+                solid_bounds(&a),
+                solid_bounds(&b)
+            );
+        }
         Err(KernelError::Backend(
             "boolean operation returned no solid at any tolerance".to_owned(),
         ))
@@ -501,6 +786,20 @@ impl Kernel for TruckKernel {
 
     fn boolean(&mut self, op: BooleanOp, a_id: ShapeId, b_id: ShapeId) -> KernelResult<ShapeId> {
         let result = self.boolean_impl(op, a_id, b_id)?;
+        if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
+            let describe = |solid: &Solid| {
+                (
+                    solid.boundaries().len(),
+                    solid.face_iter().count(),
+                    solid_bounds(solid),
+                    solid_volume(solid),
+                )
+            };
+            let a = self.solid(a_id).map(describe).ok();
+            let b = self.solid(b_id).map(describe).ok();
+            let r = self.solid(result).map(describe).ok();
+            eprintln!("BOOLEAN {op:?} a={a:?} b={b:?} -> {r:?}");
+        }
         self.boolean_shapes.insert(result.0);
         Ok(result)
     }

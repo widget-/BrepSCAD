@@ -240,12 +240,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     or0.append(&mut or1);
     let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
     match flat {
-        // PATCH(BrepSCAD): a coplanar pair the sew pass cannot stitch must not
-        // fail the whole boolean; keep the divided shells instead.
-        true => Some([
-            coplanar::sew(&and, tol).unwrap_or(and),
-            coplanar::sew(&or, tol).unwrap_or(or),
-        ]),
+        true => Some([coplanar::sew(&and, tol)?, coplanar::sew(&or, tol)?]),
         false => Some([and, or]),
     }
 }
