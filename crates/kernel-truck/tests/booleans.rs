@@ -89,6 +89,44 @@ fn welded_boundary_edges(mesh: &Mesh) -> usize {
     edges.values().filter(|count| **count == 1).count()
 }
 
+fn boundary_edge_endpoints(mesh: &Mesh) -> Vec<([f64; 3], [f64; 3])> {
+    let mut welded: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut points: HashMap<u32, [f64; 3]> = HashMap::new();
+    let mut edges: HashMap<(u32, u32), usize> = HashMap::new();
+    for triangle in mesh.indices.chunks_exact(3) {
+        let mut indices = [0u32; 3];
+        for (slot, index) in triangle.iter().enumerate() {
+            let position = mesh.positions[*index as usize];
+            let key = (
+                (position[0] * 1.0e5).round() as i64,
+                (position[1] * 1.0e5).round() as i64,
+                (position[2] * 1.0e5).round() as i64,
+            );
+            let next = welded.len() as u32;
+            let index = *welded.entry(key).or_insert(next);
+            points.entry(index).or_insert(position);
+            indices[slot] = index;
+        }
+        for (start, end) in [
+            (indices[0], indices[1]),
+            (indices[1], indices[2]),
+            (indices[2], indices[0]),
+        ] {
+            let edge = if start < end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            *edges.entry(edge).or_default() += 1;
+        }
+    }
+    edges
+        .iter()
+        .filter(|(_, count)| **count == 1)
+        .map(|(&(a, b), _)| (points[&a], points[&b]))
+        .collect()
+}
+
 /// A sphere poking through all six faces of a cube used to spend almost all of
 /// its time in a 101x101 parameter presearch, and the search's seam choice
 /// decided whether the sphere patches were trimmed correctly. The two boolean
@@ -330,4 +368,154 @@ fn nested_coplanar_difference_is_closed() {
         0,
         "nested difference is closed"
     );
+}
+
+/// A half-space cut on a closed cube must produce a closed half-cube with a
+/// planar cut face.
+#[test]
+fn half_space_difference_of_a_cube_is_closed() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, block, cutter)
+        .expect("half-space difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 500.0).abs() < 1.0, "volume = {volume}");
+    assert_eq!(welded_boundary_edges(&mesh), 0, "half-space cut is closed");
+}
+
+/// A half-space cut on a compound of two cubes must keep both halves closed.
+#[test]
+fn half_space_difference_of_a_compound_is_closed() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let compound = kernel
+        .boolean(BooleanOp::Union, left, right)
+        .expect("compound union");
+    let cutter = cube(&mut kernel, [30.0, 12.0, 12.0], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, compound, cutter)
+        .expect("half-space compound difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-6.0, 0.0, -1.0]);
+    assert_close(max, [6.0, 1.0, 1.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 8.0).abs() < 0.1, "volume = {volume}");
+    assert_eq!(welded_boundary_edges(&mesh), 0, "compound cut is closed");
+}
+
+/// The bin-like case: an open-top cup cut by a half-space. The cup stays open
+/// at the top, but every boundary edge touching the cut plane must lie on it.
+#[test]
+fn half_space_difference_of_an_open_cup_has_a_flat_cut() {
+    let mut kernel = TruckKernel::new();
+    let outer = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    // Cavity cuts through the top but leaves a 2 mm floor.
+    let cavity = cube(&mut kernel, [6.0, 6.0, 10.0], [0.0, 0.0, 2.0]);
+    let cup = kernel
+        .boolean(BooleanOp::Difference, outer, cavity)
+        .expect("open cup");
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, cup, cutter)
+        .expect("half-space cup difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 356.0).abs() < 1.0, "volume = {volume}");
+
+    for (a, b) in boundary_edge_endpoints(&mesh) {
+        if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
+            assert!(
+                a[1].abs() < 1.0e-6 && b[1].abs() < 1.0e-6,
+                "non-planar cut edge: {a:?}..{b:?}"
+            );
+        }
+    }
+    // A closed cut face has no boundary edges on the plane; if any exist they
+    // must be planar.
+}
+
+/// A cup whose cavity also opens through the +X wall. The cut plane crosses the
+/// side opening, so this reproduces the bin's side-feature cut topology.
+#[test]
+fn half_space_difference_of_a_side_opening_cup_has_a_flat_cut() {
+    let mut kernel = TruckKernel::new();
+    let outer = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    // Cavity cuts through the +X wall and the top, leaving a 2 mm floor.
+    let cavity = cube(&mut kernel, [10.0, 6.0, 10.0], [2.0, 0.0, 2.0]);
+    let cup = kernel
+        .boolean(BooleanOp::Difference, outer, cavity)
+        .expect("side-opening cup");
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, cup, cutter)
+        .expect("half-space side cup");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 308.0).abs() < 1.0, "volume = {volume}");
+
+    for (a, b) in boundary_edge_endpoints(&mesh) {
+        if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
+            assert!(
+                a[1].abs() < 1.0e-6 && b[1].abs() < 1.0e-6,
+                "non-planar cut edge: {a:?}..{b:?}"
+            );
+        }
+    }
+}
+
+/// Two disjoint open cups unioned into a compound, then cut by a half-space.
+/// This matches the bin + snap-grid shell structure more closely.
+#[test]
+fn half_space_difference_of_a_compound_of_open_cups_has_a_flat_cut() {
+    let mut kernel = TruckKernel::new();
+    let cup = |kernel: &mut TruckKernel, x: f64| {
+        let outer = cube(kernel, [10.0; 3], [x, 0.0, 0.0]);
+        let cavity = cube(kernel, [10.0, 6.0, 10.0], [x + 2.0, 0.0, 2.0]);
+        kernel
+            .boolean(BooleanOp::Difference, outer, cavity)
+            .expect("side-opening cup")
+    };
+    let left = cup(&mut kernel, -6.0);
+    let right = cup(&mut kernel, 6.0);
+    let compound = kernel
+        .boolean(BooleanOp::Union, left, right)
+        .expect("compound cups");
+    let cutter = cube(&mut kernel, [30.0, 12.0, 12.0], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, compound, cutter)
+        .expect("half-space compound cups");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-11.0, 0.0, -5.0]);
+    assert_close(max, [11.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 616.0).abs() < 2.0, "volume = {volume}");
+
+    for (a, b) in boundary_edge_endpoints(&mesh) {
+        if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
+            assert!(
+                a[1].abs() < 1.0e-6 && b[1].abs() < 1.0e-6,
+                "non-planar cut edge: {a:?}..{b:?}"
+            );
+        }
+    }
 }
