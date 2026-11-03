@@ -553,3 +553,42 @@ fn half_space_difference_of_a_y_side_opening_cup_has_a_flat_cut() {
         }
     }
 }
+
+/// A cup with a notch in the +X wall centered on y=0, so the half-space cut
+/// plane passes through an open side feature. This mirrors the bin's snap
+/// clips crossing the cut plane.
+#[test]
+fn half_space_difference_of_a_notched_cup_has_a_flat_cut() {
+    let mut kernel = TruckKernel::new();
+    let outer = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    // Cavity cuts through the top but leaves a 2 mm floor.
+    let cavity = cube(&mut kernel, [6.0, 6.0, 10.0], [0.0, 0.0, 2.0]);
+    let cup = kernel
+        .boolean(BooleanOp::Difference, outer, cavity)
+        .expect("open cup");
+    // Notch in the +X wall, centered on the y=0 cut plane.
+    let notch = cube(&mut kernel, [4.0, 2.0, 2.0], [3.0, 0.0, 0.0]);
+    let notched = kernel
+        .boolean(BooleanOp::Difference, cup, notch)
+        .expect("notched cup");
+    let cutter = cube(&mut kernel, [12.0; 3], [0.0, -6.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, notched, cutter)
+        .expect("half-space notched cup");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [-5.0, 0.0, -5.0]);
+    assert_close(max, [5.0, 5.0, 5.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 352.0).abs() < 1.0, "volume = {volume}");
+
+    for (a, b) in boundary_edge_endpoints(&mesh) {
+        if a[1].abs() < 1.0e-6 || b[1].abs() < 1.0e-6 {
+            assert!(
+                a[1].abs() < 1.0e-6 && b[1].abs() < 1.0e-6,
+                "non-planar cut edge: {a:?}..{b:?}"
+            );
+        }
+    }
+}
