@@ -121,7 +121,7 @@ pub(crate) struct ViewerApp {
 }
 
 impl ViewerApp {
-    pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub(crate) fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -154,7 +154,7 @@ impl ViewerApp {
         };
         let lsp_waiting = lsp.is_some();
 
-        Self {
+        let mut app = Self {
             source,
             current_path: None,
             dirty: false,
@@ -194,7 +194,11 @@ impl ViewerApp {
             show_about: false,
             last_eval_ms: 0.0,
             last_title: None,
+        };
+        if let Some(path) = path {
+            app.load_path(&cc.egui_ctx, path);
         }
+        app
     }
 
     fn start_evaluation(&mut self) {
