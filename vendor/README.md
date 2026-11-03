@@ -43,6 +43,16 @@ Local patches:
 - `monstertruck-solid/src/transversal/classic/coplanar/sew.rs` splits boundary
   edges at boundary vertices that lie on them, then re-merges the resulting
   edges. This closes split-edge topology left by independently divided faces.
+- `monstertruck-solid/src/transversal/classic/coplanar/arrangement.rs` probes
+  several small offsets when assigning a hole to an outer loop. The previous
+  fixed `tol * 4` offset could miss the owning loop of a hole in a thin
+  annulus and abort the whole coplanar imprint.
+- `monstertruck-solid/src/transversal/classic/coplanar/mod.rs` and
+  `.../loops_store.rs` add an exact planar plane-plane intersection fallback
+  when the tessellated triangle interference finds no segment. The line is
+  clipped against both trimmed face outlines in 2D and fed back as a normal
+  `IntersectionCurve`, so a cutter crossing a face boundary or convex edge
+  still splits the adjacent faces.
 - `monstertruck-solid/src/transversal/classic/mod.rs` also runs that sew for
   non-coplanar pairs when both operands are entirely planar. Mixed
   planar/curved pairs stay untouched; sewing them regresses the cube/cylinder

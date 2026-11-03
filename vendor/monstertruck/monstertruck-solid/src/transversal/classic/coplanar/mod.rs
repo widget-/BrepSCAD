@@ -232,3 +232,96 @@ pub(super) fn imprint<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         overlap1,
     })
 }
+
+/// Exact intersection segments for two planar faces.
+///
+/// The triangle-based interference path misses a segment when the line of
+/// intersection crosses a face boundary rather than the interior of the
+/// tessellated triangles. Planar pairs can be handled exactly in 2D instead.
+pub(super) fn planar_intersections<C, S>(
+    face0: &Face<Point3, C, S>,
+    face1: &Face<Point3, C, S>,
+    tol: f64,
+) -> Option<Vec<Vec<Point3>>>
+where
+    C: Clone + BoundedCurve + ParameterDivision1D<Point = Point3>,
+    S: TryIntoAnalyticSurfaceKind + Clone,
+{
+    let plane0 = plane_of(face0)?;
+    let plane1 = plane_of(face1)?;
+    let direction = plane0.normal.cross(plane1.normal);
+    let denominator = direction.magnitude2();
+    if denominator <= 1.0e-24 {
+        return None;
+    }
+    let c0 = plane0.normal.dot(plane0.origin.to_vec());
+    let c1 = plane1.normal.dot(plane1.origin.to_vec());
+    let point = Point3::from_vec(
+        (plane1.normal.cross(direction) * c0 + direction.cross(plane0.normal) * c1)
+            / denominator,
+    );
+    let frame0 = Frame::new(plane0);
+    let frame1 = Frame::new(plane1);
+    let outline0 = outline(face0, &frame0, tol);
+    let outline1 = outline(face1, &frame1, tol);
+    let origin0 = frame0.flat(point);
+    let direction0 = frame0.flat(point + direction) - origin0;
+    let origin1 = frame1.flat(point);
+    let direction1 = frame1.flat(point + direction) - origin1;
+    let intervals0 = line_intervals(&outline0, origin0, direction0, tol);
+    let intervals1 = line_intervals(&outline1, origin1, direction1, tol);
+    let mut result = Vec::new();
+    for &(a0, b0) in &intervals0 {
+        for &(a1, b1) in &intervals1 {
+            let start = a0.max(a1);
+            let end = b0.min(b1);
+            if end - start > 1.0e-9 {
+                result.push(vec![point + direction * start, point + direction * end]);
+            }
+        }
+    }
+    Some(result)
+}
+
+fn line_intervals(
+    polygons: &[Vec<Point2>],
+    origin: Point2,
+    direction: Vector2,
+    tol: f64,
+) -> Vec<(f64, f64)> {
+    let scale = direction.magnitude().max(1.0);
+    let mut cuts = Vec::new();
+    for polygon in polygons {
+        let n = polygon.len();
+        for i in 0..n {
+            let a = polygon[i];
+            let b = polygon[(i + 1) % n];
+            let edge = b - a;
+            let denominator = cross2(direction, edge);
+            if denominator.abs() <= 1.0e-14 * scale * edge.magnitude() {
+                continue;
+            }
+            let offset = a - origin;
+            let along = cross2(offset, edge) / denominator;
+            let on_edge = cross2(offset, direction) / denominator;
+            if (-1.0e-9..=1.0 + 1.0e-9).contains(&on_edge) {
+                cuts.push(along);
+            }
+        }
+    }
+    cuts.sort_by(|a, b| a.total_cmp(b));
+    cuts.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9);
+    let mut intervals = Vec::new();
+    for pair in cuts.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        if end - start <= 1.0e-9 {
+            continue;
+        }
+        let middle = (start + end) * 0.5;
+        let point = origin + direction * middle;
+        if inside(polygons, point) && !on_outline(polygons, point, tol) {
+            intervals.push((start, end));
+        }
+    }
+    intervals
+}

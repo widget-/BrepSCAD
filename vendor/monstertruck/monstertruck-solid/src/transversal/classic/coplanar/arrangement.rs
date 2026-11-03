@@ -200,12 +200,22 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         };
         let along = b - a;
         let left = Vector2::new(-along.y, along.x).normalize();
-        let point = a + along * 0.5 + left * (along.magnitude() * 1.0e-3).max(tol * 4.0);
-        let owner = outers
-            .iter()
-            .copied()
-            .filter(|&o| inside(&[shapes[o].1.clone()], point))
-            .min_by(|&a, &b| shapes[a].2.total_cmp(&shapes[b].2))?;
+        // PATCH(BrepSCAD): a hole inside a thin annulus can be farther from the
+        // outer boundary than `tol * 4`. Probe with progressively smaller
+        // offsets so the sample still lands in the owning outer loop.
+        let mut owner = None;
+        for scale in [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1] {
+            let point = a + along * 0.5 + left * (along.magnitude() * scale).max(1.0e-9);
+            owner = outers
+                .iter()
+                .copied()
+                .filter(|&o| inside(&[shapes[o].1.clone()], point))
+                .min_by(|&a, &b| shapes[a].2.total_cmp(&shapes[b].2));
+            if owner.is_some() {
+                break;
+            }
+        }
+        let owner = owner?;
         holes_of[owner].push(hole);
     }
     let surface = face.surface();

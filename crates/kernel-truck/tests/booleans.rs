@@ -681,3 +681,17 @@ fn half_space_difference_of_a_chamfered_cup_has_a_flat_cut() {
         }
     }
 }
+
+#[test]
+fn difference_across_a_chamfered_corner_is_closed() {
+    let mut kernel = TruckKernel::new();
+    let subject = chamfered_box(&mut kernel, 10.0, 1.0, [0.0; 3]);
+    let cutter = cube(&mut kernel, [2.0; 3], [4.0, 4.0, 4.0]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, subject, cutter)
+        .expect("chamfered corner difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    assert_eq!(welded_boundary_edges(&mesh), 0);
+    assert!(signed_volume(&mesh) > 0.0);
+}

@@ -120,6 +120,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         &altshell1,
         &poly_shell1,
         flat.then_some(tol),
+        tol,
     )?;
     let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
     let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;

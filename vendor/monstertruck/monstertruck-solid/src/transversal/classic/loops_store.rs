@@ -465,10 +465,12 @@ pub(super) fn create_loops_stores<C, S>(
     geom_shell1: &Shell<Point3, C, S>,
     poly_shell1: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     flat: Option<f64>,
+    tol: f64,
 ) -> Option<LoopsStoreQuadruple<C>>
 where
     C: SearchNearestParameter<CurveParameter, Point = Point3>
         + SearchParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
         + From<IntersectionCurve<PolylineCurve, S, S>>
         + Send
@@ -532,14 +534,21 @@ where
     let curves_of = |&(face_index0, face_index1): &(usize, usize)| {
         let polygon0 = poly_shell0[face_index0].surface()?;
         let polygon1 = poly_shell1[face_index1].surface()?;
-        let curves = intersection_curve::intersection_curves(
-            geom_shell0[face_index0].surface(),
+        let surface0 = geom_shell0[face_index0].surface();
+        let surface1 = geom_shell1[face_index1].surface();
+        let planar = planes0[face_index0].is_some() && planes1[face_index1].is_some();
+        let mut curves = match intersection_curve::intersection_curves(
+            surface0.clone(),
             &polygon0,
-            geom_shell1[face_index1].surface(),
+            surface1.clone(),
             &polygon1,
-        )?;
-        Some(match flat {
-            Some(tol) => curves
+        ) {
+            Some(curves) => curves,
+            None if planar => Vec::new(),
+            None => return None,
+        };
+        if let Some(tol) = flat {
+            curves = curves
                 .into_iter()
                 .filter(|(polyline, _)| {
                     !polyline.windows(2).all(|pair| {
@@ -550,9 +559,26 @@ where
                         })
                     })
                 })
-                .collect(),
-            None => curves,
-        })
+                .collect();
+        }
+        if curves.is_empty() && planar {
+            for points in super::coplanar::planar_intersections(
+                &geom_shell0[face_index0],
+                &geom_shell1[face_index1],
+                tol,
+            )
+            .unwrap_or_default()
+            {
+                if points.len() < 2 {
+                    continue;
+                }
+                let polyline = PolylineCurve(points);
+                let curve =
+                    IntersectionCurve::new(surface0.clone(), surface1.clone(), polyline.clone());
+                curves.push((polyline, curve));
+            }
+        }
+        Some(curves)
     };
     #[cfg(not(target_arch = "wasm32"))]
     let found: Vec<_> = {
