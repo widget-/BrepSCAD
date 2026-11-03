@@ -7,6 +7,7 @@
 
 use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Transform};
 use brepscad_kernel_truck::TruckKernel;
+use std::collections::HashMap;
 
 fn cube(kernel: &mut TruckKernel, size: [f64; 3], at: [f64; 3]) -> ShapeId {
     let shape = kernel
@@ -55,6 +56,37 @@ fn signed_volume(mesh: &Mesh) -> f64 {
         })
         .sum::<f64>()
         / 6.0
+}
+
+fn welded_boundary_edges(mesh: &Mesh) -> usize {
+    let mut welded: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut edges: HashMap<(u32, u32), usize> = HashMap::new();
+    for triangle in mesh.indices.chunks_exact(3) {
+        let mut indices = [0u32; 3];
+        for (slot, index) in triangle.iter().enumerate() {
+            let position = mesh.positions[*index as usize];
+            let key = (
+                (position[0] * 1.0e5).round() as i64,
+                (position[1] * 1.0e5).round() as i64,
+                (position[2] * 1.0e5).round() as i64,
+            );
+            let next = welded.len() as u32;
+            indices[slot] = *welded.entry(key).or_insert(next);
+        }
+        for (start, end) in [
+            (indices[0], indices[1]),
+            (indices[1], indices[2]),
+            (indices[2], indices[0]),
+        ] {
+            let edge = if start < end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            *edges.entry(edge).or_default() += 1;
+        }
+    }
+    edges.values().filter(|count| **count == 1).count()
 }
 
 /// A sphere poking through all six faces of a cube used to spend almost all of
@@ -276,4 +308,26 @@ fn difference_with_a_covering_cutter_is_empty() {
         .expect("covered difference");
     let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
     assert_eq!(mesh.triangle_count(), 0);
+}
+
+/// A cube minus a smaller concentric cube with the same top and bottom is a
+/// closed square tube. Its coplanar top and bottom annuli exercise the classic
+/// coplanar difference path.
+#[test]
+fn nested_coplanar_difference_is_closed() {
+    let mut kernel = TruckKernel::new();
+    let outer = cube(&mut kernel, [10.0; 3], [0.0; 3]);
+    let inner = cube(&mut kernel, [6.0; 3], [0.0; 3]);
+    let result = kernel
+        .boolean(BooleanOp::Difference, outer, inner)
+        .expect("nested difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let volume = signed_volume(&mesh);
+    assert!((volume - 784.0).abs() < 1.0, "volume = {volume}");
+    assert_eq!(
+        welded_boundary_edges(&mesh),
+        0,
+        "nested difference is closed"
+    );
 }

@@ -158,8 +158,11 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             .flatten()
             .unwrap_or_else(|| face.boundaries()[0].vertex_iter().next().unwrap().point())
     };
+    // PATCH(BrepSCAD): a negated (difference) shell is inverted even when the
+    // pair is not coplanar. Without the shift, the subject's outer faces are
+    // classified as outside and the engine returns the tool instead of the cut.
     let inverted = |poly: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>| -> isize {
-        isize::from(flat && poly.to_polygon().volume() < 0.0)
+        isize::from(poly.to_polygon().volume() < 0.0)
     };
     let (shift0, shift1) = (inverted(&poly_shell0), inverted(&poly_shell1));
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();

@@ -36,7 +36,10 @@ Local patches:
   boolean when an intersection endpoint coincided with an existing vertex.
 - `monstertruck-solid/src/transversal/classic/mod.rs` returns
   `Solid::new_unchecked` from `finalize`, so open boolean-derived shells reach
-  the adapter's retry ladder and the tessellator.
+  the adapter's retry ladder and the tessellator. It also applies the
+  inverted-shell crossing shift even when the shell pair is not coplanar;
+  without that, a difference's subject faces are classified as outside and the
+  engine returns the tool instead of the cut.
 - `monstertruck-topology/src/shell.rs` and `src/solid/mod.rs` use
   `Face::new_unchecked` / `Solid::new_unchecked` in `try_mapped`, so mapping a
   boolean result does not reject non-simple wires or open shells.
