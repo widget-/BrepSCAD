@@ -1,0 +1,27 @@
+[package]
+name = "monstertruck-mesh"
+version = "0.4.1"
+authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Polygon mesh data structures and algorithms"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+keywords = ["truck", "graphics", "mesh", "obj", "stl"]
+categories = ["graphics"]
+exclude = ["examples/**/*.obj"]
+
+[dependencies]
+array-macro = { workspace = true }
+bytemuck = { workspace = true }
+itertools = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+monstertruck-core = { workspace = true }
+monstertruck-traits = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+

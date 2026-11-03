@@ -1,0 +1,25 @@
+[package]
+name = "monstertruck-traits"
+version = "0.4.1"
+authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Geometric trait definitions"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+[features]
+default = []
+derive = ["monstertruck-derive"]
+polynomial = []
+
+[dependencies]
+num-traits = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+monstertruck-core = { workspace = true }
+monstertruck-derive = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
+

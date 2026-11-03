@@ -1,0 +1,37 @@
+[package]
+name = "monstertruck-modeling"
+version = "0.4.1"
+authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Integrated geometric and topological modeling algorithms"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+keywords = ["truck", "graphics"]
+categories = ["graphics"]
+
+[features]
+default = []
+# PATCH(BrepSCAD): the fillet crate is not vendored. The feature stays defined
+# (the source gates code on it) but pulls nothing; it is off by default.
+fillet = []
+font = ["dep:ttf-parser"]
+
+[dependencies]
+derive_more = { workspace = true }
+itertools = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+monstertruck-core = { workspace = true }
+monstertruck-geometry = { workspace = true }
+monstertruck-traits = { workspace = true, features = ["derive"] }
+monstertruck-mesh = { workspace = true }
+monstertruck-topology = { workspace = true }
+rayon = { workspace = true }
+ttf-parser = { workspace = true, optional = true }
+# `web_time::Instant` is `std::time::Instant` on native and falls back to the
+# browser performance clock on wasm32, where `std::time::Instant::now()` panics.
+web-time = { workspace = true }
+

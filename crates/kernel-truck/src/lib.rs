@@ -86,11 +86,7 @@ fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Optio
     catch_unwind(AssertUnwindSafe(|| match op {
         BooleanOp::Union => monstertruck_solid::or(a, b, tolerance).ok(),
         BooleanOp::Intersection => monstertruck_solid::and(a, b, tolerance).ok(),
-        BooleanOp::Difference => {
-            let mut inverted = b.clone();
-            inverted.not();
-            monstertruck_solid::and(a, &inverted, tolerance).ok()
-        }
+        BooleanOp::Difference => monstertruck_solid::difference(a, b, tolerance).ok(),
     }))
     .ok()
     .flatten()
@@ -295,6 +291,21 @@ impl TruckKernel {
             {
                 return Ok(self.insert(OwnedShape::Solid(result)));
             }
+        }
+
+        // The normalized entry points rescale both operands and try their own
+        // tolerance ladder. They recover cases the exact ladder misses (a
+        // cylinder a hair taller than the cube it pierces, for example) but are
+        // slower, so they run only after the exact attempts fail.
+        let normalized = match op {
+            BooleanOp::Union => monstertruck_solid::or_normalized(&a, &b).ok(),
+            BooleanOp::Intersection => monstertruck_solid::and_normalized(&a, &b).ok(),
+            BooleanOp::Difference => monstertruck_solid::difference_normalized(&a, &b).ok(),
+        };
+        if let Some(result) = normalized
+            && (op != BooleanOp::Union || union_covers(&result, &a, &b))
+        {
+            return Ok(self.insert(OwnedShape::Solid(result)));
         }
 
         let over_budget = |started: std::time::Instant| started.elapsed() > BOOLEAN_RETRY_BUDGET;

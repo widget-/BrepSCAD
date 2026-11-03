@@ -1,46 +1,55 @@
 # Vendored dependencies
 
 This branch (`wip/monstertruck`) evaluates the `monstertruck` fork in place of
-the upstream Truck stack. `monstertruck-solid` and `monstertruck-topology` are
-vendored because the published 0.4.1 boolean backend is "classic 0.3.2 verbatim"
-and lacks fixes the BrepSCAD adapter relies on. The remaining `monstertruck-*`
-crates come from crates.io 0.4.1.
+the upstream Truck stack. The whole kernel stack is vendored from PR #31
+(`pr/boolean-robustness`, commit `79ef869bc2`, based on master `d2ad1ed7`)
+because the published 0.4.1 boolean backend is "classic 0.3.2 verbatim": it
+amputates coplanar unions and rejects boolean-derived shells the adapter needs.
+PR #31 supplies the coplanar pipeline, 5-ray classification, normalized boolean
+entry points, parallel face division, and the meshing collision-culling fix.
+The patches below are the remaining BrepSCAD fallbacks on top of it.
 
-## monstertruck-solid 0.4.1
+## monstertruck (PR #31)
 
-Source: <https://github.com/virtualritz/monstertruck>, published crate `0.4.1`
-(commit `e6520c2`). Licensed under Apache-2.0; see
-[`LICENSE`](monstertruck-solid/LICENSE).
+Source: <https://github.com/virtualritz/monstertruck>, PR #31 head
+`79ef869bc2`. Licensed under Apache-2.0; see
+[`LICENSE`](monstertruck/LICENSE).
 
-Local patches, all in `src/transversal/classic/`:
+`vendor/monstertruck/` is a nested workspace holding the nine crates this
+project builds: `core`, `derive`, `geometry`, `mesh`, `meshing`, `modeling`,
+`solid`, `topology`, and `traits`. The crates' `workspace = true` dependencies
+resolve inside that nested workspace. Test-only dependencies are stripped (we
+never build the vendored workspace's tests), and `monstertruck-modeling` keeps a
+defined-but-empty `fillet` feature because the fillet crate is not vendored and
+the source gates code on it.
 
-- `divide_face.rs` keeps a divided face when `Face::try_new` rejects its wires
-  (boolean-generated wires are often non-simple) by falling back to
-  `Face::new_unchecked`, instead of failing the whole boolean.
-- `loops_store.rs` snaps a projected vertex to the nearer end of its curve when
-  the intersection parameter lands on, or a rounding error outside, the curve's
-  range. `Edge::cut_with_parameter` rejects such a parameter, which used to fail
-  the boolean when an intersection endpoint coincided with an existing vertex.
-- `faces_classification.rs` skips a component whose faces share every edge, so
-  `extract_boundaries()` returning no wires no longer indexes `boundary[0][0]`
-  out of bounds.
-- `mod.rs` ports upstream Truck 0.4.0's `InsideJudge`: three-ray majority with
-  face orientation applied, and a threshold of 0 for an inverted shell. The
-  0.3.2 single-ray test misclassifies every face when `difference` runs as
-  `and(a, not(b))`, leaving the result open.
-- `mod.rs` returns `Solid::new_unchecked` from `finalize`, matching upstream
-  0.4.0. The adapter accepts open boolean-derived shells and tessellates the
-  surviving faces; `Solid::try_new` here rejected them and lost the result.
+Local patches:
 
-## monstertruck-topology 0.4.1
+- `monstertruck-solid/src/transversal/classic/divide_face.rs` keeps a divided
+  face when `Face::try_new` rejects its wires (boolean-generated wires are often
+  non-simple) by falling back to `Face::new_unchecked`, instead of failing the
+  whole boolean.
+- `monstertruck-solid/src/transversal/classic/loops_store.rs` snaps a projected
+  vertex to the nearer end of its curve when the intersection parameter lands
+  on, or a rounding error outside, the curve's range.
+  `Edge::cut_with_parameter` rejects such a parameter, which used to fail the
+  boolean when an intersection endpoint coincided with an existing vertex.
+- `monstertruck-solid/src/transversal/classic/mod.rs` returns
+  `Solid::new_unchecked` from `finalize`, so open boolean-derived shells reach
+  the adapter's retry ladder and the tessellator. It also keeps the divided
+  shells when `coplanar::sew` cannot stitch a coplanar pair, instead of failing
+  the whole boolean.
+- `monstertruck-topology/src/shell.rs` and `src/solid/mod.rs` use
+  `Face::new_unchecked` / `Solid::new_unchecked` in `try_mapped`, so mapping a
+  boolean result does not reject non-simple wires or open shells.
+- `monstertruck-geometry` carries PR #32 (`1b6f1de61e`), which cuts B-splines
+  onto a knot just above the cut parameter instead of inserting a
+  multiplicity-`degree + 2` knot beside it.
 
-Source: same crate release. Licensed under Apache-2.0; see
-[`LICENSE`](monstertruck-topology/LICENSE).
-
-- `src/shell.rs` and `src/solid/mod.rs` use `Face::new_unchecked` /
-  `Solid::new_unchecked` in `try_mapped`, so mapping a boolean result does not
-  reject non-simple wires or open shells. This mirrors the
-  `PATCH(BrepSCAD)` topology patches on the Truck stack.
+The adapter uses `monstertruck_solid::difference` directly and, after the exact
+tolerance ladder fails, falls back to `and_normalized` / `or_normalized` /
+`difference_normalized`. Those recover cases the unscaled ladder misses, such as
+a cylinder a hair taller than the cube it pierces.
 
 ## Truck stack (retained, unused on this branch)
 

@@ -1,0 +1,25 @@
+[package]
+name = "monstertruck-geometry"
+version = "0.4.1"
+authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Geometric primitives: knot vectors, B-splines, NURBS, and T-splines"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+keywords = ["truck", "graphics"]
+categories = ["graphics"]
+
+[dependencies]
+parking_lot = { workspace = true }
+serde = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+monstertruck-core = { workspace = true }
+monstertruck-traits = { workspace = true, features = ["derive"] }
+
+[[bench]]
+name = "scalar_generic"
+harness = false
+

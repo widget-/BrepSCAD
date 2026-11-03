@@ -1618,8 +1618,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-core"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f34f2f284b16af3672085cdcaf5d6521feecc104bacf1a37f1fac6c8c1a5884"
 dependencies = [
  "cgmath",
  "matext4cgmath",
@@ -1631,8 +1629,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-derive"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05c2cdecf25f2d799557e29b5b8c9b6db4d766d150e29aad6d4bba5204f2ea58"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -1643,8 +1639,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-geometry"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cee8ce45200826a20c752ae24c82f5048dcddd2f168230c1799c214b804d6f40"
 dependencies = [
  "monstertruck-core",
  "monstertruck-traits",
@@ -1657,8 +1651,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-mesh"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875dbf22ba985790b87e652bfaa1ed24852d3746b1ac022ac7b6c28ba35121c6"
 dependencies = [
  "array-macro",
  "bytemuck",
@@ -1674,8 +1666,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-meshing"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea03901ea0b3cfaf380c1cc8c2efee85500cdfe260c38bb8278c2a66a18de939"
 dependencies = [
  "array-macro",
  "derive_more",
@@ -1694,8 +1684,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-modeling"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518f0c01eb240558e830d6734ab88dc0bf559923811553302aa1f3c16051c211"
 dependencies = [
  "derive_more",
  "itertools 0.14.0",
@@ -1724,6 +1712,7 @@ dependencies = [
  "monstertruck-meshing",
  "monstertruck-topology",
  "monstertruck-traits",
+ "rayon",
  "rustc-hash 2.1.3",
  "serde",
  "smallvec",
@@ -1747,8 +1736,6 @@ dependencies = [
 [[package]]
 name = "monstertruck-traits"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77b8f72eb09b5f613f6ccc314c53bc4c43de1a0d1d5a29eae61f8b9b8b04eed1"
 dependencies = [
  "getrandom 0.4.3",
  "monstertruck-core",

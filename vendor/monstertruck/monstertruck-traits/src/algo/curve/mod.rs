@@ -1,0 +1,254 @@
+use super::*;
+use surface::{SearchNearestParameterVector, SearchParameterVector};
+
+/// Divides the domain into equal parts, examines all the values, and returns `t` such that `curve.evaluate(t)` is closest to `point`.
+/// This method is useful to get an efficient hint of [`search_nearest_parameter`].
+pub fn presearch<C>(curve: &C, point: C::Point, range: (f64, f64), division: usize) -> f64
+where
+    C: ParametricCurve,
+    C::Point: MetricSpace<Metric = f64> + Copy, {
+    let (t0, t1) = range;
+    let mut res = t0;
+    let mut min = f64::INFINITY;
+    for i in 0..=division {
+        let p = i as f64 / division as f64;
+        let t = t0 * (1.0 - p) + t1 * p;
+        let dist = curve.evaluate(t).distance2(point);
+        if dist < min {
+            min = dist;
+            res = t;
+        }
+    }
+    res
+}
+
+/// Searches the nearest parameter by Newton's method.
+pub fn search_nearest_parameter<C>(
+    curve: &C,
+    point: C::Point,
+    hint: f64,
+    trials: usize,
+) -> Option<f64>
+where
+    C: ParametricCurve,
+    C::Point: EuclideanSpace<Scalar = f64, Diff = C::Vector>,
+    C::Vector: InnerSpace<Scalar = f64> + Tolerance,
+{
+    let function = move |t: f64| {
+        let diff = curve.evaluate(t) - point;
+        let der = curve.derivative(t);
+        let der2 = curve.derivative_2(t);
+        CalcOutput {
+            value: der.dot(diff),
+            derivation: der2.dot(diff) + der.magnitude2(),
+        }
+    };
+    newton::solve(function, hint, trials).ok()
+}
+
+/// Searches the parameter by Newton's method.
+pub fn search_parameter<C>(curve: &C, point: C::Point, hint: f64, trials: usize) -> Option<f64>
+where
+    C: ParametricCurve,
+    C::Point: EuclideanSpace<Scalar = f64, Diff = C::Vector>,
+    C::Vector: InnerSpace<Scalar = f64> + Tolerance, {
+    let function = move |t: f64| {
+        let diff = curve.evaluate(t) - point;
+        let der = curve.derivative(t);
+        CalcOutput {
+            value: der.dot(diff),
+            derivation: der.magnitude2(),
+        }
+    };
+    newton::solve(function, hint, trials).ok().and_then(|t| {
+        match curve.evaluate(t).to_vec().near(&point.to_vec()) {
+            true => Some(t),
+            false => None,
+        }
+    })
+}
+
+/// Creates the curve division
+///
+/// # Panics
+///
+/// `tol` must be greater than or equal to `TOLERANCE`.
+pub fn parameter_division<C>(curve: &C, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<C::Point>)
+where
+    C: ParametricCurve,
+    C::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>, {
+    nonpositive_tolerance!(tol);
+    sub_parameter_division(
+        curve,
+        range,
+        (curve.evaluate(range.0), curve.evaluate(range.1)),
+        tol,
+        100,
+    )
+}
+
+fn sub_parameter_division<C>(
+    curve: &C,
+    range: (f64, f64),
+    ends: (C::Point, C::Point),
+    tol: f64,
+    trials: usize,
+) -> (Vec<f64>, Vec<C::Point>)
+where
+    C: ParametricCurve,
+    C::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+{
+    let seed = ends.0.midpoint(ends.1);
+    let p = 0.5 + (0.2 * HashGen::hash1(seed) - 0.1);
+    let t = range.0 * (1.0 - p) + range.1 * p;
+    let mid = ends.0 + (ends.1 - ends.0) * p;
+    let dist2 = curve.evaluate(t).distance2(mid);
+    let mid_param = (range.0 + range.1) / 2.0;
+    // A non-finite deviation never satisfies the tolerance test and a range that
+    // can no longer be halved never improves; both would otherwise subdivide all
+    // the way down to the depth cap, i.e. an exponential amount of work.
+    // The halvable test stays in its positive `<` form: with a non-finite
+    // midpoint both comparisons are false, which correctly reads as
+    // unsplittable, while the De Morgan `>=` rewrite would not.
+    let range_is_halvable = range.0 < mid_param && mid_param < range.1;
+    let unsplittable = !dist2.is_finite() || !range_is_halvable;
+    if dist2 < tol * tol || trials == 0 || unsplittable {
+        (vec![range.0, range.1], vec![ends.0, ends.1])
+    } else {
+        let mid_value = curve.evaluate(mid_param);
+        let (mut params, mut pts) = sub_parameter_division(
+            curve,
+            (range.0, mid_param),
+            (ends.0, mid_value),
+            tol,
+            trials - 1,
+        );
+        let _ = (params.pop(), pts.pop());
+        let (new_params, new_pts) = sub_parameter_division(
+            curve,
+            (mid_param, range.1),
+            (mid_value, ends.1),
+            tol,
+            trials - 1,
+        );
+        params.extend(new_params);
+        pts.extend(new_pts);
+        (params, pts)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SubSurface<C0, C1> {
+    curve0: C0,
+    curve1: C1,
+}
+
+impl<P, C0, C1> ParametricSurface for SubSurface<C0, C1>
+where
+    P: EuclideanSpace<Scalar = f64>,
+    P::Diff: VectorSpace<Scalar = f64>,
+    C0: ParametricCurve<Point = P, Vector = P::Diff>,
+    C1: ParametricCurve<Point = P, Vector = P::Diff>,
+{
+    type Point = P;
+    type Vector = P::Diff;
+    #[inline(always)]
+    fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
+        match (m, n) {
+            (0, 0) => self.curve0.evaluate(u) - self.curve1.evaluate(v),
+            (_, 0) => self.curve0.derivative_n(m, u),
+            (0, _) => self.curve1.derivative_n(n, v) * (-1.0),
+            _ => Self::Vector::zero(),
+        }
+    }
+    #[inline(always)]
+    fn evaluate(&self, u: f64, v: f64) -> Self::Point {
+        P::from_vec(self.derivative_mn(0, 0, u, v))
+    }
+    #[inline(always)]
+    fn derivative_u(&self, u: f64, _: f64) -> Self::Vector { self.curve0.derivative(u) }
+    #[inline(always)]
+    fn derivative_v(&self, _: f64, v: f64) -> Self::Vector { self.curve1.derivative(v) * (-1.0) }
+    #[inline(always)]
+    fn derivative_uu(&self, u: f64, _: f64) -> Self::Vector { self.curve0.derivative_2(u) }
+    #[inline(always)]
+    fn derivative_vv(&self, _: f64, v: f64) -> Self::Vector { self.curve1.derivative_2(v) * (-1.0) }
+    #[inline(always)]
+    fn derivative_uv(&self, _: f64, _: f64) -> Self::Vector { P::Diff::zero() }
+    #[inline(always)]
+    fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
+        (self.curve0.parameter_range(), self.curve1.parameter_range())
+    }
+    #[inline(always)]
+    fn period_u(&self) -> Option<f64> { self.curve0.period() }
+    #[inline(always)]
+    fn period_v(&self) -> Option<f64> { self.curve1.period() }
+}
+
+impl<C0, C1> ParametricSurface3D for SubSurface<C0, C1>
+where
+    C0: ParametricCurve3D,
+    C1: ParametricCurve3D,
+{
+}
+
+/// Divides the domain into equal parts, examines all the values, and returns `(t0, t1)` such that
+/// `curve0.evaluate(t0)` is closest to `curve1.evaluate(t1)`.
+/// This method is useful to get an efficient hint of [`search_closest_parameter`].
+#[inline(always)]
+pub fn presearch_closest_point<P, C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    ranges: SurfaceParameterRange,
+    division: usize,
+) -> (f64, f64)
+where
+    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Copy,
+    P::Diff: VectorSpace<Scalar = f64>,
+    C0: ParametricCurve<Point = P, Vector = P::Diff>,
+    C1: ParametricCurve<Point = P, Vector = P::Diff>,
+{
+    surface::presearch(
+        &SubSurface { curve0, curve1 },
+        P::origin(),
+        ranges,
+        division,
+    )
+}
+
+/// Searches the parameters of the closest point of the two curves.
+#[inline(always)]
+pub fn search_closest_parameter<P, C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    hint: (f64, f64),
+    trials: usize,
+) -> Option<(f64, f64)>
+where
+    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64>,
+    P::Diff: SearchNearestParameterVector<Point = P> + Tolerance,
+    C0: ParametricCurve<Point = P, Vector = P::Diff>,
+    C1: ParametricCurve<Point = P, Vector = P::Diff>,
+{
+    surface::search_nearest_parameter(&SubSurface { curve0, curve1 }, P::origin(), hint, trials)
+}
+
+/// Searches the parameters of the intersection point of the two curves.
+#[inline(always)]
+pub fn search_intersection_parameter<P, C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    hint: (f64, f64),
+    trials: usize,
+) -> Option<(f64, f64)>
+where
+    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P::Diff: SearchParameterVector<Point = P> + Tolerance,
+    C0: ParametricCurve<Point = P, Vector = P::Diff>,
+    C1: ParametricCurve<Point = P, Vector = P::Diff>,
+{
+    surface::search_parameter(&SubSurface { curve0, curve1 }, P::origin(), hint, trials)
+}
+
+#[cfg(test)]
+mod tests;

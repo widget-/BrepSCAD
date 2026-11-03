@@ -1,0 +1,45 @@
+[package]
+name = "monstertruck-solid"
+version = "0.4.1"
+authors = ["Moritz Moeller <virtualritz@protonmail.com>"]
+edition = "2024"
+description = "Boolean operations for solids"
+homepage = "https://github.com/virtualritz/monstertruck"
+repository = "https://github.com/virtualritz/monstertruck"
+license = "Apache-2.0"
+
+[features]
+default = ["marching-ssi"]
+# Truck-derived polyline-marching SSI: the self-contained boolean backend the
+# published crate ships by default. Under `--no-default-features` no backend is
+# compiled and the boolean entry points return a typed `NoBackend` error; an
+# external SSI boolean backend can be plugged in over the public solid types.
+marching-ssi = []
+step-test = []
+
+[dependencies]
+ahash = { workspace = true }
+derive_more = { workspace = true }
+itertools = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+monstertruck-core = { workspace = true }
+monstertruck-geometry = { workspace = true }
+monstertruck-traits = { workspace = true }
+monstertruck-meshing = { workspace = true }
+monstertruck-topology = { workspace = true }
+
+# `ahash` 0.8's default `runtime-rng` feature pulls `getrandom` 0.3, whose
+# `wasm_js` BACKEND (selected by the `getrandom_backend="wasm_js"` rustflag that
+# `just wasm-build` passes) refuses to compile unless `getrandom` 0.3 also has
+# its `wasm_js` FEATURE enabled. The workspace `getrandom` entry is 0.3's
+# successor 0.4, and enabling a feature there does not reach the 0.3 copy, so it
+# has to be named separately and renamed to avoid colliding with it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_wasm_js = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+

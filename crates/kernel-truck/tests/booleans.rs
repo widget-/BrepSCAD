@@ -216,9 +216,11 @@ fn coplanar_overlapping_union_keeps_both_operands() {
     let mesh = kernel.tessellate(union, 0.05).expect("mesh");
     let (min, max) = mesh_bounds(&mesh);
 
-    // Master shapeops classifies coplanar face pairs as "inside" and returns a
-    // union that stops at x = 1, so the adapter rejects the result and falls
-    // back. Either way, the union has to contain both cubes.
-    assert!(min[0] <= -1.0 + 1.0e-6, "min = {min:?}");
-    assert!(max[0] >= 2.0 - 1.0e-6, "max = {max:?}");
+    // PR #31 imprints and sews coplanar face pairs, so this is a true fusion:
+    // the union is the 3x2x2 box, volume 12. Before that the adapter could only
+    // fall back to a compound (3 shells, volume 4-6).
+    assert_close(min, [-1.0, -1.0, -1.0]);
+    assert_close(max, [2.0, 1.0, 1.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 12.0).abs() < 0.1, "volume = {volume}");
 }

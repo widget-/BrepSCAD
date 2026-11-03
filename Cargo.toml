@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor/truck-*", "vendor/monstertruck-*"]
+exclude = ["vendor/truck-*", "vendor/monstertruck", "vendor/monstertruck-*"]
 members = [
     "crates/cli",
     "crates/kernel-api",
@@ -34,5 +34,12 @@ brepscad-eval = { path = "crates/scad-eval" }
 brepscad-syntax = { path = "crates/scad-syntax" }
 
 [patch.crates-io]
-monstertruck-solid = { path = "vendor/monstertruck-solid" }
-monstertruck-topology = { path = "vendor/monstertruck-topology" }
+monstertruck-core = { path = "vendor/monstertruck/monstertruck-core" }
+monstertruck-derive = { path = "vendor/monstertruck/monstertruck-derive" }
+monstertruck-geometry = { path = "vendor/monstertruck/monstertruck-geometry" }
+monstertruck-mesh = { path = "vendor/monstertruck/monstertruck-mesh" }
+monstertruck-meshing = { path = "vendor/monstertruck/monstertruck-meshing" }
+monstertruck-modeling = { path = "vendor/monstertruck/monstertruck-modeling" }
+monstertruck-solid = { path = "vendor/monstertruck/monstertruck-solid" }
+monstertruck-topology = { path = "vendor/monstertruck/monstertruck-topology" }
+monstertruck-traits = { path = "vendor/monstertruck/monstertruck-traits" }

@@ -52,7 +52,7 @@ scripts/
 vendor/
   README.md     which Truck/monstertruck crates are vendored and what changed
   truck-*/      Truck master stack, patched for boolean robustness (main)
-  monstertruck-*/ monstertruck fork, patched for boolean robustness (trial)
+  monstertruck/ PR #31 stack, patched for boolean robustness (trial)
 ```
 
 ## What works
