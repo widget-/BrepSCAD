@@ -28,6 +28,10 @@ struct SewStats {
     out_vertices: usize,
     out_edges: usize,
     out_faces: usize,
+    vertex_ms: f64,
+    merge_ms: f64,
+    split_ms: f64,
+    extract_ms: f64,
     total_ms: f64,
 }
 
@@ -35,7 +39,8 @@ impl SewStats {
     fn summary(&self) -> String {
         format!(
             "in(v={} e={} f={}) weld(v={}) merge(cand={} ok={} cache={} removed={}) \
-             split(iter={} boundary={} checks={} applied={}) out(v={} e={} f={}) {:.3}ms",
+             split(iter={} boundary={} checks={} applied={}) out(v={} e={} f={}) \
+             time(weld={:.3} merge={:.3} split={:.3} extract={:.3} total={:.3})ms",
             self.input_vertices,
             self.input_edges,
             self.input_faces,
@@ -51,6 +56,10 @@ impl SewStats {
             self.out_vertices,
             self.out_edges,
             self.out_faces,
+            self.vertex_ms,
+            self.merge_ms,
+            self.split_ms,
+            self.extract_ms,
             self.total_ms,
         )
     }
@@ -105,13 +114,32 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         edge_stable_ids: None,
         face_stable_ids: None,
     };
+    if let (Some(stats), Some(start)) = (stats.as_mut(), started) {
+        stats.vertex_ms = start.elapsed().as_secs_f64() * 1000.0;
+    }
+    let merge_start = debug.then(Instant::now);
     merge_edges(&mut compressed, tol, &mut stats);
+    if let (Some(stats), Some(start)) = (stats.as_mut(), merge_start) {
+        stats.merge_ms = start.elapsed().as_secs_f64() * 1000.0;
+    }
+    let split_start = debug.then(Instant::now);
     split_boundary_edges(&mut compressed, tol, &mut stats);
+    if let (Some(stats), Some(start)) = (stats.as_mut(), split_start) {
+        stats.split_ms = start.elapsed().as_secs_f64() * 1000.0;
+    }
+    let merge_start = debug.then(Instant::now);
     merge_edges(&mut compressed, tol, &mut stats);
+    if let (Some(stats), Some(start)) = (stats.as_mut(), merge_start) {
+        stats.merge_ms += start.elapsed().as_secs_f64() * 1000.0;
+    }
     let out_vertices = compressed.vertices.len();
     let out_edges = compressed.edges.len();
     let out_faces = compressed.faces.len();
+    let extract_start = debug.then(Instant::now);
     let result = Shell::extract(compressed).ok();
+    if let (Some(stats), Some(start)) = (stats.as_mut(), extract_start) {
+        stats.extract_ms = start.elapsed().as_secs_f64() * 1000.0;
+    }
     if let Some(mut stats) = stats {
         stats.out_vertices = out_vertices;
         stats.out_edges = out_edges;
