@@ -231,6 +231,8 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
     stats: &mut Option<SewStats>,
 ) {
+    let mut sample_cache: Vec<Option<PresearchSamples<Point3>>> =
+        (0..compressed.edges.len()).map(|_| None).collect();
     for _ in 0..1000 {
         if let Some(stats) = stats.as_mut() {
             stats.split_iterations += 1;
@@ -267,7 +269,9 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             let (a, b) = edge.vertices;
             let (t0, t1) = edge.curve.range_tuple();
             let margin = (t1 - t0) * 1.0e-9;
-            let samples = presearch_samples(&edge.curve, (t0, t1), PRESEARCH_DIVISION);
+            let samples = sample_cache[index].get_or_insert_with(|| {
+                presearch_samples(&edge.curve, (t0, t1), PRESEARCH_DIVISION)
+            });
             for &vertex in &boundary_vertices {
                 if vertex == a || vertex == b {
                     continue;
@@ -305,11 +309,13 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             vertices: (a, vertex),
             curve: first,
         });
+        sample_cache.push(None);
         let second_index = compressed.edges.len();
         compressed.edges.push(CompressedEdge {
             vertices: (vertex, b),
             curve: second,
         });
+        sample_cache.push(None);
         for face in &mut compressed.faces {
             for wire in &mut face.boundaries {
                 let mut new_wire = Vec::with_capacity(wire.len() + 1);
