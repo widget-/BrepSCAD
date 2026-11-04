@@ -26,6 +26,7 @@ mod loops_store;
 
 use super::integrate::{ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface};
 use crate::alternative::Alternative;
+use crate::diagnostics;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
@@ -89,7 +90,17 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if tol <= 0.0 {
         return None;
     }
+    // PATCH(BrepSCAD): opt-in stage timing for the classic boolean pipeline.
+    let mut timer = diagnostics::StageTimer::new(diagnostics::boolean_timing_enabled());
+    if timer.enabled() {
+        eprintln!(
+            "[boolean] pair: faces={}x{} tol={tol}",
+            shell0.face_iter().count(),
+            shell1.face_iter().count()
+        );
+    }
     let imprinted = coplanar::imprint(shell0, shell1, tol);
+    timer.mark("imprint");
     let (shell0, shell1) = match &imprinted {
         Some(found) => (&found.shell0, &found.shell1),
         None => (shell0, shell1),
@@ -104,12 +115,15 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         })
     };
     let planar_pair = planar(shell0) && planar(shell1);
+    timer.mark("planar-check");
     let poly_shell0 = shell0.triangulation(tol);
     let poly_shell1 = shell1.triangulation(tol);
+    timer.mark("triangulate");
     let altshell0: AltCurveShell<C, S> =
         shell0.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
     let altshell1: AltCurveShell<C, S> =
         shell1.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
+    timer.mark("map-shells");
     let loops_store::LoopsStoreQuadruple {
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
@@ -122,8 +136,10 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         flat.then_some(tol),
         tol,
     )?;
+    timer.mark("loops-stores");
     let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
     let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
+    timer.mark("divide-faces");
     let alt_ids = |shell: &Shell<Point3, C, S>,
                    alt: &AltCurveShell<C, S>,
                    marks: &HashMap<FaceId<S>, coplanar::Overlap>| {
@@ -142,6 +158,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     };
     cls0.integrate_by_component();
     cls1.integrate_by_component();
+    timer.mark("integrate-components");
     let meshes: HashMap<FaceId<S>, PolygonMesh> = match flat {
         true => altshell0
             .face_iter()
@@ -151,6 +168,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             .collect(),
         false => Default::default(),
     };
+    timer.mark("collect-meshes");
     let probe = |face: &Face<Point3, AltCurve<C, S>, S>| -> Point3 {
         let from_mesh = || {
             let mesh = meshes.get(&face.id())?;
@@ -239,6 +257,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         Some(())
     })?;
+    timer.mark("classify-unknown");
     for (face, mark) in taken0 {
         if mark == coplanar::Overlap::Same {
             or0.push(face);
@@ -252,7 +271,8 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     and0.append(&mut and1);
     or0.append(&mut or1);
     let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
-    match flat {
+    timer.mark("assemble");
+    let result = match flat {
         true => Some([coplanar::sew(&and, tol)?, coplanar::sew(&or, tol)?]),
         // PATCH(BrepSCAD): an all-planar non-coplanar pair can still leave
         // split edges; run the general sew for those.
@@ -261,7 +281,9 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             coplanar::sew(&or, tol).unwrap_or(or),
         ]),
         false => Some([and, or]),
-    }
+    };
+    timer.mark("sew");
+    result
 }
 
 fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

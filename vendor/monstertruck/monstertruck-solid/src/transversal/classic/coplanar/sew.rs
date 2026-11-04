@@ -1,18 +1,74 @@
 //! Merging the coincident vertices and edges two boolean operands leave behind.
 
 use super::super::super::integrate::{ShapeOpsCurve, ShapeOpsSurface};
+use crate::diagnostics;
 use monstertruck_geometry::PRESEARCH_DIVISION;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::compress::{CompressedEdge, CompressedEdgeIndex, CompressedShell};
 use monstertruck_topology::*;
 use monstertruck_traits::algo::curve::{PresearchSamples, presearch_samples};
 use std::collections::HashSet;
+use std::time::Instant;
+
+// PATCH(BrepSCAD): opt-in sew state counters for the boolean diagnostics.
+#[derive(Default)]
+struct SewStats {
+    input_vertices: usize,
+    input_edges: usize,
+    input_faces: usize,
+    welded_vertices: usize,
+    merge_candidates: usize,
+    merge_successes: usize,
+    cache_builds: usize,
+    removed_edges: usize,
+    split_iterations: usize,
+    boundary_edges: usize,
+    split_candidates: usize,
+    splits: usize,
+    out_vertices: usize,
+    out_edges: usize,
+    out_faces: usize,
+    total_ms: f64,
+}
+
+impl SewStats {
+    fn summary(&self) -> String {
+        format!(
+            "in(v={} e={} f={}) weld(v={}) merge(cand={} ok={} cache={} removed={}) \
+             split(iter={} boundary={} checks={} applied={}) out(v={} e={} f={}) {:.3}ms",
+            self.input_vertices,
+            self.input_edges,
+            self.input_faces,
+            self.welded_vertices,
+            self.merge_candidates,
+            self.merge_successes,
+            self.cache_builds,
+            self.removed_edges,
+            self.split_iterations,
+            self.boundary_edges,
+            self.split_candidates,
+            self.splits,
+            self.out_vertices,
+            self.out_edges,
+            self.out_faces,
+            self.total_ms,
+        )
+    }
+}
 
 pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell: &Shell<Point3, C, S>,
     tol: f64,
 ) -> Option<Shell<Point3, C, S>> {
+    let debug = diagnostics::sew_enabled();
+    let started = debug.then(Instant::now);
     let compressed = shell.compress();
+    let mut stats = debug.then(|| SewStats {
+        input_vertices: compressed.vertices.len(),
+        input_edges: compressed.edges.len(),
+        input_faces: compressed.faces.len(),
+        ..Default::default()
+    });
     let mut vertices: Vec<Point3> = Vec::new();
     let vertex_map: Vec<usize> = compressed
         .vertices
@@ -27,6 +83,9 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 })
         })
         .collect();
+    if let Some(stats) = stats.as_mut() {
+        stats.welded_vertices = vertices.len();
+    }
     let edges = compressed
         .edges
         .into_iter()
@@ -46,15 +105,27 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         edge_stable_ids: None,
         face_stable_ids: None,
     };
-    merge_edges(&mut compressed, tol);
-    split_boundary_edges(&mut compressed, tol);
-    merge_edges(&mut compressed, tol);
-    Shell::extract(compressed).ok()
+    merge_edges(&mut compressed, tol, &mut stats);
+    split_boundary_edges(&mut compressed, tol, &mut stats);
+    merge_edges(&mut compressed, tol, &mut stats);
+    let out_vertices = compressed.vertices.len();
+    let out_edges = compressed.edges.len();
+    let out_faces = compressed.faces.len();
+    let result = Shell::extract(compressed).ok();
+    if let Some(mut stats) = stats {
+        stats.out_vertices = out_vertices;
+        stats.out_edges = out_edges;
+        stats.out_faces = out_faces;
+        stats.total_ms = started.map_or(0.0, |start| start.elapsed().as_secs_f64() * 1000.0);
+        eprintln!("[sew] {}", stats.summary());
+    }
+    result
 }
 
 fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     compressed: &mut CompressedShell<Point3, C, S>,
     tol: f64,
+    stats: &mut Option<SewStats>,
 ) {
     let middle = |curve: &C| {
         let (t0, t1) = curve.range_tuple();
@@ -73,6 +144,14 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 if known.vertices != (a, b) && known.vertices != (b, a) {
                     continue;
                 }
+                if let Some(stats) = stats.as_mut() {
+                    stats.merge_candidates += 1;
+                }
+                if caches[k].is_none() {
+                    if let Some(stats) = stats.as_mut() {
+                        stats.cache_builds += 1;
+                    }
+                }
                 let samples = caches[k].get_or_insert_with(|| {
                     presearch_samples(&known.curve, known.curve.range_tuple(), PRESEARCH_DIVISION)
                 });
@@ -82,6 +161,9 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                     .search_nearest_parameter(m, Some(hint), 30)
                     .is_some_and(|t| known.curve.subs(t).distance(m) < tol)
                 {
+                    if let Some(stats) = stats.as_mut() {
+                        stats.merge_successes += 1;
+                    }
                     found = Some((k, known.vertices == (a, b)));
                     break;
                 }
@@ -99,6 +181,9 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             }
         })
         .collect();
+    if let Some(stats) = stats.as_mut() {
+        stats.removed_edges += compressed.edges.len().saturating_sub(edges.len());
+    }
     for face in &mut compressed.faces {
         for wire in &mut face.boundaries {
             for use_ in wire {
@@ -116,8 +201,12 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     compressed: &mut CompressedShell<Point3, C, S>,
     tol: f64,
+    stats: &mut Option<SewStats>,
 ) {
     for _ in 0..1000 {
+        if let Some(stats) = stats.as_mut() {
+            stats.split_iterations += 1;
+        }
         let mut uses = vec![0usize; compressed.edges.len()];
         for face in &compressed.faces {
             for wire in &face.boundaries {
@@ -135,6 +224,9 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         if boundary.is_empty() {
             return;
         }
+        if let Some(stats) = stats.as_mut() {
+            stats.boundary_edges += boundary.len();
+        }
         let mut boundary_vertices = HashSet::new();
         for &index in &boundary {
             let (a, b) = compressed.edges[index].vertices;
@@ -151,6 +243,9 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             for &vertex in &boundary_vertices {
                 if vertex == a || vertex == b {
                     continue;
+                }
+                if let Some(stats) = stats.as_mut() {
+                    stats.split_candidates += 1;
                 }
                 let point = compressed.vertices[vertex];
                 let hint = samples.hint(point);
@@ -170,6 +265,9 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let Some((index, vertex, t)) = split else {
             return;
         };
+        if let Some(stats) = stats.as_mut() {
+            stats.splits += 1;
+        }
         let edge = compressed.edges[index].clone();
         let (a, b) = edge.vertices;
         let mut first = edge.curve.clone();
