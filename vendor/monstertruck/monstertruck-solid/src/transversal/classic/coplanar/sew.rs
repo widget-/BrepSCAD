@@ -239,24 +239,24 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) {
     let mut sample_cache: Vec<Option<SplitProbe>> =
         (0..compressed.edges.len()).map(|_| None).collect();
+    let mut uses = vec![0usize; compressed.edges.len()];
+    for face in &compressed.faces {
+        for wire in &face.boundaries {
+            for use_ in wire {
+                uses[use_.index] += 1;
+            }
+        }
+    }
+    let mut boundary: Vec<usize> = uses
+        .iter()
+        .enumerate()
+        .filter(|(_, count)| **count == 1)
+        .map(|(index, _)| index)
+        .collect();
     for _ in 0..1000 {
         if let Some(stats) = stats.as_mut() {
             stats.split_iterations += 1;
         }
-        let mut uses = vec![0usize; compressed.edges.len()];
-        for face in &compressed.faces {
-            for wire in &face.boundaries {
-                for use_ in wire {
-                    uses[use_.index] += 1;
-                }
-            }
-        }
-        let boundary: Vec<usize> = uses
-            .iter()
-            .enumerate()
-            .filter(|(_, count)| **count == 1)
-            .map(|(index, _)| index)
-            .collect();
         if boundary.is_empty() {
             return;
         }
@@ -321,6 +321,7 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let Some((index, vertex, t)) = split else {
             return;
         };
+        let old_uses = uses[index];
         if let Some(stats) = stats.as_mut() {
             stats.splits += 1;
         }
@@ -334,12 +335,14 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             curve: first,
         });
         sample_cache.push(None);
+        uses.push(0);
         let second_index = compressed.edges.len();
         compressed.edges.push(CompressedEdge {
             vertices: (vertex, b),
             curve: second,
         });
         sample_cache.push(None);
+        uses.push(0);
         for face in &mut compressed.faces {
             for wire in &mut face.boundaries {
                 let mut new_wire = Vec::with_capacity(wire.len() + 1);
@@ -370,6 +373,16 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 }
                 *wire = new_wire;
             }
+        }
+        uses[index] = 0;
+        uses[first_index] = old_uses;
+        uses[second_index] = old_uses;
+        if old_uses == 1 {
+            if let Some(position) = boundary.iter().position(|&edge| edge == index) {
+                boundary.remove(position);
+            }
+            boundary.push(first_index);
+            boundary.push(second_index);
         }
     }
 }
