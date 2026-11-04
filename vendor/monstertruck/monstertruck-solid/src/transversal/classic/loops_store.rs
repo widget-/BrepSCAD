@@ -37,18 +37,46 @@ impl ShapesOpStatus {
 pub(super) struct BoundaryWire<P, C> {
     wire: Wire<P, C>,
     status: ShapesOpStatus,
+    /// True when this wire came from the face's own boundary rather than from
+    /// an intersection curve.
+    boundary: bool,
 }
 
 impl<P, C> BoundaryWire<P, C> {
     #[inline(always)]
-    pub(super) fn new(wire: Wire<P, C>, status: ShapesOpStatus) -> Self { Self { wire, status } }
+    pub(super) fn new(wire: Wire<P, C>, status: ShapesOpStatus) -> Self {
+        Self {
+            wire,
+            status,
+            boundary: false,
+        }
+    }
+    #[inline(always)]
+    pub(super) fn new_boundary(wire: Wire<P, C>) -> Self {
+        Self {
+            wire,
+            status: ShapesOpStatus::Unknown,
+            boundary: true,
+        }
+    }
+    #[inline(always)]
+    pub(super) fn split(wire: Wire<P, C>, status: ShapesOpStatus, boundary: bool) -> Self {
+        Self {
+            wire,
+            status,
+            boundary,
+        }
+    }
     #[inline(always)]
     pub(super) fn status(&self) -> ShapesOpStatus { self.status }
+    #[inline(always)]
+    pub(super) fn is_boundary(&self) -> bool { self.boundary }
     #[inline(always)]
     pub(super) fn inverse(&self) -> Self {
         Self {
             wire: self.wire.inverse(),
             status: self.status.not(),
+            boundary: self.boundary,
         }
     }
 }
@@ -122,7 +150,7 @@ impl<'a, P, C, S> From<&'a Face<P, C, S>> for Loops<P, C> {
     fn from(face: &'a Face<P, C, S>) -> Loops<P, C> {
         face.absolute_boundaries()
             .iter()
-            .map(|wire| BoundaryWire::new(wire.clone(), ShapesOpStatus::Unknown))
+            .map(|wire| BoundaryWire::new_boundary(wire.clone()))
             .collect()
     }
 }
@@ -261,7 +289,8 @@ impl<P: Copy, C: Clone> Loops<P, C> {
                     let edge_index1 = (len + edge_index1 - edge_index0) % len + 1;
                     let new_wire = self[wire_index0].split_off(edge_index1);
                     self[wire_index0].status = status;
-                    self.push(BoundaryWire::new(new_wire, status.not()));
+                    let boundary = self[wire_index0].boundary;
+                    self.push(BoundaryWire::split(new_wire, status.not(), boundary));
                 } else {
                     let mut new_wire0 = self[wire_index1].clone();
                     let mut new_wire1 = new_wire0.split_off(edge_index1);

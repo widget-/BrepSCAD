@@ -2,7 +2,7 @@ mod common;
 
 use brepscad_eval::{evaluate, evaluate_to_meshes};
 use brepscad_kernel_truck::TruckKernel;
-use common::bounds;
+use common::{bounds, signed_volume};
 
 #[test]
 fn evaluates_a_cube_with_a_hole() {
@@ -67,4 +67,23 @@ fn difference_with_a_sphere_tessellates() {
 
     assert!(evaluation.shapes[0].mesh.triangle_count() > 0);
     assert_eq!(evaluation.shapes[0].parts.len(), 2);
+}
+
+/// The hull cut's bottom plane is exactly at the cell cutters' 45-degree
+/// crease. Its intersection curves run along several face boundaries; those
+/// faces must be ray-cast instead of keeping their boundary-derived status, or
+/// the internal cell walls survive and the volume is about 27148 instead of
+/// 23761.
+#[test]
+fn hull_cut_on_the_cell_crease_keeps_the_inner_cavity() {
+    let source = include_str!("data/opengrid_hull_cut.scad");
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!(
+        (volume - 23760.94).abs() < 20.0,
+        "volume = {volume}; expected about 23760.94"
+    );
 }
