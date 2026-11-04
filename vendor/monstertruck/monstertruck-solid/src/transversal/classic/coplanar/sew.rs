@@ -269,8 +269,8 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             boundary_vertices.insert(a);
             boundary_vertices.insert(b);
         }
-        let mut split = None;
-        'outer: for &index in &boundary {
+        let mut splits: Vec<(usize, usize, f64)> = Vec::new();
+        for &index in &boundary {
             let edge = &compressed.edges[index];
             let (a, b) = edge.vertices;
             let (t0, t1) = edge.curve.range_tuple();
@@ -284,6 +284,7 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 let samples = presearch_samples(&edge.curve, (t0, t1), PRESEARCH_DIVISION);
                 SplitProbe { samples, bounds }
             });
+            let mut edge_split = None;
             for &vertex in &boundary_vertices {
                 if vertex == a || vertex == b {
                     continue;
@@ -314,75 +315,80 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 if t <= t0 + margin || t >= t1 - margin {
                     continue;
                 }
-                split = Some((index, vertex, t));
-                break 'outer;
+                edge_split = Some((index, vertex, t));
+                break;
+            }
+            if let Some(split) = edge_split {
+                splits.push(split);
             }
         }
-        let Some((index, vertex, t)) = split else {
+        if splits.is_empty() {
             return;
-        };
-        let old_uses = uses[index];
-        if let Some(stats) = stats.as_mut() {
-            stats.splits += 1;
         }
-        let edge = compressed.edges[index].clone();
-        let (a, b) = edge.vertices;
-        let mut first = edge.curve.clone();
-        let second = first.cut(t);
-        let first_index = compressed.edges.len();
-        compressed.edges.push(CompressedEdge {
-            vertices: (a, vertex),
-            curve: first,
-        });
-        sample_cache.push(None);
-        uses.push(0);
-        let second_index = compressed.edges.len();
-        compressed.edges.push(CompressedEdge {
-            vertices: (vertex, b),
-            curve: second,
-        });
-        sample_cache.push(None);
-        uses.push(0);
-        for face in &mut compressed.faces {
-            for wire in &mut face.boundaries {
-                let mut new_wire = Vec::with_capacity(wire.len() + 1);
-                for use_ in wire.drain(..) {
-                    if use_.index == index {
-                        if use_.orientation {
-                            new_wire.push(CompressedEdgeIndex {
-                                index: first_index,
-                                orientation: true,
-                            });
-                            new_wire.push(CompressedEdgeIndex {
-                                index: second_index,
-                                orientation: true,
-                            });
+        for (index, vertex, t) in splits {
+            let old_uses = uses[index];
+            if let Some(stats) = stats.as_mut() {
+                stats.splits += 1;
+            }
+            let edge = compressed.edges[index].clone();
+            let (a, b) = edge.vertices;
+            let mut first = edge.curve.clone();
+            let second = first.cut(t);
+            let first_index = compressed.edges.len();
+            compressed.edges.push(CompressedEdge {
+                vertices: (a, vertex),
+                curve: first,
+            });
+            sample_cache.push(None);
+            uses.push(0);
+            let second_index = compressed.edges.len();
+            compressed.edges.push(CompressedEdge {
+                vertices: (vertex, b),
+                curve: second,
+            });
+            sample_cache.push(None);
+            uses.push(0);
+            for face in &mut compressed.faces {
+                for wire in &mut face.boundaries {
+                    let mut new_wire = Vec::with_capacity(wire.len() + 1);
+                    for use_ in wire.drain(..) {
+                        if use_.index == index {
+                            if use_.orientation {
+                                new_wire.push(CompressedEdgeIndex {
+                                    index: first_index,
+                                    orientation: true,
+                                });
+                                new_wire.push(CompressedEdgeIndex {
+                                    index: second_index,
+                                    orientation: true,
+                                });
+                            } else {
+                                new_wire.push(CompressedEdgeIndex {
+                                    index: second_index,
+                                    orientation: false,
+                                });
+                                new_wire.push(CompressedEdgeIndex {
+                                    index: first_index,
+                                    orientation: false,
+                                });
+                            }
                         } else {
-                            new_wire.push(CompressedEdgeIndex {
-                                index: second_index,
-                                orientation: false,
-                            });
-                            new_wire.push(CompressedEdgeIndex {
-                                index: first_index,
-                                orientation: false,
-                            });
+                            new_wire.push(use_);
                         }
-                    } else {
-                        new_wire.push(use_);
                     }
+                    *wire = new_wire;
                 }
-                *wire = new_wire;
             }
-        }
-        uses[index] = 0;
-        uses[first_index] = old_uses;
-        uses[second_index] = old_uses;
-        if old_uses == 1 {
-            if let Some(position) = boundary.iter().position(|&edge| edge == index) {
-                boundary.remove(position);
+            uses[index] = 0;
+            uses[first_index] = old_uses;
+            uses[second_index] = old_uses;
+            if old_uses == 1 {
+                if let Some(position) = boundary.iter().position(|&edge| edge == index) {
+                    boundary.remove(position);
+                }
+                boundary.push(first_index);
+                boundary.push(second_index);
             }
-            boundary.push(first_index);
-            boundary.push(second_index);
         }
     }
 }
