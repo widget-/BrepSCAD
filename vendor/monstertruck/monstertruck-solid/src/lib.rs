@@ -41,6 +41,8 @@
     unused_qualifications
 )]
 
+// PATCH(BrepSCAD): opt-in boolean/sew instrumentation.
+mod diagnostics;
 mod transversal;
 pub use transversal::{
     PlaneCut, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface, ShellOrientationHints,
