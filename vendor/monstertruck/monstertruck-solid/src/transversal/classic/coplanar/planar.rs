@@ -303,7 +303,6 @@ fn divide_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let plane = plane_of(face)?;
     let frame = Frame::new(plane);
     let own_outline = outline(face, &frame, tol);
-
     let mut curves: Vec<C> = Vec::new();
     for wire in face.boundaries() {
         for edge in wire.edge_iter() {
@@ -339,6 +338,21 @@ fn divide_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let arrangement = arrange(&curves, tol);
     let loops = extract_loops(&arrangement, plane.normal, tol);
     let regions = nest_loops(&arrangement, &loops, plane.normal, tol);
+    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+        let face_area: f64 = own_outline.iter().map(|polygon| polygon_area(polygon)).sum();
+        let covered: f64 = loops
+            .iter()
+            .filter(|item| item.area > tol * tol)
+            .map(|item| item.area)
+            .sum();
+        eprintln!(
+            "PLANAR-ARRANGE face={face_area:.4} curves={} pieces={} loops={} regions={} covered={covered:.4}",
+            curves.len(),
+            arrangement.segments.len(),
+            loops.len(),
+            regions.len()
+        );
+    }
     if regions.is_empty() {
         return None;
     }
@@ -456,6 +470,26 @@ fn split_and_keep<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         let refs: Vec<&Face<Point3, C, S>> = holders.iter().collect();
         let arranged = divide_arrangement(&split_face, &refs, tol);
+        if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+            let area_of = |pieces: &[Face<Point3, C, S>]| -> f64 {
+                pieces
+                    .iter()
+                    .map(|piece| {
+                        super::plane2d::outline(piece, &frame, tol)
+                            .iter()
+                            .map(|polygon| polygon_area(polygon))
+                            .sum::<f64>()
+                    })
+                    .sum()
+            };
+            let old_total = divide(&split_face, &refs, tol)
+                .map(|list| area_of(&list.into_iter().map(|(piece, _)| piece).collect::<Vec<_>>()));
+            let new_total = arranged.as_ref().map(|list| area_of(list));
+            let own: f64 = outline.iter().map(|polygon| polygon_area(polygon)).sum();
+            eprintln!(
+                "PLANAR-COMPARE face={own:.4} old={old_total:?} new={new_total:?}"
+            );
+        }
         match arranged {
             Some(pieces) if !pieces.is_empty() => pieces,
             _ => match divide(&split_face, &refs, tol) {
@@ -471,6 +505,15 @@ fn split_and_keep<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     };
 
     let keep_inside = matches!(op, PlanarOp::And);
+    let debug = std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some();
+    if debug {
+        let face_area: f64 = outline.iter().map(|polygon| polygon_area(polygon)).sum();
+        eprintln!(
+            "PLANAR-KEEP face area={face_area:.4} pieces={} op={:?}",
+            pieces.len(),
+            keep_inside
+        );
+    }
     let mut kept = Vec::new();
     for piece in pieces {
         let point = match inner_point(&piece, tol) {
@@ -504,6 +547,18 @@ fn split_and_keep<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 false
             }
         };
+        if debug {
+            let area: f64 = super::plane2d::outline(&piece, &frame, tol)
+                .iter()
+                .map(|polygon| polygon_area(polygon))
+                .sum();
+            eprintln!(
+                "  PLANAR-KEEP piece area={area:.4} wires={} edges={} inside={inside} keep={} point={point:?}",
+                piece.boundaries().len(),
+                piece.edge_iter().count(),
+                inside == keep_inside
+            );
+        }
         if inside == keep_inside {
             kept.push(piece);
         }
