@@ -112,6 +112,64 @@ fn union_covers(result: &Solid, a: &Solid, b: &Solid) -> bool {
     solid_covers(result, a) && solid_covers(result, b)
 }
 
+/// Cutout-sized operands. Only these unions get the watertightness check so
+/// large model unions keep the normal pipeline's behaviour.
+fn small_union(a: &Solid, b: &Solid) -> bool {
+    let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
+        return false;
+    };
+    let volume = |min: [f64; 3], max: [f64; 3]| {
+        (max[0] - min[0]).max(0.0) * (max[1] - min[1]).max(0.0) * (max[2] - min[2]).max(0.0)
+    };
+    volume(a_min, a_max) <= 1000.0 && volume(b_min, b_max) <= 1000.0
+}
+
+fn union_is_closed(result: &Solid, tolerance: f64) -> bool {
+    !result.boundaries().is_empty()
+        && result
+            .boundaries()
+            .iter()
+            .all(|shell| shell_is_closed(shell, tolerance))
+}
+
+fn shell_is_closed(shell: &Shell, tolerance: f64) -> bool {
+    let poly = shell.triangulation(tolerance);
+    let mut welded: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut edges: HashMap<(u32, u32), usize> = HashMap::new();
+    for face in poly.face_iter() {
+        let Some(mesh) = face.surface() else {
+            return false;
+        };
+        let positions = mesh.positions();
+        for triangle in mesh.faces().triangle_iter() {
+            let mut indices = [0u32; 3];
+            for (slot, vertex) in triangle.iter().enumerate() {
+                let position = positions[vertex.pos];
+                let key = (
+                    (position[0] * 1.0e5).round() as i64,
+                    (position[1] * 1.0e5).round() as i64,
+                    (position[2] * 1.0e5).round() as i64,
+                );
+                let next = welded.len() as u32;
+                indices[slot] = *welded.entry(key).or_insert(next);
+            }
+            for (start, end) in [
+                (indices[0], indices[1]),
+                (indices[1], indices[2]),
+                (indices[2], indices[0]),
+            ] {
+                let edge = if start < end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                *edges.entry(edge).or_default() += 1;
+            }
+        }
+    }
+    !edges.values().any(|count| *count == 1)
+}
+
 /// Clip `solid` to one side of an axis-aligned plane.
 fn clip_axis(
     solid: &Solid,
@@ -482,7 +540,9 @@ impl TruckKernel {
         let mut last_difference = None;
         for tolerance in BOOLEAN_TOLERANCES {
             if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
-                let covers = op != BooleanOp::Union || union_covers(&result, &a, &b);
+                let covers = op != BooleanOp::Union
+                    || (union_covers(&result, &a, &b)
+                        && (!small_union(&a, &b) || union_is_closed(&result, tolerance)));
                 let mut outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
                 let mut candidate = result;
                 if op == BooleanOp::Difference
@@ -524,7 +584,10 @@ impl TruckKernel {
         };
         match normalized {
             Ok(result) => {
-                let covers = op != BooleanOp::Union || union_covers(&result, &a, &b);
+                let covers = op != BooleanOp::Union
+                    || (union_covers(&result, &a, &b)
+                        && (!small_union(&a, &b)
+                            || union_is_closed(&result, BOOLEAN_TOLERANCES[0])));
                 let outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
                 if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() && (!covers || !outer) {
                     let shells: Vec<_> = result
@@ -584,7 +647,9 @@ impl TruckKernel {
             for tolerance in BOOLEAN_TOLERANCES {
                 if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
                     result = builder::translated(&result, -offset);
-                    if (op != BooleanOp::Union || union_covers(&result, &a, &b))
+                    if (op != BooleanOp::Union
+                        || (union_covers(&result, &a, &b)
+                            && (!small_union(&a, &b) || union_is_closed(&result, tolerance))))
                         && (op != BooleanOp::Difference || difference_is_valid(&a, &b, &result))
                     {
                         return Ok(self.insert(OwnedShape::Solid(result)));

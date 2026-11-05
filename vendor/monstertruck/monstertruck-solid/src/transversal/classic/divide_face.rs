@@ -123,6 +123,28 @@ where
         }
         Some(())
     })?;
+    // PATCH(BrepSCAD): only a face whose whole boundary was overwritten by an
+    // intersection curve needs the expensive outline projection. Detect that
+    // case before the per-pre-face status pass.
+    let boundary_only_area = if pre_faces.len() == 1
+        && pre_faces[0].len() == 1
+        && pre_faces[0][0].wire.status() != ShapesOpStatus::Unknown
+        && pre_faces[0][0].wire.is_boundary()
+    {
+        let mut outline_map = HashMap::default();
+        Some(
+            face.absolute_boundaries()
+                .iter()
+                .filter_map(|wire| {
+                    create_parameter_boundary(face, wire, &mut outline_map, tol)
+                })
+                .map(|poly| poly.area())
+                .filter(|area| *area > 0.0)
+                .sum::<f64>(),
+        )
+    } else {
+        None
+    };
     let vec: Vec<_> = pre_faces
         .into_iter()
         .filter(|pre_face| !pre_face.is_empty())
@@ -132,7 +154,21 @@ where
                 .iter()
                 .find(|chunk| chunk.wire.status() != ShapesOpStatus::Unknown);
             let status = match op {
-                Some(chunk) => chunk.wire.status(),
+                Some(chunk) => {
+                    // PATCH(BrepSCAD): a single pre-face whose area equals the
+                    // face's own outline means the intersection loop ran along
+                    // the boundary instead of dividing the face. Its And/Or
+                    // status is then unreliable, so let the ray cast decide.
+                    let boundary_only = boundary_only_area.is_some_and(|outline_area| {
+                        let delta = (pre_face[0].poly.area() - outline_area).abs();
+                        delta <= 1.0e-9 * outline_area.abs().max(1.0)
+                    });
+                    if boundary_only {
+                        ShapesOpStatus::Unknown
+                    } else {
+                        chunk.wire.status()
+                    }
+                }
                 None => ShapesOpStatus::Unknown,
             };
             let wires: Vec<Wire<Point3, C>> = pre_face

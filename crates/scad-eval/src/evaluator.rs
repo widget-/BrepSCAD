@@ -518,7 +518,15 @@ impl<K: Kernel> Evaluator<'_, K> {
             "let" => self.let_call(node, parent),
             "echo" => self.echo_call(node, parent),
             "assert" => self.assert_call(node, parent),
-            "color" | "render" => self.pass_through_call(node, parent),
+            "color" => self.pass_through_call(node, parent),
+            "render" => {
+                let nodes = self.pass_through_call(node, parent)?;
+                if nodes.is_empty() {
+                    Ok(Vec::new())
+                } else {
+                    Ok(vec![self.union_nodes("render", nodes)?])
+                }
+            }
             "union" | "difference" | "intersection" if call_children(&node).is_empty() => {
                 Ok(Vec::new())
             }
@@ -2290,12 +2298,45 @@ impl<K: Kernel> Evaluator<'_, K> {
                     });
                 }
 
-                let mut shapes = children.iter().map(|child| child.shape);
-                let mut result = shapes.next().expect("checked non-empty");
-                for shape in shapes {
-                    result = self.kernel.boolean(op, result, shape).map_err(|error| {
-                        boolean_failure(name.as_str(), &source_range, &children, error)
-                    })?;
+                let mut shapes: Vec<_> = children.iter().map(|child| child.shape).collect();
+                let mut result = shapes.remove(0);
+                if op == BooleanOp::Difference && shapes.len() > 1 {
+                    // OpenSCAD subtracts the union of all later children. Try
+                    // the union first so overlapping cutters cannot leave
+                    // intermediate shells behind; if the union itself fails,
+                    // subtracting the cutters one at a time is equivalent.
+                    let cutters = shapes;
+                    let mut union = cutters[0];
+                    let mut union_ok = true;
+                    for &shape in &cutters[1..] {
+                        match self.kernel.boolean(BooleanOp::Union, union, shape) {
+                            Ok(shape) => union = shape,
+                            Err(_) => {
+                                union_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if union_ok {
+                        result = self
+                            .kernel
+                            .boolean(BooleanOp::Difference, result, union)
+                            .map_err(|error| {
+                                boolean_failure(name.as_str(), &source_range, &children, error)
+                            })?;
+                    } else {
+                        for shape in cutters {
+                            result = self.kernel.boolean(op, result, shape).map_err(|error| {
+                                boolean_failure(name.as_str(), &source_range, &children, error)
+                            })?;
+                        }
+                    }
+                } else {
+                    for shape in shapes {
+                        result = self.kernel.boolean(op, result, shape).map_err(|error| {
+                            boolean_failure(name.as_str(), &source_range, &children, error)
+                        })?;
+                    }
                 }
 
                 Ok(Node {
