@@ -28,6 +28,8 @@ struct SewStats {
     out_vertices: usize,
     out_edges: usize,
     out_faces: usize,
+    left_boundary: usize,
+    extract_ok: bool,
     vertex_ms: f64,
     merge_ms: f64,
     split_ms: f64,
@@ -40,6 +42,7 @@ impl SewStats {
         format!(
             "in(v={} e={} f={}) weld(v={}) merge(cand={} ok={} cache={} removed={}) \
              split(iter={} boundary={} checks={} applied={}) out(v={} e={} f={}) \
+             left(boundary={} extract_ok={}) \
              time(weld={:.3} merge={:.3} split={:.3} extract={:.3} total={:.3})ms",
             self.input_vertices,
             self.input_edges,
@@ -56,6 +59,8 @@ impl SewStats {
             self.out_vertices,
             self.out_edges,
             self.out_faces,
+            self.left_boundary,
+            self.extract_ok,
             self.vertex_ms,
             self.merge_ms,
             self.split_ms,
@@ -78,6 +83,11 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let debug = diagnostics::sew_enabled();
     let started = debug.then(Instant::now);
     let compressed = shell.compress();
+    if diagnostics::sew_enabled() {
+        // Reported before the vertex weld, so a defect here is inherited from
+        // whatever built the shell rather than caused by sewing.
+        report_wire_defects("raw", &compressed);
+    }
     let mut stats = debug.then(|| SewStats {
         input_vertices: compressed.vertices.len(),
         input_edges: compressed.edges.len(),
@@ -123,26 +133,61 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if let (Some(stats), Some(start)) = (stats.as_mut(), started) {
         stats.vertex_ms = start.elapsed().as_secs_f64() * 1000.0;
     }
+    if debug {
+        report_wire_defects("weld", &compressed);
+    }
     let merge_start = debug.then(Instant::now);
     merge_edges(&mut compressed, tol, &mut stats);
     if let (Some(stats), Some(start)) = (stats.as_mut(), merge_start) {
         stats.merge_ms = start.elapsed().as_secs_f64() * 1000.0;
+    }
+    if debug {
+        report_wire_defects("merge1", &compressed);
     }
     let split_start = debug.then(Instant::now);
     split_boundary_edges(&mut compressed, tol, &mut stats);
     if let (Some(stats), Some(start)) = (stats.as_mut(), split_start) {
         stats.split_ms = start.elapsed().as_secs_f64() * 1000.0;
     }
+    if debug {
+        report_wire_defects("split", &compressed);
+    }
     let merge_start = debug.then(Instant::now);
     merge_edges(&mut compressed, tol, &mut stats);
     if let (Some(stats), Some(start)) = (stats.as_mut(), merge_start) {
         stats.merge_ms += start.elapsed().as_secs_f64() * 1000.0;
     }
+    if debug {
+        report_wire_defects("merge2", &compressed);
+    }
+    // PATCH(BrepSCAD): a sub-tolerance fragment welds both endpoints onto one
+    // vertex, and `Shell::extract` rejects the whole shell as `SameVertex`.
+    // The fragment encloses no area and its neighbours meet at the welded
+    // vertex, so removing it from the wire keeps the wire closed.
+    drop_collapsed_edges(&mut compressed);
     let out_vertices = compressed.vertices.len();
     let out_edges = compressed.edges.len();
     let out_faces = compressed.faces.len();
+    let mut uses = vec![0usize; compressed.edges.len()];
+    for face in &compressed.faces {
+        for wire in &face.boundaries {
+            for use_ in wire {
+                uses[use_.index] += 1;
+            }
+        }
+    }
+    let left_boundary = uses.iter().filter(|count| **count == 1).count();
+    if debug {
+        report_wire_defects("final", &compressed);
+    }
     let extract_start = debug.then(Instant::now);
-    let result = Shell::extract(compressed).ok();
+    let extracted = Shell::extract(compressed);
+    if debug {
+        if let Err(error) = &extracted {
+            eprintln!("[sew] extract failed: {error:?}");
+        }
+    }
+    let result = extracted.ok();
     if let (Some(stats), Some(start)) = (stats.as_mut(), extract_start) {
         stats.extract_ms = start.elapsed().as_secs_f64() * 1000.0;
     }
@@ -150,10 +195,133 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         stats.out_vertices = out_vertices;
         stats.out_edges = out_edges;
         stats.out_faces = out_faces;
+        stats.left_boundary = left_boundary;
+        stats.extract_ok = result.is_some();
         stats.total_ms = started.map_or(0.0, |start| start.elapsed().as_secs_f64() * 1000.0);
         eprintln!("[sew] {}", stats.summary());
     }
     result
+}
+
+/// Opt-in dump of the wires `Shell::extract` is about to reject, grouped by the
+/// error it will raise, so each class can be attacked on its own.
+fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C, S>) {
+    let collapsed: Vec<usize> = compressed
+        .edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| edge.vertices.0 == edge.vertices.1)
+        .map(|(index, _)| index)
+        .collect();
+    let mut empty = 0usize;
+    let mut open: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+    let mut repeated = 0usize;
+    for (face_index, face) in compressed.faces.iter().enumerate() {
+        for (wire_index, wire) in face.boundaries.iter().enumerate() {
+            if wire.is_empty() {
+                empty += 1;
+                continue;
+            }
+            let mut broken = Vec::new();
+            for k in 0..wire.len() {
+                let current = &wire[k];
+                let next = &wire[(k + 1) % wire.len()];
+                let end = match current.orientation {
+                    true => compressed.edges[current.index].vertices.1,
+                    false => compressed.edges[current.index].vertices.0,
+                };
+                let start = match next.orientation {
+                    true => compressed.edges[next.index].vertices.0,
+                    false => compressed.edges[next.index].vertices.1,
+                };
+                if end != start {
+                    broken.push(k);
+                }
+            }
+            if !broken.is_empty() {
+                open.push((face_index, wire_index, broken));
+            }
+            // A closed wire necessarily ends where it starts, so only the
+            // per-edge start vertices are compared.
+            let mut seen = HashSet::new();
+            let repeats = wire.iter().any(|use_| {
+                let edge = &compressed.edges[use_.index];
+                let start = match use_.orientation {
+                    true => edge.vertices.0,
+                    false => edge.vertices.1,
+                };
+                !seen.insert(start)
+            });
+            if repeats {
+                repeated += 1;
+            }
+        }
+    }
+    if collapsed.is_empty() && open.is_empty() && repeated == 0 && empty == 0 {
+        return;
+    }
+    eprintln!(
+        "SEW-WIRES[{stage}] edges={} vertices={} collapsed={} empty_wires={empty} open_wires={} repeated_wires={repeated}",
+        compressed.edges.len(),
+        compressed.vertices.len(),
+        collapsed.len(),
+        open.len()
+    );
+    for (face_index, wire_index, broken) in open.iter().take(2) {
+        let wire = &compressed.faces[*face_index].boundaries[*wire_index];
+        eprintln!("  open face={face_index} wire={wire_index} breaks={broken:?}");
+        for (k, use_) in wire.iter().enumerate() {
+            let edge = &compressed.edges[use_.index];
+            let (start, end) = match use_.orientation {
+                true => (edge.vertices.0, edge.vertices.1),
+                false => (edge.vertices.1, edge.vertices.0),
+            };
+            let a = compressed.vertices[start];
+            let b = compressed.vertices[end];
+            eprintln!(
+                "    {k}: e{} {start}->{end} len={:.6} {:?} -> {:?}",
+                use_.index,
+                (b - a).magnitude(),
+                a,
+                b
+            );
+        }
+    }
+    for index in collapsed.iter().take(3) {
+        let edge = &compressed.edges[*index];
+        let point = compressed.vertices[edge.vertices.0];
+        eprintln!("  collapsed e{index} at {point:?}");
+    }
+}
+
+/// Removes edges whose endpoints the vertex weld collapsed onto one vertex.
+fn drop_collapsed_edges<C: Clone, S>(compressed: &mut CompressedShell<Point3, C, S>) {
+    if !compressed
+        .edges
+        .iter()
+        .any(|edge| edge.vertices.0 == edge.vertices.1)
+    {
+        return;
+    }
+    let mut remap = vec![usize::MAX; compressed.edges.len()];
+    let mut kept: Vec<CompressedEdge<C>> = Vec::with_capacity(compressed.edges.len());
+    for (index, edge) in compressed.edges.iter().enumerate() {
+        if edge.vertices.0 != edge.vertices.1 {
+            remap[index] = kept.len();
+            kept.push(edge.clone());
+        }
+    }
+    for face in &mut compressed.faces {
+        for wire in &mut face.boundaries {
+            wire.retain(|use_| remap[use_.index] != usize::MAX);
+            for use_ in wire.iter_mut() {
+                use_.index = remap[use_.index];
+            }
+        }
+        face.boundaries.retain(|wire| !wire.is_empty());
+    }
+    compressed.faces.retain(|face| !face.boundaries.is_empty());
+    compressed.edges = kept;
 }
 
 fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

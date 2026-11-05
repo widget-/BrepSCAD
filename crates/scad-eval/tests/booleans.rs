@@ -198,20 +198,36 @@ fn evaluate_snap_fixture(name: &str) -> brepscad_eval::Evaluation {
 /// One clip from the OpenGrid snap used to overflow the stack: the boolean
 /// engine's curve/surface projection recursed once per retry, and the
 /// shell-set union recursed again on failed fusions. See the fixture README.
+///
+/// The expected volume is OpenSCAD's, measured with
+/// `openscad -o out.off --export-format off` on the same fixture. It is not
+/// what the engine returns today (about 1502.6): that figure came from an
+/// earlier BrepSCAD run and was pinned here as a stack-overflow repro, not as
+/// a correctness reference. The gap is the planar fallback leaving the clip
+/// cutouts open.
 #[test]
 fn opengrid_snap_with_one_clip_does_not_overflow_the_stack() {
     let evaluation = evaluate_snap_fixture("snap_one_clip.scad");
     assert_eq!(evaluation.shapes.len(), 1);
     let volume = signed_volume(&evaluation.shapes[0].mesh);
-    assert!((volume - 1502.65).abs() < 5.0, "volume = {volume}");
+    assert!(
+        (volume - 1495.32).abs() < 5.0,
+        "volume = {volume}; OpenSCAD gives 1495.32. The planar fallback leaves \
+         the clip cutouts open, so the mesh keeps material the cutter removed."
+    );
 }
 
 /// Two clips are the smallest variant that overflowed the shell-set merge on
-/// its own, after the projection retry recursion was fixed.
+/// its own, after the projection retry recursion was fixed. The expected
+/// volume is OpenSCAD's; see the note on the one-clip test.
 #[test]
 fn opengrid_snap_with_two_clips_does_not_overflow_the_stack() {
     let evaluation = evaluate_snap_fixture("snap_two_clips.scad");
     assert_eq!(evaluation.shapes.len(), 1);
     let volume = signed_volume(&evaluation.shapes[0].mesh);
-    assert!((volume - 1446.0).abs() < 5.0, "volume = {volume}");
+    assert!(
+        (volume - 1452.39).abs() < 5.0,
+        "volume = {volume}; OpenSCAD gives 1452.39. The planar fallback leaves \
+         the clip cutouts open, so the mesh drops material the subject keeps."
+    );
 }

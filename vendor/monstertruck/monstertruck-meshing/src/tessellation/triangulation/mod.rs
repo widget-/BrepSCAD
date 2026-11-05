@@ -495,8 +495,16 @@ where
     C: PolylineableCurve + 'a,
     S: PreMeshableSurface + 'a,
 {
+    // PATCH(BrepSCAD): collect both absolute endpoints of every edge. A vertex
+    // can appear only as the back of a reversed edge after a planar fallback
+    // split; the old front-only iteration then missed it and the edge map
+    // unwrap panicked.
     let vmap: HashMap<_, _> = shell
-        .vertex_par_iter()
+        .edge_par_iter()
+        .map(|edge| (edge.absolute_front().clone(), edge.absolute_back().clone()))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flat_map(|(front, back)| [front, back])
         .map(|v| (v.id(), v.mapped(Point3::clone)))
         .collect();
     let eset: HashMap<_, _> = shell.edge_par_iter().map(move |e| (e.id(), e)).collect();

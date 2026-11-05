@@ -97,9 +97,13 @@ fn shell_is_closed<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let poly = shell.triangulation(tol);
     let mut welded: HashMap<(i64, i64, i64), u32> = HashMap::new();
     let mut edges: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut missing = 0usize;
+    let mut faces = 0usize;
     for face in poly.face_iter() {
+        faces += 1;
         let Some(mesh) = face.surface() else {
-            return false;
+            missing += 1;
+            continue;
         };
         let positions = mesh.positions();
         for triangle in mesh.faces().triangle_iter() {
@@ -128,7 +132,14 @@ fn shell_is_closed<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             }
         }
     }
-    !edges.values().any(|count| *count == 1)
+    let open = edges.values().filter(|count| **count == 1).count();
+    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() && (missing > 0 || open > 0) {
+        eprintln!(
+            "PLANAR: shell_is_closed=false faces={faces} missing_mesh={missing} open_edges={open} vertices={}",
+            welded.len()
+        );
+    }
+    missing == 0 && open == 0
 }
 
 fn pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -171,6 +182,14 @@ fn pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if result.face_iter().next().is_none() {
         return None;
     }
+    // PATCH(BrepSCAD): each face is divided against the other solid on its own,
+    // so a split point on a shared edge exists on one side only and the two
+    // faces meet at a T-junction. Sewing splits the neighbour's edge at that
+    // vertex, which is what closes the shell.
+    let result = super::sew(&result, tol).unwrap_or(result);
+    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+        report_open_edges(&result, tol);
+    }
     if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
         let first = result.face_iter().next().unwrap();
         let boundaries = first.boundaries();
@@ -190,6 +209,82 @@ fn pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 fn planar<C, S: ShapeOpsSurface>(shell: &Shell<Point3, C, S>) -> bool {
     shell.face_iter().all(|face| plane_of(face).is_some())
+}
+
+/// Classifies the edges of a fallback result that are used only once: a
+/// T-junction (some other vertex lies inside the edge), a zero-length edge, a
+/// coincident edge that was split differently, or an unexplained hole.
+fn report_open_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+    tol: f64,
+) {
+    let mut uses: HashMap<EdgeId<C>, usize> = HashMap::new();
+    let mut edges: Vec<Edge<Point3, C>> = Vec::new();
+    let mut faces = 0;
+    for face in shell.face_iter() {
+        faces += 1;
+        for wire in face.absolute_boundaries() {
+            for edge in wire.iter() {
+                match uses.get_mut(&edge.id()) {
+                    Some(count) => *count += 1,
+                    None => {
+                        uses.insert(edge.id(), 1);
+                        edges.push(edge.absolute_clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut points: Vec<Point3> = Vec::new();
+    for edge in &edges {
+        for point in [edge.absolute_front().point(), edge.absolute_back().point()] {
+            if !points.iter().any(|known| known.distance(point) < tol) {
+                points.push(point);
+            }
+        }
+    }
+    let open: Vec<&Edge<Point3, C>> = edges
+        .iter()
+        .filter(|edge| uses.get(&edge.id()).copied().unwrap_or(0) == 1)
+        .collect();
+    let (mut degenerate, mut tjunction, mut coincident, mut unexplained) = (0, 0, 0, 0);
+    for edge in &open {
+        let (a, b) = (edge.absolute_front().point(), edge.absolute_back().point());
+        if a.distance(b) < tol {
+            degenerate += 1;
+            continue;
+        }
+        let along = b - a;
+        let inside = points.iter().any(|point| {
+            if point.distance(a) < tol || point.distance(b) < tol {
+                return false;
+            }
+            let s = ((*point - a).dot(along) / along.magnitude2().max(1.0e-300)).clamp(0.0, 1.0);
+            (a + along * s).distance(*point) < tol
+        });
+        if inside {
+            tjunction += 1;
+            continue;
+        }
+        let paired = open.iter().any(|other| {
+            other.id() != edge.id()
+                && ((other.absolute_front().point().distance(a) < tol
+                    && other.absolute_back().point().distance(b) < tol)
+                    || (other.absolute_front().point().distance(b) < tol
+                        && other.absolute_back().point().distance(a) < tol))
+        });
+        if paired {
+            coincident += 1;
+        } else {
+            unexplained += 1;
+        }
+    }
+    eprintln!(
+        "PLANAR: open edges={} degenerate={degenerate} tjunction={tjunction} \
+         coincident={coincident} unexplained={unexplained} faces={faces} vertices={}",
+        open.len(),
+        points.len()
+    );
 }
 
 /// Split one face by the cross-section of `other` on its plane, then keep the
@@ -353,7 +448,10 @@ fn cross_section_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 let (a, b) = (frame.flat(pair[0]), frame.flat(pair[1]));
                 for (a, b) in clip_segment(outline, a, b, tol) {
                     let (p0, p1) = (frame.lift(a), frame.lift(b));
-                    if (p1 - p0).magnitude() <= eps {
+                    // `tol`, not `eps`: a segment shorter than the vertex weld
+                    // collapses to a single vertex in `sew`, and the resulting
+                    // zero-length edge makes `Shell::extract` reject the shell.
+                    if (p1 - p0).magnitude() <= tol {
                         continue;
                     }
                     let curve = segment_curve(&face.surface(), &other_face.surface(), p0, p1);

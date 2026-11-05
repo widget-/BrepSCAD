@@ -9,6 +9,36 @@ use std::iter::once;
 use super::plane_of;
 use super::plane2d::*;
 
+/// PATCH(BrepSCAD): names the exit a planar division failed at, so
+/// `BREPSCAD_DEBUG_PLANAR` reports which class dominates.
+fn fail(tag: &str) {
+    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+        eprintln!("PLANAR-FAIL {tag}");
+    }
+}
+
+/// Drops half-edges that immediately reverse another one, leaving the wire
+/// closed at the shared vertex because the spike encloses no area.
+fn drop_spikes<C: Clone>(halves: &[HalfEdge<C>]) -> Vec<HalfEdge<C>> {
+    let mut kept: Vec<HalfEdge<C>> = Vec::with_capacity(halves.len());
+    for half in halves {
+        if half.from == half.to {
+            continue;
+        }
+        if let Some(index) = kept.iter().position(|other: &HalfEdge<C>| {
+            other.edge.id() != half.edge.id()
+                && other.from == half.to
+                && other.to == half.from
+        }) {
+            kept.swap_remove(index);
+        } else {
+            kept.push(half.clone());
+        }
+    }
+    kept
+}
+
+#[derive(Clone)]
 pub(super) struct HalfEdge<C> {
     edge: Edge<Point3, C>,
     from: usize,
@@ -42,9 +72,7 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Pieces<C, S>> {
     let Some(plane) = plane_of(face) else {
-        if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-            eprintln!("PLANAR-FAIL plane");
-        }
+        fail("plane");
         return None;
     };
     let frame = Frame::new(plane);
@@ -86,26 +114,6 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             boundary_points.push(points);
         }
     }
-    // Drop zero-length boundary halves and zero-area spikes (`u->v` followed by
-    // `v->u`) left by boundary splitting. A spike encloses no area, and the
-    // half-edge walk would otherwise revisit an edge at its tip.
-    let mut filtered: Vec<HalfEdge<C>> = Vec::with_capacity(halves.len());
-    for half in halves.drain(..) {
-        if half.from == half.to {
-            continue;
-        }
-        if let Some(index) = filtered.iter().position(|other: &HalfEdge<C>| {
-            other.edge.id() != half.edge.id()
-                && other.from == half.to
-                && other.to == half.from
-        }) {
-            filtered.swap_remove(index);
-        } else {
-            filtered.push(half);
-        }
-    }
-    halves = filtered;
-
     let mut seen = HashSet::new();
     for other in others {
         for edge in other.edge_iter() {
@@ -150,68 +158,78 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             });
         }
     }
-    let count = halves.len();
-    let mut used = vec![false; count];
-    let mut cycles: Vec<Vec<usize>> = Vec::new();
-    for start in 0..count {
-        if used[start] {
-            continue;
-        }
-        let mut cycle = vec![start];
-        used[start] = true;
-        let mut here = start;
-        loop {
-            let back = halves[here].arrive;
-            let next = match (0..count)
-                .filter(|&k| halves[k].from == halves[here].to)
-                .min_by(|&a, &b| {
-                    let turn = |k: usize| {
-                        let twin = halves[k].edge.id() == halves[here].edge.id();
-                        if twin {
-                            return std::f64::consts::TAU;
-                        }
-                        let mut t = back - halves[k].leave;
-                        while t <= 1.0e-12 {
-                            t += std::f64::consts::TAU;
-                        }
-                        while t > std::f64::consts::TAU {
-                            t -= std::f64::consts::TAU;
-                        }
-                        t
-                    };
-                    turn(a).total_cmp(&turn(b))
-                })
-            {
-                Some(next) => next,
-                None => {
-                    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-                        eprintln!(
-                            "PLANAR-FAIL dangling here={here} to={} count={count}",
-                            halves[here].to
-                        );
-                    }
-                    return None;
-                }
-            };
-            if next == start {
-                break;
+    let walk = |halves: &[HalfEdge<C>]| -> std::result::Result<Vec<Vec<usize>>, &'static str> {
+        let count = halves.len();
+        let mut used = vec![false; count];
+        let mut cycles: Vec<Vec<usize>> = Vec::new();
+        for start in 0..count {
+            if used[start] {
+                continue;
             }
-            if used[next] || cycle.len() > count {
-                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-                    eprintln!(
-                        "PLANAR-FAIL cycle next={next} used={} len={} count={count}",
-                        used[next],
-                        cycle.len()
-                    );
+            let mut cycle = vec![start];
+            used[start] = true;
+            let mut here = start;
+            loop {
+                let back = halves[here].arrive;
+                let Some(next) = (0..count)
+                    .filter(|&k| halves[k].from == halves[here].to)
+                    .min_by(|&a, &b| {
+                        let turn = |k: usize| {
+                            let twin = halves[k].edge.id() == halves[here].edge.id();
+                            if twin {
+                                return std::f64::consts::TAU;
+                            }
+                            let mut t = back - halves[k].leave;
+                            while t <= 1.0e-12 {
+                                t += std::f64::consts::TAU;
+                            }
+                            while t > std::f64::consts::TAU {
+                                t -= std::f64::consts::TAU;
+                            }
+                            t
+                        };
+                        turn(a).total_cmp(&turn(b))
+                    })
+                else {
+                    return Err("dangling");
+                };
+                if next == start {
+                    break;
                 }
+                if used[next] || cycle.len() > count {
+                    return Err("cycle");
+                }
+                used[next] = true;
+                cycle.push(next);
+                here = next;
+            }
+            cycles.push(cycle);
+        }
+        Ok(cycles)
+    };
+    // PATCH(BrepSCAD): an outline carrying a zero-area spike (`u->v` followed
+    // by `v->u`) makes the walk revisit an edge. Retry with the spike pairs
+    // dropped; a face that walks first time keeps its arrangement untouched.
+    let cycles = match walk(&halves) {
+        Ok(cycles) => cycles,
+        Err(first) => {
+            let filtered = drop_spikes(&halves);
+            if filtered.len() == halves.len() {
+                fail(first);
                 return None;
             }
-            used[next] = true;
-            cycle.push(next);
-            here = next;
+            match walk(&filtered) {
+                Ok(cycles) => {
+                    halves = filtered;
+                    cycles
+                }
+                Err(second) => {
+                    fail(second);
+                    return None;
+                }
+            }
         }
-        cycles.push(cycle);
-    }
+    };
     let polygon = |cycle: &[usize]| -> Vec<Point2> {
         cycle
             .iter()
@@ -259,14 +277,9 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 break;
             }
         }
-        let owner = match owner {
-            Some(owner) => owner,
-            None => {
-                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-                    eprintln!("PLANAR-FAIL owner hole={hole}");
-                }
-                return None;
-            }
+        let Some(owner) = owner else {
+            fail("owner");
+            return None;
         };
         holes_of[owner].push(hole);
     }
@@ -287,14 +300,9 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             .chain(holes_of[o].iter().copied())
             .map(|k| shapes[k].1.clone())
             .collect();
-        let point = match interior_point(&polygons, tol) {
-            Some(point) => point,
-            None => {
-                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-                    eprintln!("PLANAR-FAIL interior polygons={}", polygons.len());
-                }
-                return None;
-            }
+        let Some(point) = interior_point(&polygons, tol) else {
+            fail("interior");
+            return None;
         };
         let overlap = others.iter().position(|other| {
             let theirs = outline(other, &frame, tol);

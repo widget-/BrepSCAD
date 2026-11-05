@@ -129,6 +129,64 @@ where
 }
 
 pub(super) fn interior_point(polygons: &[Vec<Point2>], tol: f64) -> Option<Point2> {
+    // PATCH(BrepSCAD): the probe clearance has to be smaller than the piece.
+    // A knife-edge sliver is thinner than `tol`, so no point in it is farther
+    // than `tol` from its outline and an absolute clearance can never succeed.
+    // `2 * area / perimeter` is roughly the piece's inradius, so scaling the
+    // clearance to it keeps ordinary faces at the old `tol` scale while still
+    // letting a sliver be probed.
+    let area: f64 = polygons
+        .iter()
+        .map(|polygon| polygon_area(polygon).abs())
+        .sum();
+    let perimeter: f64 = polygons
+        .iter()
+        .flat_map(|polygon| {
+            let n = polygon.len();
+            (0..n).map(move |i| (polygon[(i + 1) % n] - polygon[i]).magnitude())
+        })
+        .sum();
+    let inradius = if perimeter > 0.0 {
+        2.0 * area / perimeter
+    } else {
+        0.0
+    };
+    let clearance = (tol * 0.25).min(inradius * 0.5).max(tol * 1.0e-4);
+    let clear_of_outline = |point: Point2| !on_outline(polygons, point, clearance * 0.5);
+
+    // The centroid is interior for a convex piece and is the point farthest
+    // from the outline, so it is the most stable choice for the following
+    // point-in-solid test. Try the largest polygon first.
+    let centroid = |polygon: &[Point2]| -> Option<Point2> {
+        let signed = polygon_area(polygon);
+        if signed.abs() < 1.0e-18 {
+            return None;
+        }
+        let n = polygon.len();
+        let (mut x, mut y) = (0.0, 0.0);
+        for i in 0..n {
+            let (a, b) = (polygon[i], polygon[(i + 1) % n]);
+            let cross = a.x * b.y - b.x * a.y;
+            x += (a.x + b.x) * cross;
+            y += (a.y + b.y) * cross;
+        }
+        Some(Point2::new(x / (6.0 * signed), y / (6.0 * signed)))
+    };
+    let mut order: Vec<usize> = (0..polygons.len()).collect();
+    order.sort_by(|&a, &b| {
+        polygon_area(&polygons[b])
+            .abs()
+            .total_cmp(&polygon_area(&polygons[a]).abs())
+    });
+    for index in order {
+        if let Some(point) = centroid(&polygons[index])
+            && inside(polygons, point)
+            && clear_of_outline(point)
+        {
+            return Some(point);
+        }
+    }
+
     let mut candidates: Vec<(f64, Point2, Vector2)> = polygons
         .iter()
         .flat_map(|polygon| {
@@ -140,33 +198,17 @@ pub(super) fn interior_point(polygons: &[Vec<Point2>], tol: f64) -> Option<Point
         })
         .collect();
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let result = candidates
+    candidates
         .into_iter()
         .take(16)
         .find_map(|(length, middle, along)| {
-            if length < tol {
+            if length < clearance {
                 return None;
             }
             let left = Vector2::new(-along.y, along.x).normalize();
             [1.0e-3, -1.0e-3, 1.0e-2, -1.0e-2, 1.0e-1, -1.0e-1]
                 .into_iter()
-                .map(|k: f64| middle + left * k.signum() * (length * k.abs()).max(tol * 4.0))
-                .find(|p| inside(polygons, *p) && !on_outline(polygons, *p, tol))
-        });
-    if result.is_none() && std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-        let area: f64 = polygons.iter().map(|p| polygon_area(p).abs()).sum();
-        let edges: usize = polygons.iter().map(|p| p.len()).sum();
-        let longest: f64 = polygons
-            .iter()
-            .flat_map(|polygon| {
-                let n = polygon.len();
-                (0..n).map(move |i| (polygon[(i + 1) % n] - polygon[i]).magnitude())
-            })
-            .fold(0.0, f64::max);
-        eprintln!(
-            "INTERIOR-FAIL polygons={} edges={edges} area={area:.3e} longest={longest:.6} tol={tol:.6}",
-            polygons.len()
-        );
-    }
-    result
+                .map(|k: f64| middle + left * k.signum() * (length * k.abs()).max(clearance))
+                .find(|p| inside(polygons, *p) && clear_of_outline(*p))
+        })
 }
