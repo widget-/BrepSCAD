@@ -415,6 +415,32 @@ fn cross_section_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Vec<Edge<Point3, C>> {
     let eps = tol * 1.0e-3;
+    // The cross-section is clipped against the face's 2D polyline outline, so a
+    // clipped endpoint can land as far off the true boundary curve as the
+    // polyline deviates from it. `note_split` then refuses to split the
+    // boundary at that point (it wants the point within `tol`) and the divided
+    // face keeps a wire gap. Pull each endpoint onto the boundary curve first.
+    let reach = tol * 4.0;
+    let boundary: Vec<Edge<Point3, C>> = face
+        .boundaries()
+        .iter()
+        .flat_map(|wire| wire.edge_iter().cloned().collect::<Vec<_>>())
+        .collect();
+    let snap_to_boundary = |point: Point3| -> Point3 {
+        let mut best: Option<(f64, Point3)> = None;
+        for edge in &boundary {
+            let curve = edge.curve();
+            let Some(t) = curve.search_nearest_parameter(point, None, 100) else {
+                continue;
+            };
+            let foot = curve.subs(t);
+            let distance = foot.distance(point);
+            if distance <= reach && best.is_none_or(|(known, _)| distance < known) {
+                best = Some((distance, foot));
+            }
+        }
+        best.map_or(point, |(_, foot)| foot)
+    };
     let mut edges = Vec::new();
     for other_face in other.face_iter() {
         let Some(other_plane) = plane_of(other_face) else {
@@ -447,7 +473,18 @@ fn cross_section_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             for pair in crossings.chunks_exact(2) {
                 let (a, b) = (frame.flat(pair[0]), frame.flat(pair[1]));
                 for (a, b) in clip_segment(outline, a, b, tol) {
-                    let (p0, p1) = (frame.lift(a), frame.lift(b));
+                    // Only endpoints the clip put on the outline may move: an
+                    // endpoint that was already strictly inside the face is
+                    // where the cut genuinely stops, and pulling it to the
+                    // boundary would extend the cut.
+                    let snap = |flat: Point2| -> Point3 {
+                        let point = frame.lift(flat);
+                        match on_outline(outline, flat, tol * 0.5) {
+                            true => snap_to_boundary(point),
+                            false => point,
+                        }
+                    };
+                    let (p0, p1) = (snap(a), snap(b));
                     // `tol`, not `eps`: a segment shorter than the vertex weld
                     // collapses to a single vertex in `sew`, and the resulting
                     // zero-length edge makes `Shell::extract` reject the shell.
