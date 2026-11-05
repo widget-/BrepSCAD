@@ -90,7 +90,9 @@ pub mod prelude {
     };
     pub use decorators::*;
     pub use errors::*;
-    pub use curve_intersection::{SegmentCurveHit, segment_curve_intersections};
+    pub use curve_intersection::{
+        CurveCurveHit, SegmentCurveHit, curve_curve_intersections, segment_curve_intersections,
+    };
     pub use nurbs::*;
     pub use parameter_boundary::BoundaryCurve2D;
     pub use specifieds::*;
