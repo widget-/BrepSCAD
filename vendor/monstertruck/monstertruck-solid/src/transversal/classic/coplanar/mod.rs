@@ -11,11 +11,13 @@ use rustc_hash::FxHashMap as HashMap;
 
 mod arrangement;
 mod plane2d;
+mod planar;
 mod sew;
 mod split;
 
 use arrangement::*;
 use plane2d::*;
+pub(super) use planar::{and as planar_and, or as planar_or};
 pub(super) use sew::sew;
 use split::*;
 

@@ -311,7 +311,14 @@ pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut iter1 = solid1.boundaries().iter();
     let shell0 = iter0.next().unwrap();
     let shell1 = iter1.next().unwrap();
-    let [mut and_shell, _] = pair(shell0, shell1)?;
+    let [mut and_shell, _] = match pair(shell0, shell1) {
+        Ok(shells) => shells,
+        Err(_) => [
+            coplanar::planar_and(shell0, shell1, tol)
+                .ok_or(ShapeOpsError::EmptyOutputShell { operation })?,
+            Shell::new(),
+        ],
+    };
     for shell in iter0 {
         let [res, _] = pair(&and_shell, shell)?;
         and_shell = res;
@@ -337,7 +344,14 @@ pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut iter1 = solid1.boundaries().iter();
     let shell0 = iter0.next().unwrap();
     let shell1 = iter1.next().unwrap();
-    let [_, mut or_shell] = pair(shell0, shell1)?;
+    let [_, mut or_shell] = match pair(shell0, shell1) {
+        Ok(shells) => shells,
+        Err(_) => [
+            Shell::new(),
+            coplanar::planar_or(shell0, shell1, tol)
+                .ok_or(ShapeOpsError::EmptyOutputShell { operation })?,
+        ],
+    };
     for shell in iter0 {
         let [_, res] = pair(&or_shell, shell)?;
         or_shell = res;

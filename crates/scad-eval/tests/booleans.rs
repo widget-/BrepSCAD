@@ -69,6 +69,24 @@ fn difference_with_a_sphere_tessellates() {
     assert_eq!(evaluation.shapes[0].parts.len(), 2);
 }
 
+/// The horizontal and vertical clip cutouts overlap at a pair of 45-degree
+/// knife edges. The classic loop assembly collapses the tangency intersection
+/// to a point and drops the vertical cutout; the planar fallback must keep the
+/// flex slot. Expected volume is the OpenSCAD result, 3849.09.
+#[test]
+fn snap_clip_cutouts_keep_the_flex_slot() {
+    let source = include_str!("data/snap_clip_cutout.scad");
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+
+    assert_eq!(evaluation.shapes.len(), 1);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!(
+        (volume - 3849.09).abs() < 20.0,
+        "volume = {volume}; expected about 3849.09"
+    );
+}
+
 /// The hull cut's bottom plane is exactly at the cell cutters' 45-degree
 /// crease. Its intersection curves run along several face boundaries; those
 /// faces must be ray-cast instead of keeping their boundary-derived status, or
