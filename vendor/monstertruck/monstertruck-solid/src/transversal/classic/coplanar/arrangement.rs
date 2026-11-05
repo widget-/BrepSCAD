@@ -86,6 +86,26 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             boundary_points.push(points);
         }
     }
+    // Drop zero-length boundary halves and zero-area spikes (`u->v` followed by
+    // `v->u`) left by boundary splitting. A spike encloses no area, and the
+    // half-edge walk would otherwise revisit an edge at its tip.
+    let mut filtered: Vec<HalfEdge<C>> = Vec::with_capacity(halves.len());
+    for half in halves.drain(..) {
+        if half.from == half.to {
+            continue;
+        }
+        if let Some(index) = filtered.iter().position(|other: &HalfEdge<C>| {
+            other.edge.id() != half.edge.id()
+                && other.from == half.to
+                && other.to == half.from
+        }) {
+            filtered.swap_remove(index);
+        } else {
+            filtered.push(half);
+        }
+    }
+    halves = filtered;
+
     let mut seen = HashSet::new();
     for other in others {
         for edge in other.edge_iter() {
