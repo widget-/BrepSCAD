@@ -104,3 +104,55 @@ fn pieces_run_end_to_end_along_their_source_curve() {
         }
     }
 }
+
+fn square(min: f64, max: f64) -> Vec<BsplineCurve<Point3>> {
+    vec![
+        bezier(vec![point(min, min), point(max, min)]),
+        bezier(vec![point(max, min), point(max, max)]),
+        bezier(vec![point(max, max), point(min, max)]),
+        bezier(vec![point(min, max), point(min, min)]),
+    ]
+}
+
+fn areas(loops: &[Loop]) -> Vec<f64> {
+    let mut areas: Vec<f64> = loops.iter().map(|item| item.area).collect();
+    areas.sort_by(|left, right| left.total_cmp(right));
+    areas
+}
+
+#[test]
+fn a_square_cut_by_a_line_has_two_halves() {
+    let mut curves = square(0.0, 10.0);
+    curves.push(bezier(vec![point(5.0, 0.0), point(5.0, 10.0)]));
+    let arrangement = arrange(&curves, 0.01);
+    let loops = extract_loops(&arrangement, Vector3::unit_z(), 0.01);
+    let areas = areas(&loops);
+    assert_eq!(areas.len(), 3, "two halves plus the outside: {areas:?}");
+    assert!((areas[0] + 100.0).abs() < 0.1, "outside: {areas:?}");
+    assert!((areas[1] - 50.0).abs() < 0.1, "half: {areas:?}");
+    assert!((areas[2] - 50.0).abs() < 0.1, "half: {areas:?}");
+}
+
+#[test]
+fn every_piece_is_walked_once_per_side() {
+    let mut curves = square(0.0, 10.0);
+    curves.push(bezier(vec![point(5.0, 0.0), point(5.0, 10.0)]));
+    let arrangement = arrange(&curves, 0.01);
+    let loops = extract_loops(&arrangement, Vector3::unit_z(), 0.01);
+    let walked: usize = loops.iter().map(|item| item.pieces.len()).sum();
+    assert_eq!(walked, arrangement.segments.len() * 2);
+}
+
+#[test]
+fn an_unconnected_inner_square_comes_out_as_a_hole() {
+    let mut curves = square(0.0, 10.0);
+    curves.extend(square(3.0, 7.0));
+    let arrangement = arrange(&curves, 0.01);
+    let loops = extract_loops(&arrangement, Vector3::unit_z(), 0.01);
+    let areas = areas(&loops);
+    assert_eq!(areas.len(), 4, "outer, hole, island, outside: {areas:?}");
+    assert!((areas[0] + 100.0).abs() < 0.1, "outside: {areas:?}");
+    assert!((areas[1] + 16.0).abs() < 0.1, "hole: {areas:?}");
+    assert!((areas[2] - 16.0).abs() < 0.1, "island: {areas:?}");
+    assert!((areas[3] - 100.0).abs() < 0.1, "outer: {areas:?}");
+}
