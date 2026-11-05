@@ -222,10 +222,10 @@ fn union_of_disjoint_cubes_keeps_both_shells() {
     assert_close(max, [6.0, 1.0, 1.0]);
 }
 
-/// A union that involves a compound keeps the existing shells instead of asking
-/// shapeops to fuse every shell pair.
+/// A union that involves a compound fuses only the shells whose bounds touch
+/// instead of asking shapeops to fuse every shell pair.
 #[test]
-fn union_with_a_compound_solid_keeps_all_shells() {
+fn union_with_a_compound_fuses_overlapping_shells() {
     let mut kernel = TruckKernel::new();
     let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
     let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
@@ -243,6 +243,54 @@ fn union_with_a_compound_solid_keeps_all_shells() {
     let (min, max) = mesh_bounds(&mesh);
     assert_close(min, [-6.0, -1.0, -1.0]);
     assert_close(max, [6.0, 1.0, 1.0]);
+    // Eight per cube plus twelve for the bridge, minus two per cube the bridge
+    // crosses. A plain shell concatenation would count 28.
+    let volume = signed_volume(&mesh);
+    assert!((volume - 24.0).abs() < 1.0e-6, "volume = {volume}");
+}
+
+/// Operand order must not change a union. Interleaved clusters are what a `for`
+/// loop that emits two shapes per iteration produces; appending a shell that
+/// overlaps an existing one used to leave both copies in the solid and double
+/// count their shared volume.
+#[test]
+fn union_result_does_not_depend_on_operand_order() {
+    let mut kernel = TruckKernel::new();
+    let cluster = |kernel: &mut TruckKernel, origin: f64| {
+        (0..3)
+            .map(|step| cube(kernel, [2.0; 3], [origin + step as f64 * 1.2, 0.0, 0.0]))
+            .collect::<Vec<_>>()
+    };
+    let left = cluster(&mut kernel, 0.0);
+    let right = cluster(&mut kernel, 100.0);
+
+    let union_volume = |kernel: &mut TruckKernel, order: &[ShapeId]| {
+        let mut result = order[0];
+        for &shape in &order[1..] {
+            result = kernel
+                .boolean(BooleanOp::Union, result, shape)
+                .expect("union");
+        }
+        let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+        signed_volume(&mesh)
+    };
+
+    let mut interleaved = Vec::new();
+    for (a, b) in left.iter().zip(&right) {
+        interleaved.push(*a);
+        interleaved.push(*b);
+    }
+    let grouped: Vec<ShapeId> = left.iter().chain(&right).copied().collect();
+
+    // Each cluster is three cubes with two 0.8 deep overlaps of a 2x2 face.
+    let expected = 2.0 * (3.0 * 8.0 - 2.0 * 0.8 * 2.0 * 2.0);
+    for order in [interleaved.as_slice(), grouped.as_slice()] {
+        let volume = union_volume(&mut kernel, order);
+        assert!(
+            (volume - expected).abs() < 1.0e-6,
+            "volume = {volume}, expected {expected}"
+        );
+    }
 }
 
 /// Subtracting a solid that covers one shell of a compound removes that shell

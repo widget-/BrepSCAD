@@ -428,9 +428,11 @@ vendor/
   subtraction that removes the whole target). Empty solids are kept as values
   and folded away at the next boolean instead of being fed back into shapeops,
   which cannot index an empty shell.
-- A union that involves a multi-shell solid keeps the shells separate instead of
-  asking shapeops to fuse every shell pair; those attempts are the slowest path
-  in the backend and rarely succeed on degenerate input.
+- A union that involves a multi-shell solid keeps shells whose bounds cannot
+  overlap separate, and asks shapeops only about pairs that may touch. Fusing
+  every shell pair is the slowest path in the backend and rarely succeeds on
+  degenerate input; appending an overlapping shell would keep both copies and
+  double-count their shared volume.
 - Backend adapters should remain separate crates behind the common trait.
 - Native fast paths for common library constructs (for example, BOSL2 rounded
   boxes) are intended to avoid mesh-CSG workarounds; `scad-intrinsics` is not

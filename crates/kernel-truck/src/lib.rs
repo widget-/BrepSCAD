@@ -494,12 +494,11 @@ impl TruckKernel {
 
         // Fusing an already-compound shell set with another solid makes master
         // shapeops iterate every shell pair and can take minutes on degenerate
-        // models. Keep the shells separate instead; the tessellator renders a
-        // compound, and the cheap disjoint path already covers the exact case.
+        // models. Keep the shells separate instead, but only where they cannot
+        // touch: appending an overlapping shell leaves both copies behind and
+        // counts the overlap twice, which made unions depend on operand order.
         if op == BooleanOp::Union && (a.boundaries().len() > 1 || b.boundaries().len() > 1) {
-            let mut boundaries = a.boundaries().clone();
-            boundaries.extend(b.boundaries().iter().cloned());
-            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
+            return self.union_shell_sets(&a, &b);
         }
 
         // A compound solid can be produced by a disjoint union. Subtract from
@@ -709,6 +708,47 @@ impl TruckKernel {
         Err(KernelError::Backend(
             "boolean operation returned no solid at any tolerance".to_owned(),
         ))
+    }
+
+    /// Union two solids whose shells may already be split into a compound.
+    ///
+    /// A compound's shells are disjoint, so a shell can be concatenated only
+    /// when its bounds miss every shell on the other side. Anything that can
+    /// touch goes through the boolean engine: keeping both copies would leave
+    /// overlapping shells behind and count their shared volume twice.
+    fn union_shell_sets(&mut self, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+        let mut merged: Vec<ShapeId> = a
+            .boundaries()
+            .iter()
+            .map(|shell| self.insert(OwnedShape::Solid(Solid::new_unchecked(vec![shell.clone()]))))
+            .collect();
+
+        for shell in b.boundaries() {
+            let mut pending =
+                self.insert(OwnedShape::Solid(Solid::new_unchecked(vec![shell.clone()])));
+            let mut index = 0;
+            while index < merged.len() {
+                if disjoint(self.solid(pending)?, self.solid(merged[index])?) {
+                    index += 1;
+                    continue;
+                }
+                let other = merged.swap_remove(index);
+                pending = self.boolean(BooleanOp::Union, pending, other)?;
+                // The merged bounds just grew, so a shell that missed the last
+                // test may touch the new one.
+                index = 0;
+            }
+            merged.push(pending);
+        }
+
+        if merged.len() == 1 {
+            return Ok(merged[0]);
+        }
+        let mut boundaries = Vec::new();
+        for id in merged {
+            boundaries.extend(self.solid(id)?.clone().into_boundaries());
+        }
+        Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))))
     }
 }
 
