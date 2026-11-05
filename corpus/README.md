@@ -15,5 +15,14 @@ scripts/check-scad-corpus.sh --parse-only --write-baseline corpus/baseline-parse
 scripts/check-scad-corpus.sh --evaluate --write-baseline corpus/baseline-evaluate.tsv .corpus
 ```
 
+`baseline-metrics.tsv` is the geometry snapshot for the in-repo model fixtures,
+used by `scripts/check-model-metrics.sh`: status, triangle and vertex counts,
+volume, and welded boundary/non-manifold edge counts. Timing is recorded for
+information but not compared. Refresh it when the fixtures change:
+
+```sh
+scripts/check-model-metrics.sh --write-baseline corpus/baseline-metrics.tsv
+```
+
 See [`docs/development.md`](../docs/development.md#scad-corpus-check) for the
 full workflow.

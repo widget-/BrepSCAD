@@ -100,6 +100,37 @@ A baseline run exits non-zero on regressions, new files, or missing files.
 `--verbose` prints every non-ok result. Set `BREPSCAD_BIN` to use another
 binary and `CORPUS_TIMEOUT` to change the per-file timeout (default 8 seconds).
 
+## Model metrics check
+
+The corpus check answers whether a file evaluates. When changing the boolean
+engine, also record what it built and how long it took. `check-model-metrics.sh`
+runs the release CLI on model files and captures wall time, triangles, vertices,
+volume, and welded boundary and non-manifold edges:
+
+```sh
+cargo build --release -p brepscad
+scripts/check-model-metrics.sh --baseline corpus/baseline-metrics.tsv
+```
+
+With no arguments it measures the in-repo model fixtures; pass files or
+directories to cover more models. Directories are searched recursively for
+`.scad` files. Write a baseline for an external set (paths are recorded as
+given) and compare against it after a change:
+
+```sh
+scripts/check-model-metrics.sh --write-baseline /tmp/opengrid-metrics.tsv \
+    path/to/opengrid-bin.scad path/to/opengrid-snap.scad
+scripts/check-model-metrics.sh --baseline /tmp/opengrid-metrics.tsv \
+    path/to/opengrid-bin.scad path/to/opengrid-snap.scad
+```
+
+Status, triangle/vertex counts, and welded edge counts are compared exactly;
+volume uses a relative tolerance (`METRICS_VOLUME_TOL`, default `1e-6`). Timing
+is printed but never compared because it is machine-dependent. `--repeat N`
+takes the fastest of N runs. Set `BREPSCAD_BIN` to use another binary and
+`METRICS_TIMEOUT` (or `--timeout`) to change the per-run timeout (default 120
+seconds).
+
 ## Toolchain
 
 `shell.nix` provides `rustup`; `rust-toolchain.toml` pins Rust 1.95.0 with
