@@ -489,7 +489,6 @@ impl TruckKernel {
     ) -> KernelResult<ShapeId> {
         let a = self.solid(a_id)?.clone();
         let b = self.solid(b_id)?.clone();
-        let started = std::time::Instant::now();
 
         // Booleans can legitimately produce a solid with no shells: an
         // intersection that misses, or a subtraction that removes the whole
@@ -585,24 +584,36 @@ impl TruckKernel {
             return self.intersect_shell_sets(&a, &b);
         }
 
+        self.merge_solids(op, &a, &b)
+    }
+
+    /// Run the boolean engine on two solids without dispatching compounds.
+    ///
+    /// `union_shell_sets` merges shell pairs through this path. Re-entering
+    /// `boolean_impl` there recursed once per failed fusion, and a degenerate
+    /// model overflowed the stack (`opengrid-snap.scad`). Shapeops accepts a
+    /// multi-shell solid; the retry ladder and fallbacks below handle it.
+    fn merge_solids(&mut self, op: BooleanOp, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+        let started = std::time::Instant::now();
+
         // Exact geometry first. A union must contain both operands: master
         // shapeops can return an amputated result (coplanar face pairs get
         // classified as inside and dropped), which is worse than failing.
         let mut last_difference = None;
         for tolerance in BOOLEAN_TOLERANCES {
-            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
+            if let Some(result) = attempt_boolean(op, a, b, tolerance) {
                 let covers = op != BooleanOp::Union
-                    || (union_covers(&result, &a, &b)
-                        && (!small_union(&a, &b) || union_is_closed(&result, tolerance)));
-                let mut outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
+                    || (union_covers(&result, a, b)
+                        && (!small_union(a, b) || union_is_closed(&result, tolerance)));
+                let mut outer = op != BooleanOp::Difference || difference_is_valid(a, b, &result);
                 let mut candidate = result;
                 if op == BooleanOp::Difference
                     && !outer
-                    && let (Some((a_min, a_max)), Some(_)) = (solid_bounds(&a), solid_bounds(&b))
+                    && let (Some((a_min, a_max)), Some(_)) = (solid_bounds(a), solid_bounds(b))
                     && let Some(clipped) = clip_to_bounds(&candidate, a_min, a_max, tolerance)
                 {
                     candidate = clipped;
-                    outer = difference_is_valid(&a, &b, &candidate);
+                    outer = difference_is_valid(a, b, &candidate);
                 }
                 if op == BooleanOp::Difference {
                     last_difference = Some(candidate.clone());
@@ -629,17 +640,16 @@ impl TruckKernel {
         // cylinder a hair taller than the cube it pierces, for example) but are
         // slower, so they run only after the exact attempts fail.
         let normalized = match op {
-            BooleanOp::Union => monstertruck_solid::or_normalized(&a, &b),
-            BooleanOp::Intersection => monstertruck_solid::and_normalized(&a, &b),
-            BooleanOp::Difference => monstertruck_solid::difference_normalized(&a, &b),
+            BooleanOp::Union => monstertruck_solid::or_normalized(a, b),
+            BooleanOp::Intersection => monstertruck_solid::and_normalized(a, b),
+            BooleanOp::Difference => monstertruck_solid::difference_normalized(a, b),
         };
         match normalized {
             Ok(result) => {
                 let covers = op != BooleanOp::Union
-                    || (union_covers(&result, &a, &b)
-                        && (!small_union(&a, &b)
-                            || union_is_closed(&result, BOOLEAN_TOLERANCES[0])));
-                let outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
+                    || (union_covers(&result, a, b)
+                        && (!small_union(a, b) || union_is_closed(&result, BOOLEAN_TOLERANCES[0])));
+                let outer = op != BooleanOp::Difference || difference_is_valid(a, b, &result);
                 if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() && (!covers || !outer) {
                     let shells: Vec<_> = result
                         .boundaries()
@@ -675,10 +685,10 @@ impl TruckKernel {
                     break;
                 }
                 let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
-                let nudged = builder::translated(&b, offset);
+                let nudged = builder::translated(b, offset);
                 for tolerance in BOOLEAN_TOLERANCES {
-                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance)
-                        && difference_is_valid(&a, &b, &result)
+                    if let Some(result) = attempt_boolean(op, a, &nudged, tolerance)
+                        && difference_is_valid(a, b, &result)
                     {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
@@ -693,15 +703,15 @@ impl TruckKernel {
                 break;
             }
             let offset = Vector3::new(shift[0], shift[1], shift[2]);
-            let shifted_a = builder::translated(&a, offset);
-            let shifted_b = builder::translated(&b, offset);
+            let shifted_a = builder::translated(a, offset);
+            let shifted_b = builder::translated(b, offset);
             for tolerance in BOOLEAN_TOLERANCES {
                 if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
                     result = builder::translated(&result, -offset);
                     if (op != BooleanOp::Union
-                        || (union_covers(&result, &a, &b)
-                            && (!small_union(&a, &b) || union_is_closed(&result, tolerance))))
-                        && (op != BooleanOp::Difference || difference_is_valid(&a, &b, &result))
+                        || (union_covers(&result, a, b)
+                            && (!small_union(a, b) || union_is_closed(&result, tolerance))))
+                        && (op != BooleanOp::Difference || difference_is_valid(a, b, &result))
                     {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
@@ -720,7 +730,7 @@ impl TruckKernel {
         }
 
         if op == BooleanOp::Difference
-            && let Some(result) = slab_difference(&a, &b, BOOLEAN_TOLERANCES[0])
+            && let Some(result) = slab_difference(a, b, BOOLEAN_TOLERANCES[0])
         {
             return Ok(self.insert(OwnedShape::Solid(result)));
         }
@@ -729,32 +739,31 @@ impl TruckKernel {
         // degenerate sliver the engine reduces to nothing. Missing such a cut is
         // visually irrelevant; failing the whole model is not.
         if op == BooleanOp::Difference
-            && let (Some((a_min, a_max)), Some((b_min, b_max))) =
-                (solid_bounds(&a), solid_bounds(&b))
+            && let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b))
         {
             let a_volume = (a_max[0] - a_min[0]) * (a_max[1] - a_min[1]) * (a_max[2] - a_min[2]);
             let b_volume = (b_max[0] - b_min[0]) * (b_max[1] - b_min[1]) * (b_max[2] - b_min[2]);
             if b_volume <= a_volume * 1.0e-3 {
-                return Ok(self.insert(OwnedShape::Solid(a)));
+                return Ok(self.insert(OwnedShape::Solid(a.clone())));
             }
         }
 
         // If every difference attempt produced an inverted or empty shell, the
         // subject is a better answer than an inside-out cavity.
         if op == BooleanOp::Difference
-            && solid_volume(&a) > 0.0
+            && solid_volume(a) > 0.0
             && last_difference
                 .as_ref()
                 .is_none_or(|candidate| solid_volume(candidate) <= 0.0)
         {
-            return Ok(self.insert(OwnedShape::Solid(a)));
+            return Ok(self.insert(OwnedShape::Solid(a.clone())));
         }
 
         if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
             eprintln!(
                 "BOOLEAN FAIL {op:?} a={:?} b={:?}",
-                solid_bounds(&a),
-                solid_bounds(&b)
+                solid_bounds(a),
+                solid_bounds(b)
             );
         }
         Err(KernelError::Backend(
@@ -785,7 +794,12 @@ impl TruckKernel {
                     continue;
                 }
                 let other = merged.swap_remove(index);
-                pending = self.boolean(BooleanOp::Union, pending, other)?;
+                // Merge without dispatching back into the compound path:
+                // a failed fusion leaves a multi-shell solid here, and
+                // re-entering it once per merge recursed without bound.
+                let pending_solid = self.solid(pending)?.clone();
+                let other_solid = self.solid(other)?.clone();
+                pending = self.merge_solids(BooleanOp::Union, &pending_solid, &other_solid)?;
                 // The merged bounds just grew, so a shell that missed the last
                 // test may touch the new one.
                 index = 0;

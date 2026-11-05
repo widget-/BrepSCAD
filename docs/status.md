@@ -436,6 +436,10 @@ vendor/
 - Disjoint unions concatenate the shells with `Solid::new_unchecked` instead of
   re-validating every shell through `Solid::try_new`: both operands are already
   accepted solids, and the revalidation made chained disjoint unions quadratic.
+- Shell-set merges go through `merge_solids`, which runs the engine directly
+  instead of dispatching back into the compound split. A fusion that fails
+  leaves a multi-shell solid, and re-entering the split once per merge recursed
+  without bound on `opengrid-snap.scad` (stack overflow).
 - The evaluator skips `difference` cutters whose bounds miss the subject,
   using `Kernel::aabb`. The truck adapter computes each shape's vertex AABB
   once at insertion and caches it, so the check never tessellates and repeated

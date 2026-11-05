@@ -34,6 +34,11 @@ Local patches:
   on, or a rounding error outside, the curve's range.
   `Edge::cut_with_parameter` rejects such a parameter, which used to fail the
   boolean when an intersection endpoint coincided with an existing vertex.
+- `monstertruck-solid/src/transversal/classic/loops_store.rs` turns
+  `curve_surface_projection`'s 100-step retry recursion into a loop. Each retry
+  carries the generic curve/surface search frames, and `opengrid-snap.scad` hit
+  a degenerate intersection that ran all 100 levels and overflowed the 8 MB
+  stack. The iteration order and the result are unchanged.
 - `monstertruck-solid/src/transversal/classic/mod.rs` returns
   `Solid::new_unchecked` from `finalize`, so open boolean-derived shells reach
   the adapter's retry ladder and the tessellator. It also applies the
