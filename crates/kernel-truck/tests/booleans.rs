@@ -238,6 +238,15 @@ fn aabb_reports_vertex_bounds() {
     let (min, max) = kernel.aabb(sketch).expect("sketch aabb");
     assert_close(min, [-1.0, -2.0, 0.0]);
     assert_close(max, [1.0, 2.0, 0.0]);
+
+    // Boolean results are cached at insertion too.
+    let other = cube(&mut kernel, [2.0; 3], [10.0, 0.0, 0.0]);
+    let union = kernel
+        .boolean(BooleanOp::Union, block, other)
+        .expect("union");
+    let (min, max) = kernel.aabb(union).expect("union aabb");
+    assert_close(min, [0.0, -1.0, -1.0]);
+    assert_close(max, [11.0, 4.0, 6.0]);
 }
 
 /// Bounds-disjoint operands have no intersection, so the engine is not asked.

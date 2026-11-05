@@ -433,10 +433,14 @@ vendor/
   every shell pair is the slowest path in the backend and rarely succeeds on
   degenerate input; appending an overlapping shell would keep both copies and
   double-count their shared volume.
+- Disjoint unions concatenate the shells with `Solid::new_unchecked` instead of
+  re-validating every shell through `Solid::try_new`: both operands are already
+  accepted solids, and the revalidation made chained disjoint unions quadratic.
 - The evaluator skips `difference` cutters whose bounds miss the subject,
-  using `Kernel::aabb`. It reads B-rep vertices instead of tessellating, so it
-  can underestimate a curved surface; that makes "disjoint" safe to act on and
-  "contained" unsafe.
+  using `Kernel::aabb`. The truck adapter computes each shape's vertex AABB
+  once at insertion and caches it, so the check never tessellates and repeated
+  boolean queries are lookups. Vertex bounds can underestimate a curved
+  surface, which makes "disjoint" safe to act on and "contained" unsafe.
 - Compound tessellation welds attributes with an exact-duplicate fast path
   (vendored `monstertruck-meshing` patch). Identical cap normals and repeated
   UV corners made the old weld quadratic: a 100-shell compound went from 3.0 s

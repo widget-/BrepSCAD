@@ -317,11 +317,16 @@ fn difference_keeps_outer_bounds(a: &Solid, b: &Solid, result: &Solid) -> bool {
     })
 }
 
+fn bounds_disjoint(left: ([f64; 3], [f64; 3]), right: ([f64; 3], [f64; 3])) -> bool {
+    (0..3)
+        .any(|axis| left.1[axis] < right.0[axis] - 1.0e-6 || right.1[axis] < left.0[axis] - 1.0e-6)
+}
+
 fn disjoint(a: &Solid, b: &Solid) -> bool {
-    let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
-        return false;
-    };
-    (0..3).any(|axis| a_max[axis] < b_min[axis] - 1.0e-6 || b_max[axis] < a_min[axis] - 1.0e-6)
+    match (solid_bounds(a), solid_bounds(b)) {
+        (Some(a), Some(b)) => bounds_disjoint(a, b),
+        _ => false,
+    }
 }
 
 fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
@@ -358,10 +363,22 @@ enum OwnedShape {
     Solid(Solid),
 }
 
+fn shape_bounds(shape: &OwnedShape) -> Option<([f64; 3], [f64; 3])> {
+    match shape {
+        OwnedShape::Solid(solid) => solid_bounds(solid),
+        OwnedShape::Face(face) => face_bounds(face),
+        OwnedShape::Faces(faces) => faces_bounds(faces),
+    }
+}
+
 /// A kernel that owns Truck faces and solids in a simple arena.
 #[derive(Debug, Default)]
 pub struct TruckKernel {
     shapes: Vec<OwnedShape>,
+    /// Vertex AABB of each shape, computed once when it is inserted. Shapes are
+    /// immutable after insertion, so these never go stale. Empty shapes have no
+    /// entry.
+    bounds: std::collections::HashMap<u64, ([f64; 3], [f64; 3])>,
     boolean_shapes: std::collections::HashSet<u64>,
     /// Radius of each shape that is a ball, so `minkowski` can recognise one.
     balls: std::collections::HashMap<u64, f64>,
@@ -374,8 +391,22 @@ impl TruckKernel {
 
     fn insert(&mut self, shape: OwnedShape) -> ShapeId {
         let id = ShapeId(self.shapes.len() as u64);
+        if let Some(bounds) = shape_bounds(&shape) {
+            self.bounds.insert(id.0, bounds);
+        }
         self.shapes.push(shape);
         id
+    }
+
+    fn cached_bounds(&self, id: ShapeId) -> Option<([f64; 3], [f64; 3])> {
+        self.bounds.get(&id.0).copied()
+    }
+
+    fn disjoint_ids(&self, a: ShapeId, b: ShapeId) -> bool {
+        match (self.cached_bounds(a), self.cached_bounds(b)) {
+            (Some(a), Some(b)) => bounds_disjoint(a, b),
+            _ => false,
+        }
     }
 
     fn shape(&self, id: ShapeId) -> KernelResult<&OwnedShape> {
@@ -487,21 +518,22 @@ impl TruckKernel {
             return Ok(surviving);
         }
 
-        if op == BooleanOp::Intersection && disjoint(&a, &b) {
+        if op == BooleanOp::Intersection && self.disjoint_ids(a_id, b_id) {
             // The operands cannot touch, so there is nothing left to intersect.
             // Feeding shapeops an unavoidable miss costs a full attempt ladder.
             return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(Vec::new()))));
         }
 
-        if op == BooleanOp::Union && disjoint(&a, &b) {
+        if op == BooleanOp::Union && self.disjoint_ids(a_id, b_id) {
+            // Both operands are already accepted solids, so their shells are
+            // closed and disjoint; validating every shell again here made
+            // repeated disjoint unions quadratic.
             let mut boundaries = a.boundaries().clone();
             boundaries.extend(b.boundaries().iter().cloned());
-            if let Ok(result) = Solid::try_new(boundaries) {
-                return Ok(self.insert(OwnedShape::Solid(result)));
-            }
+            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
         }
 
-        if op == BooleanOp::Difference && disjoint(&a, &b) {
+        if op == BooleanOp::Difference && self.disjoint_ids(a_id, b_id) {
             return Ok(self.insert(OwnedShape::Solid(a)));
         }
 
@@ -748,7 +780,7 @@ impl TruckKernel {
                 self.insert(OwnedShape::Solid(Solid::new_unchecked(vec![shell.clone()])));
             let mut index = 0;
             while index < merged.len() {
-                if disjoint(self.solid(pending)?, self.solid(merged[index])?) {
+                if self.disjoint_ids(pending, merged[index]) {
                     index += 1;
                     continue;
                 }
@@ -989,11 +1021,7 @@ impl Kernel for TruckKernel {
     }
 
     fn aabb(&self, shape: ShapeId) -> Option<([f64; 3], [f64; 3])> {
-        match self.shape(shape).ok()? {
-            OwnedShape::Solid(solid) => solid_bounds(solid),
-            OwnedShape::Face(face) => face_bounds(face),
-            OwnedShape::Faces(faces) => faces_bounds(faces),
-        }
+        self.cached_bounds(shape)
     }
 
     fn polyhedron(&self, shape: ShapeId) -> Option<Polyhedron> {
