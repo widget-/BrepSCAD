@@ -40,19 +40,43 @@ const BOOLEAN_NUDGES: [[f64; 3]; 6] = [
     [-2.0e-5, 0.0, 0.0],
 ];
 
-fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
+fn point_bounds(points: impl Iterator<Item = [f64; 3]>) -> Option<([f64; 3], [f64; 3])> {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
     let mut found = false;
-    for vertex in solid.vertex_iter() {
-        let point = vertex.point();
+    for point in points {
         found = true;
-        for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+        for (axis, value) in point.into_iter().enumerate() {
             min[axis] = min[axis].min(value);
             max[axis] = max[axis].max(value);
         }
     }
     found.then_some((min, max))
+}
+
+fn vertex_point(vertex: Vertex) -> [f64; 3] {
+    let point = vertex.point();
+    [point.x, point.y, point.z]
+}
+
+fn face_points(face: &Face) -> impl Iterator<Item = [f64; 3]> + '_ {
+    face.vertex_iter().map(vertex_point)
+}
+
+fn face_bounds(face: &Face) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(face_points(face))
+}
+
+fn faces_bounds(faces: &[Face]) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(faces.iter().flat_map(face_points))
+}
+
+fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(solid.vertex_iter().map(vertex_point))
+}
+
+fn shell_bounds(shell: &Shell) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(shell.face_iter().flat_map(face_points))
 }
 
 /// Signed volume of the solid's tessellation, or zero when it cannot be meshed.
@@ -73,23 +97,6 @@ fn solid_volume(solid: &Solid) -> f64 {
             .sum()
     }))
     .unwrap_or(0.0)
-}
-
-fn shell_bounds(shell: &Shell) -> Option<([f64; 3], [f64; 3])> {
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    let mut found = false;
-    for face in shell.face_iter() {
-        for vertex in face.vertex_iter() {
-            let point = vertex.point();
-            found = true;
-            for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
-                min[axis] = min[axis].min(value);
-                max[axis] = max[axis].max(value);
-            }
-        }
-    }
-    found.then_some((min, max))
 }
 
 /// True when `outer`'s bounds contain `inner`'s. Master shapeops can return a
@@ -310,11 +317,16 @@ fn difference_keeps_outer_bounds(a: &Solid, b: &Solid, result: &Solid) -> bool {
     })
 }
 
+fn bounds_disjoint(left: ([f64; 3], [f64; 3]), right: ([f64; 3], [f64; 3])) -> bool {
+    (0..3)
+        .any(|axis| left.1[axis] < right.0[axis] - 1.0e-6 || right.1[axis] < left.0[axis] - 1.0e-6)
+}
+
 fn disjoint(a: &Solid, b: &Solid) -> bool {
-    let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b)) else {
-        return false;
-    };
-    (0..3).any(|axis| a_max[axis] < b_min[axis] - 1.0e-6 || b_max[axis] < a_min[axis] - 1.0e-6)
+    match (solid_bounds(a), solid_bounds(b)) {
+        (Some(a), Some(b)) => bounds_disjoint(a, b),
+        _ => false,
+    }
 }
 
 fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
@@ -351,10 +363,22 @@ enum OwnedShape {
     Solid(Solid),
 }
 
+fn shape_bounds(shape: &OwnedShape) -> Option<([f64; 3], [f64; 3])> {
+    match shape {
+        OwnedShape::Solid(solid) => solid_bounds(solid),
+        OwnedShape::Face(face) => face_bounds(face),
+        OwnedShape::Faces(faces) => faces_bounds(faces),
+    }
+}
+
 /// A kernel that owns Truck faces and solids in a simple arena.
 #[derive(Debug, Default)]
 pub struct TruckKernel {
     shapes: Vec<OwnedShape>,
+    /// Vertex AABB of each shape, computed once when it is inserted. Shapes are
+    /// immutable after insertion, so these never go stale. Empty shapes have no
+    /// entry.
+    bounds: std::collections::HashMap<u64, ([f64; 3], [f64; 3])>,
     boolean_shapes: std::collections::HashSet<u64>,
     /// Radius of each shape that is a ball, so `minkowski` can recognise one.
     balls: std::collections::HashMap<u64, f64>,
@@ -367,8 +391,22 @@ impl TruckKernel {
 
     fn insert(&mut self, shape: OwnedShape) -> ShapeId {
         let id = ShapeId(self.shapes.len() as u64);
+        if let Some(bounds) = shape_bounds(&shape) {
+            self.bounds.insert(id.0, bounds);
+        }
         self.shapes.push(shape);
         id
+    }
+
+    fn cached_bounds(&self, id: ShapeId) -> Option<([f64; 3], [f64; 3])> {
+        self.bounds.get(&id.0).copied()
+    }
+
+    fn disjoint_ids(&self, a: ShapeId, b: ShapeId) -> bool {
+        match (self.cached_bounds(a), self.cached_bounds(b)) {
+            (Some(a), Some(b)) => bounds_disjoint(a, b),
+            _ => false,
+        }
     }
 
     fn shape(&self, id: ShapeId) -> KernelResult<&OwnedShape> {
@@ -451,7 +489,6 @@ impl TruckKernel {
     ) -> KernelResult<ShapeId> {
         let a = self.solid(a_id)?.clone();
         let b = self.solid(b_id)?.clone();
-        let started = std::time::Instant::now();
 
         // Booleans can legitimately produce a solid with no shells: an
         // intersection that misses, or a subtraction that removes the whole
@@ -480,26 +517,32 @@ impl TruckKernel {
             return Ok(surviving);
         }
 
-        if op == BooleanOp::Union && disjoint(&a, &b) {
-            let mut boundaries = a.boundaries().clone();
-            boundaries.extend(b.boundaries().iter().cloned());
-            if let Ok(result) = Solid::try_new(boundaries) {
-                return Ok(self.insert(OwnedShape::Solid(result)));
-            }
+        if op == BooleanOp::Intersection && self.disjoint_ids(a_id, b_id) {
+            // The operands cannot touch, so there is nothing left to intersect.
+            // Feeding shapeops an unavoidable miss costs a full attempt ladder.
+            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(Vec::new()))));
         }
 
-        if op == BooleanOp::Difference && disjoint(&a, &b) {
+        if op == BooleanOp::Union && self.disjoint_ids(a_id, b_id) {
+            // Both operands are already accepted solids, so their shells are
+            // closed and disjoint; validating every shell again here made
+            // repeated disjoint unions quadratic.
+            let mut boundaries = a.boundaries().clone();
+            boundaries.extend(b.boundaries().iter().cloned());
+            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
+        }
+
+        if op == BooleanOp::Difference && self.disjoint_ids(a_id, b_id) {
             return Ok(self.insert(OwnedShape::Solid(a)));
         }
 
         // Fusing an already-compound shell set with another solid makes master
         // shapeops iterate every shell pair and can take minutes on degenerate
-        // models. Keep the shells separate instead; the tessellator renders a
-        // compound, and the cheap disjoint path already covers the exact case.
+        // models. Keep the shells separate instead, but only where they cannot
+        // touch: appending an overlapping shell leaves both copies behind and
+        // counts the overlap twice, which made unions depend on operand order.
         if op == BooleanOp::Union && (a.boundaries().len() > 1 || b.boundaries().len() > 1) {
-            let mut boundaries = a.boundaries().clone();
-            boundaries.extend(b.boundaries().iter().cloned());
-            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
+            return self.union_shell_sets(&a, &b);
         }
 
         // A compound solid can be produced by a disjoint union. Subtract from
@@ -534,24 +577,43 @@ impl TruckKernel {
             return Ok(result);
         }
 
+        // Shapeops cannot consume a multi-shell solid, but an intersection
+        // distributes over the compound's shells:
+        // `(A ∪ B) ∩ C = (A ∩ C) ∪ (B ∩ C)`.
+        if op == BooleanOp::Intersection && (a.boundaries().len() > 1 || b.boundaries().len() > 1) {
+            return self.intersect_shell_sets(&a, &b);
+        }
+
+        self.merge_solids(op, &a, &b)
+    }
+
+    /// Run the boolean engine on two solids without dispatching compounds.
+    ///
+    /// `union_shell_sets` merges shell pairs through this path. Re-entering
+    /// `boolean_impl` there recursed once per failed fusion, and a degenerate
+    /// model overflowed the stack (`opengrid-snap.scad`). Shapeops accepts a
+    /// multi-shell solid; the retry ladder and fallbacks below handle it.
+    fn merge_solids(&mut self, op: BooleanOp, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+        let started = std::time::Instant::now();
+
         // Exact geometry first. A union must contain both operands: master
         // shapeops can return an amputated result (coplanar face pairs get
         // classified as inside and dropped), which is worse than failing.
         let mut last_difference = None;
         for tolerance in BOOLEAN_TOLERANCES {
-            if let Some(result) = attempt_boolean(op, &a, &b, tolerance) {
+            if let Some(result) = attempt_boolean(op, a, b, tolerance) {
                 let covers = op != BooleanOp::Union
-                    || (union_covers(&result, &a, &b)
-                        && (!small_union(&a, &b) || union_is_closed(&result, tolerance)));
-                let mut outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
+                    || (union_covers(&result, a, b)
+                        && (!small_union(a, b) || union_is_closed(&result, tolerance)));
+                let mut outer = op != BooleanOp::Difference || difference_is_valid(a, b, &result);
                 let mut candidate = result;
                 if op == BooleanOp::Difference
                     && !outer
-                    && let (Some((a_min, a_max)), Some(_)) = (solid_bounds(&a), solid_bounds(&b))
+                    && let (Some((a_min, a_max)), Some(_)) = (solid_bounds(a), solid_bounds(b))
                     && let Some(clipped) = clip_to_bounds(&candidate, a_min, a_max, tolerance)
                 {
                     candidate = clipped;
-                    outer = difference_is_valid(&a, &b, &candidate);
+                    outer = difference_is_valid(a, b, &candidate);
                 }
                 if op == BooleanOp::Difference {
                     last_difference = Some(candidate.clone());
@@ -578,17 +640,16 @@ impl TruckKernel {
         // cylinder a hair taller than the cube it pierces, for example) but are
         // slower, so they run only after the exact attempts fail.
         let normalized = match op {
-            BooleanOp::Union => monstertruck_solid::or_normalized(&a, &b),
-            BooleanOp::Intersection => monstertruck_solid::and_normalized(&a, &b),
-            BooleanOp::Difference => monstertruck_solid::difference_normalized(&a, &b),
+            BooleanOp::Union => monstertruck_solid::or_normalized(a, b),
+            BooleanOp::Intersection => monstertruck_solid::and_normalized(a, b),
+            BooleanOp::Difference => monstertruck_solid::difference_normalized(a, b),
         };
         match normalized {
             Ok(result) => {
                 let covers = op != BooleanOp::Union
-                    || (union_covers(&result, &a, &b)
-                        && (!small_union(&a, &b)
-                            || union_is_closed(&result, BOOLEAN_TOLERANCES[0])));
-                let outer = op != BooleanOp::Difference || difference_is_valid(&a, &b, &result);
+                    || (union_covers(&result, a, b)
+                        && (!small_union(a, b) || union_is_closed(&result, BOOLEAN_TOLERANCES[0])));
+                let outer = op != BooleanOp::Difference || difference_is_valid(a, b, &result);
                 if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() && (!covers || !outer) {
                     let shells: Vec<_> = result
                         .boundaries()
@@ -624,10 +685,10 @@ impl TruckKernel {
                     break;
                 }
                 let offset = Vector3::new(nudge[0], nudge[1], nudge[2]);
-                let nudged = builder::translated(&b, offset);
+                let nudged = builder::translated(b, offset);
                 for tolerance in BOOLEAN_TOLERANCES {
-                    if let Some(result) = attempt_boolean(op, &a, &nudged, tolerance)
-                        && difference_is_valid(&a, &b, &result)
+                    if let Some(result) = attempt_boolean(op, a, &nudged, tolerance)
+                        && difference_is_valid(a, b, &result)
                     {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
@@ -642,15 +703,15 @@ impl TruckKernel {
                 break;
             }
             let offset = Vector3::new(shift[0], shift[1], shift[2]);
-            let shifted_a = builder::translated(&a, offset);
-            let shifted_b = builder::translated(&b, offset);
+            let shifted_a = builder::translated(a, offset);
+            let shifted_b = builder::translated(b, offset);
             for tolerance in BOOLEAN_TOLERANCES {
                 if let Some(mut result) = attempt_boolean(op, &shifted_a, &shifted_b, tolerance) {
                     result = builder::translated(&result, -offset);
                     if (op != BooleanOp::Union
-                        || (union_covers(&result, &a, &b)
-                            && (!small_union(&a, &b) || union_is_closed(&result, tolerance))))
-                        && (op != BooleanOp::Difference || difference_is_valid(&a, &b, &result))
+                        || (union_covers(&result, a, b)
+                            && (!small_union(a, b) || union_is_closed(&result, tolerance))))
+                        && (op != BooleanOp::Difference || difference_is_valid(a, b, &result))
                     {
                         return Ok(self.insert(OwnedShape::Solid(result)));
                     }
@@ -669,7 +730,7 @@ impl TruckKernel {
         }
 
         if op == BooleanOp::Difference
-            && let Some(result) = slab_difference(&a, &b, BOOLEAN_TOLERANCES[0])
+            && let Some(result) = slab_difference(a, b, BOOLEAN_TOLERANCES[0])
         {
             return Ok(self.insert(OwnedShape::Solid(result)));
         }
@@ -678,37 +739,106 @@ impl TruckKernel {
         // degenerate sliver the engine reduces to nothing. Missing such a cut is
         // visually irrelevant; failing the whole model is not.
         if op == BooleanOp::Difference
-            && let (Some((a_min, a_max)), Some((b_min, b_max))) =
-                (solid_bounds(&a), solid_bounds(&b))
+            && let (Some((a_min, a_max)), Some((b_min, b_max))) = (solid_bounds(a), solid_bounds(b))
         {
             let a_volume = (a_max[0] - a_min[0]) * (a_max[1] - a_min[1]) * (a_max[2] - a_min[2]);
             let b_volume = (b_max[0] - b_min[0]) * (b_max[1] - b_min[1]) * (b_max[2] - b_min[2]);
             if b_volume <= a_volume * 1.0e-3 {
-                return Ok(self.insert(OwnedShape::Solid(a)));
+                return Ok(self.insert(OwnedShape::Solid(a.clone())));
             }
         }
 
         // If every difference attempt produced an inverted or empty shell, the
         // subject is a better answer than an inside-out cavity.
         if op == BooleanOp::Difference
-            && solid_volume(&a) > 0.0
+            && solid_volume(a) > 0.0
             && last_difference
                 .as_ref()
                 .is_none_or(|candidate| solid_volume(candidate) <= 0.0)
         {
-            return Ok(self.insert(OwnedShape::Solid(a)));
+            return Ok(self.insert(OwnedShape::Solid(a.clone())));
         }
 
         if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
             eprintln!(
                 "BOOLEAN FAIL {op:?} a={:?} b={:?}",
-                solid_bounds(&a),
-                solid_bounds(&b)
+                solid_bounds(a),
+                solid_bounds(b)
             );
         }
         Err(KernelError::Backend(
             "boolean operation returned no solid at any tolerance".to_owned(),
         ))
+    }
+
+    /// Union two solids whose shells may already be split into a compound.
+    ///
+    /// A compound's shells are disjoint, so a shell can be concatenated only
+    /// when its bounds miss every shell on the other side. Anything that can
+    /// touch goes through the boolean engine: keeping both copies would leave
+    /// overlapping shells behind and count their shared volume twice.
+    fn union_shell_sets(&mut self, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+        let mut merged: Vec<ShapeId> = a
+            .boundaries()
+            .iter()
+            .map(|shell| self.insert(OwnedShape::Solid(Solid::new_unchecked(vec![shell.clone()]))))
+            .collect();
+
+        for shell in b.boundaries() {
+            let mut pending =
+                self.insert(OwnedShape::Solid(Solid::new_unchecked(vec![shell.clone()])));
+            let mut index = 0;
+            while index < merged.len() {
+                if self.disjoint_ids(pending, merged[index]) {
+                    index += 1;
+                    continue;
+                }
+                let other = merged.swap_remove(index);
+                // Merge without dispatching back into the compound path:
+                // a failed fusion leaves a multi-shell solid here, and
+                // re-entering it once per merge recursed without bound.
+                let pending_solid = self.solid(pending)?.clone();
+                let other_solid = self.solid(other)?.clone();
+                pending = self.merge_solids(BooleanOp::Union, &pending_solid, &other_solid)?;
+                // The merged bounds just grew, so a shell that missed the last
+                // test may touch the new one.
+                index = 0;
+            }
+            merged.push(pending);
+        }
+
+        if merged.len() == 1 {
+            return Ok(merged[0]);
+        }
+        let mut boundaries = Vec::new();
+        for id in merged {
+            boundaries.extend(self.solid(id)?.clone().into_boundaries());
+        }
+        Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))))
+    }
+
+    /// Intersect a compound by intersecting every shell pair that can touch.
+    ///
+    /// The union of the pairwise intersections is the intersection of the two
+    /// shell sets. Bounds-disjoint pairs are skipped because their intersection
+    /// is empty; the surviving pieces are disjoint because the shells they came
+    /// from are.
+    fn intersect_shell_sets(&mut self, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+        let mut boundaries = Vec::new();
+        for shell_a in a.boundaries() {
+            for shell_b in b.boundaries() {
+                let left = Solid::new_unchecked(vec![shell_a.clone()]);
+                let right = Solid::new_unchecked(vec![shell_b.clone()]);
+                if disjoint(&left, &right) {
+                    continue;
+                }
+                let left = self.insert(OwnedShape::Solid(left));
+                let right = self.insert(OwnedShape::Solid(right));
+                let piece = self.boolean(BooleanOp::Intersection, left, right)?;
+                boundaries.extend(self.solid(piece)?.clone().into_boundaries());
+            }
+        }
+        Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))))
     }
 }
 
@@ -902,6 +1032,10 @@ impl Kernel for TruckKernel {
     fn bounds(&self, shape: ShapeId, tolerance: f64) -> KernelResult<([f64; 3], [f64; 3])> {
         let mesh = self.tessellate(shape, tolerance)?;
         mesh_bounds(&mesh).ok_or_else(|| KernelError::Backend("shape has no geometry".to_owned()))
+    }
+
+    fn aabb(&self, shape: ShapeId) -> Option<([f64; 3], [f64; 3])> {
+        self.cached_bounds(shape)
     }
 
     fn polyhedron(&self, shape: ShapeId) -> Option<Polyhedron> {

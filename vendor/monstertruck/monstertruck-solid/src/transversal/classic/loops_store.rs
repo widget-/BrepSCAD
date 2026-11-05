@@ -442,28 +442,29 @@ where
     C: ParametricCurve3D + SearchNearestParameter<CurveParameter, Point = Point3>,
     S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    if trials == 0 {
-        return None;
-    }
-    let t = curve.search_nearest_parameter(point, curve_hint, 10)?;
-    let pt0 = curve.evaluate(t);
-    let (u, v) = surface.search_nearest_parameter(point, surface_hint, 10)?;
-    let pt1 = surface.evaluate(u, v);
-    if point.near(&pt0) && point.near(&pt1) && pt0.near(&pt1) {
-        Some((point, t, Point2::new(u, v)))
-    } else {
+    // PATCH(BrepSCAD): iterate instead of recursing. Every retry carries the
+    // generic surface/curve search frames, and the 100 retries of a degenerate
+    // intersection overflowed an 8 MB stack (opengrid-snap.scad). The loop is
+    // the same fixed-point iteration: `trials` attempts, newest hint each time.
+    let mut curve_hint = curve_hint;
+    let mut surface_hint = surface_hint;
+    let mut point = point;
+    for _ in 0..trials {
+        let t = curve.search_nearest_parameter(point, curve_hint, 10)?;
+        let pt0 = curve.evaluate(t);
+        let (u, v) = surface.search_nearest_parameter(point, surface_hint, 10)?;
+        let pt1 = surface.evaluate(u, v);
+        if point.near(&pt0) && point.near(&pt1) && pt0.near(&pt1) {
+            return Some((point, t, Point2::new(u, v)));
+        }
         let l = curve.derivative(t);
         let n = surface.normal(u, v);
         let t0 = (pt1 - pt0).dot(n) / l.dot(n);
-        curve_surface_projection(
-            curve,
-            Some(t),
-            surface,
-            Some((u, v)),
-            pt0 + t0 * l,
-            trials - 1,
-        )
+        curve_hint = Some(t);
+        surface_hint = Some((u, v));
+        point = pt0 + t0 * l;
     }
+    None
 }
 
 fn create_independent_loop<P, C, D>(mut poly_curve0: C) -> Wire<P, D>

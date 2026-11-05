@@ -25,6 +25,18 @@ const SINGULAR_DETERMINANT: f64 = 1.0e-12;
 const FACETED_MAX: usize = 32;
 const PROFILE_SEGMENTS_MAX: usize = 256;
 const MAX_CALL_DEPTH: usize = 256;
+const AABB_EPSILON: f64 = 1.0e-6;
+
+/// True when two known AABBs cannot touch. Unknown bounds never prune.
+fn aabb_disjoint(left: Option<([f64; 3], [f64; 3])>, right: Option<([f64; 3], [f64; 3])>) -> bool {
+    let (Some((left_min, left_max)), Some((right_min, right_max))) = (left, right) else {
+        return false;
+    };
+    (0..3).any(|axis| {
+        left_max[axis] < right_min[axis] - AABB_EPSILON
+            || right_max[axis] < left_min[axis] - AABB_EPSILON
+    })
+}
 
 #[derive(Debug, Default)]
 struct Arguments {
@@ -2299,6 +2311,15 @@ impl<K: Kernel> Evaluator<'_, K> {
                 }
 
                 let mut shapes: Vec<_> = children.iter().map(|child| child.shape).collect();
+                if op == BooleanOp::Difference {
+                    // A cutter whose bounds miss the subject cannot change it,
+                    // so keep it out of the cutter union and the subtraction.
+                    let subject = shapes[0];
+                    let subject_bounds = self.kernel.aabb(subject);
+                    shapes.retain(|&shape| {
+                        shape == subject || !aabb_disjoint(self.kernel.aabb(shape), subject_bounds)
+                    });
+                }
                 let mut result = shapes.remove(0);
                 if op == BooleanOp::Difference && shapes.len() > 1 {
                     // OpenSCAD subtracts the union of all later children. Try

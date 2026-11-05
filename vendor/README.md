@@ -34,6 +34,11 @@ Local patches:
   on, or a rounding error outside, the curve's range.
   `Edge::cut_with_parameter` rejects such a parameter, which used to fail the
   boolean when an intersection endpoint coincided with an existing vertex.
+- `monstertruck-solid/src/transversal/classic/loops_store.rs` turns
+  `curve_surface_projection`'s 100-step retry recursion into a loop. Each retry
+  carries the generic curve/surface search frames, and `opengrid-snap.scad` hit
+  a degenerate intersection that ran all 100 levels and overflowed the 8 MB
+  stack. The iteration order and the result are unchanged.
 - `monstertruck-solid/src/transversal/classic/mod.rs` returns
   `Solid::new_unchecked` from `finalize`, so open boolean-derived shells reach
   the adapter's retry ladder and the tessellator. It also applies the
@@ -73,6 +78,13 @@ Local patches:
 - `monstertruck-geometry` carries PR #32 (`1b6f1de61e`), which cuts B-splines
   onto a knot just above the cut parameter instead of inserting a
   multiplicity-`degree + 2` knot beside it.
+- `monstertruck-meshing/src/filters/optimizing/mod.rs` collapses exact
+  duplicate attributes to one representative before the pairwise weld test.
+  Every flat cap normal is the same vector and planar faces repeat their UV
+  corners, so the old block scan was quadratic: tessellating a 100-shell
+  compound spent 2.9 s there (2.0 s on normals, 1.0 s on UVs). Equal values
+  have equal distances, so the connected components are unchanged; the weld
+  drops to 59 ms and the whole compound tessellation to 71 ms.
 
 The adapter uses `monstertruck_solid::difference` directly and, after the exact
 tolerance ladder fails, falls back to `and_normalized` / `or_normalized` /

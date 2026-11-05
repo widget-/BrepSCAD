@@ -192,6 +192,17 @@ pub trait Kernel {
         Err(KernelError::Unsupported("bounds"))
     }
 
+    /// Axis-aligned bounds of the shape's vertices, without tessellating.
+    ///
+    /// Callers use this to skip operands that cannot interact. A B-rep vertex
+    /// set can underestimate a curved surface by the sagitta between its
+    /// samples, so treating two shapes as disjoint is safe; treating one as
+    /// contained is not. Returns `None` when the backend cannot answer without
+    /// tessellating, in which case callers must not prune.
+    fn aabb(&self, _shape: ShapeId) -> Option<([f64; 3], [f64; 3])> {
+        None
+    }
+
     /// The solid as a polyhedron, when every face is planar.
     ///
     /// Backends that cannot answer, or shapes with any curved or non-simple

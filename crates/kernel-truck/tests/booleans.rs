@@ -5,9 +5,10 @@
 //! tests pin that behaviour down without depending on how tolerant shapeops is
 //! for a given piece of geometry.
 
-use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Transform};
+use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_kernel_truck::TruckKernel;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 fn cube(kernel: &mut TruckKernel, size: [f64; 3], at: [f64; 3]) -> ShapeId {
     let shape = kernel
@@ -222,10 +223,50 @@ fn union_of_disjoint_cubes_keeps_both_shells() {
     assert_close(max, [6.0, 1.0, 1.0]);
 }
 
-/// A union that involves a compound keeps the existing shells instead of asking
-/// shapeops to fuse every shell pair.
+/// The analysis AABB comes from B-rep vertices, so it does not tessellate.
 #[test]
-fn union_with_a_compound_solid_keeps_all_shells() {
+fn aabb_reports_vertex_bounds() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [2.0, 4.0, 6.0], [1.0, 2.0, 3.0]);
+    let (min, max) = kernel.aabb(block).expect("solid aabb");
+    assert_close(min, [0.0, 0.0, 0.0]);
+    assert_close(max, [2.0, 4.0, 6.0]);
+
+    let sketch = kernel
+        .sketch(Sketch::Square { size: [2.0, 4.0] })
+        .expect("square");
+    let (min, max) = kernel.aabb(sketch).expect("sketch aabb");
+    assert_close(min, [-1.0, -2.0, 0.0]);
+    assert_close(max, [1.0, 2.0, 0.0]);
+
+    // Boolean results are cached at insertion too.
+    let other = cube(&mut kernel, [2.0; 3], [10.0, 0.0, 0.0]);
+    let union = kernel
+        .boolean(BooleanOp::Union, block, other)
+        .expect("union");
+    let (min, max) = kernel.aabb(union).expect("union aabb");
+    assert_close(min, [0.0, -1.0, -1.0]);
+    assert_close(max, [11.0, 4.0, 6.0]);
+}
+
+/// Bounds-disjoint operands have no intersection, so the engine is not asked.
+#[test]
+fn intersection_of_disjoint_bounds_is_empty() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Intersection, left, right)
+        .expect("disjoint intersection");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    assert_eq!(mesh.triangle_count(), 0);
+}
+
+/// A union that involves a compound fuses only the shells whose bounds touch
+/// instead of asking shapeops to fuse every shell pair.
+#[test]
+fn union_with_a_compound_fuses_overlapping_shells() {
     let mut kernel = TruckKernel::new();
     let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
     let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
@@ -243,6 +284,105 @@ fn union_with_a_compound_solid_keeps_all_shells() {
     let (min, max) = mesh_bounds(&mesh);
     assert_close(min, [-6.0, -1.0, -1.0]);
     assert_close(max, [6.0, 1.0, 1.0]);
+    // Eight per cube plus twelve for the bridge, minus two per cube the bridge
+    // crosses. A plain shell concatenation would count 28.
+    let volume = signed_volume(&mesh);
+    assert!((volume - 24.0).abs() < 1.0e-6, "volume = {volume}");
+}
+
+/// Operand order must not change a union. Interleaved clusters are what a `for`
+/// loop that emits two shapes per iteration produces; appending a shell that
+/// overlaps an existing one used to leave both copies in the solid and double
+/// count their shared volume.
+#[test]
+fn union_result_does_not_depend_on_operand_order() {
+    let mut kernel = TruckKernel::new();
+    let cluster = |kernel: &mut TruckKernel, origin: f64| {
+        (0..3)
+            .map(|step| cube(kernel, [2.0; 3], [origin + step as f64 * 1.2, 0.0, 0.0]))
+            .collect::<Vec<_>>()
+    };
+    let left = cluster(&mut kernel, 0.0);
+    let right = cluster(&mut kernel, 100.0);
+
+    let union_volume = |kernel: &mut TruckKernel, order: &[ShapeId]| {
+        let mut result = order[0];
+        for &shape in &order[1..] {
+            result = kernel
+                .boolean(BooleanOp::Union, result, shape)
+                .expect("union");
+        }
+        let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+        signed_volume(&mesh)
+    };
+
+    let mut interleaved = Vec::new();
+    for (a, b) in left.iter().zip(&right) {
+        interleaved.push(*a);
+        interleaved.push(*b);
+    }
+    let grouped: Vec<ShapeId> = left.iter().chain(&right).copied().collect();
+
+    // Each cluster is three cubes with two 0.8 deep overlaps of a 2x2 face.
+    let expected = 2.0 * (3.0 * 8.0 - 2.0 * 0.8 * 2.0 * 2.0);
+    for order in [interleaved.as_slice(), grouped.as_slice()] {
+        let volume = union_volume(&mut kernel, order);
+        assert!(
+            (volume - expected).abs() < 1.0e-6,
+            "volume = {volume}, expected {expected}"
+        );
+    }
+}
+
+/// Shapeops cannot consume a multi-shell solid, but an intersection distributes
+/// over the compound's shells, so every shell that reaches the tool survives.
+#[test]
+fn intersection_with_a_compound_keeps_each_shell() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let compound = kernel
+        .boolean(BooleanOp::Union, left, right)
+        .expect("compound union");
+    let window = cube(&mut kernel, [20.0, 4.0, 4.0], [0.0, 0.0, 0.0]);
+
+    for (a, b) in [(compound, window), (window, compound)] {
+        let result = kernel
+            .boolean(BooleanOp::Intersection, a, b)
+            .expect("intersection with a compound");
+        let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+        let (min, max) = mesh_bounds(&mesh);
+        assert_close(min, [-6.0, -1.0, -1.0]);
+        assert_close(max, [6.0, 1.0, 1.0]);
+        let volume = signed_volume(&mesh);
+        assert!((volume - 16.0).abs() < 1.0e-6, "volume = {volume}");
+        assert_eq!(welded_boundary_edges(&mesh), 0);
+    }
+}
+
+/// The compound's shells are intersected individually, so the tool trims the
+/// shell it crosses instead of returning that shell whole.
+#[test]
+fn intersection_with_a_compound_uses_the_overlap() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let compound = kernel
+        .boolean(BooleanOp::Union, left, right)
+        .expect("compound union");
+    // Covers the right cube from x = 4.5 outwards, and misses the left one.
+    let window = cube(&mut kernel, [2.0; 3], [5.5, 0.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Intersection, compound, window)
+        .expect("intersection with a compound");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [4.5, -1.0, -1.0]);
+    assert_close(max, [6.0, 1.0, 1.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 6.0).abs() < 1.0e-6, "volume = {volume}");
 }
 
 /// Subtracting a solid that covers one shell of a compound removes that shell
@@ -694,4 +834,47 @@ fn difference_across_a_chamfered_corner_is_closed() {
 
     assert_eq!(welded_boundary_edges(&mesh), 0);
     assert!(signed_volume(&mesh) > 0.0);
+}
+
+/// A 32-sided prism, the shape `$fn=32` makes in the evaluator.
+fn prism(kernel: &mut TruckKernel, at: [f64; 3]) -> ShapeId {
+    let points: Vec<[f64; 2]> = (0..32)
+        .map(|index| {
+            let angle = std::f64::consts::TAU * index as f64 / 32.0;
+            [angle.cos(), angle.sin()]
+        })
+        .collect();
+    let sketch = kernel
+        .sketch(Sketch::Polygon { points })
+        .expect("prism sketch");
+    let shape = kernel.extrude(sketch, 10.0).expect("prism extrude");
+    kernel
+        .transform(shape, Transform::from_translation(at))
+        .expect("translate prism")
+}
+
+/// Welding a compound must not compare every pair of identical attributes:
+/// all cap normals are the same vector and planar faces repeat their UVs, so
+/// the old block scan went quadratic and took seconds for a hundred shells.
+#[test]
+fn tessellating_a_many_shell_compound_stays_fast() {
+    let mut kernel = TruckKernel::new();
+    let mut compound = prism(&mut kernel, [0.0, 0.0, 0.0]);
+    for index in 1..100 {
+        let shape = prism(&mut kernel, [index as f64 * 5.0, 0.0, 0.0]);
+        compound = kernel
+            .boolean(BooleanOp::Union, compound, shape)
+            .expect("disjoint union");
+    }
+
+    let started = Instant::now();
+    let mesh = kernel.tessellate(compound, 0.05).expect("tessellate");
+    let elapsed = started.elapsed();
+
+    assert!(mesh.triangle_count() > 0);
+    assert_eq!(welded_boundary_edges(&mesh), 0);
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "compound tessellation took {elapsed:?}"
+    );
 }

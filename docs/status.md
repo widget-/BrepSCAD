@@ -428,9 +428,27 @@ vendor/
   subtraction that removes the whole target). Empty solids are kept as values
   and folded away at the next boolean instead of being fed back into shapeops,
   which cannot index an empty shell.
-- A union that involves a multi-shell solid keeps the shells separate instead of
-  asking shapeops to fuse every shell pair; those attempts are the slowest path
-  in the backend and rarely succeed on degenerate input.
+- A union that involves a multi-shell solid keeps shells whose bounds cannot
+  overlap separate, and asks shapeops only about pairs that may touch. Fusing
+  every shell pair is the slowest path in the backend and rarely succeeds on
+  degenerate input; appending an overlapping shell would keep both copies and
+  double-count their shared volume.
+- Disjoint unions concatenate the shells with `Solid::new_unchecked` instead of
+  re-validating every shell through `Solid::try_new`: both operands are already
+  accepted solids, and the revalidation made chained disjoint unions quadratic.
+- Shell-set merges go through `merge_solids`, which runs the engine directly
+  instead of dispatching back into the compound split. A fusion that fails
+  leaves a multi-shell solid, and re-entering the split once per merge recursed
+  without bound on `opengrid-snap.scad` (stack overflow).
+- The evaluator skips `difference` cutters whose bounds miss the subject,
+  using `Kernel::aabb`. The truck adapter computes each shape's vertex AABB
+  once at insertion and caches it, so the check never tessellates and repeated
+  boolean queries are lookups. Vertex bounds can underestimate a curved
+  surface, which makes "disjoint" safe to act on and "contained" unsafe.
+- Compound tessellation welds attributes with an exact-duplicate fast path
+  (vendored `monstertruck-meshing` patch). Identical cap normals and repeated
+  UV corners made the old weld quadratic: a 100-shell compound went from 3.0 s
+  to 71 ms.
 - Backend adapters should remain separate crates behind the common trait.
 - Native fast paths for common library constructs (for example, BOSL2 rounded
   boxes) are intended to avoid mesh-CSG workarounds; `scad-intrinsics` is not
@@ -522,10 +540,11 @@ For headless UI snapshots, see
   so it is slower than a matrix-only transform.
 - Truck booleans try exact tolerances `0.05`, `0.02`, then `0.01`, then a tiny
   difference-only corner nudge, then translated-operand retries. Disjoint
-  unions combine their shells directly, and difference can subtract from or by
-  a multi-shell compound shell by shell. Overlapping unions that Truck cannot
-  fuse still fail. The vendored shapeops patch prevents malformed wires from
-  panicking the application.
+  unions combine their shells directly, difference can subtract from or by a
+  multi-shell compound shell by shell, and intersection distributes over a
+  compound's shells. Overlapping unions that Truck cannot fuse still fail. The
+  vendored shapeops patch prevents malformed wires from panicking the
+  application.
 - Truck booleans can still fail on touching or coincident faces, and master
   shapeops has no spatial acceleration: an attempt costs one intersection-curve
   solve per face pair. Results are also not deterministic across runs, because
