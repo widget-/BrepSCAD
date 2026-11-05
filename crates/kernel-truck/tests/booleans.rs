@@ -293,6 +293,57 @@ fn union_result_does_not_depend_on_operand_order() {
     }
 }
 
+/// Shapeops cannot consume a multi-shell solid, but an intersection distributes
+/// over the compound's shells, so every shell that reaches the tool survives.
+#[test]
+fn intersection_with_a_compound_keeps_each_shell() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let compound = kernel
+        .boolean(BooleanOp::Union, left, right)
+        .expect("compound union");
+    let window = cube(&mut kernel, [20.0, 4.0, 4.0], [0.0, 0.0, 0.0]);
+
+    for (a, b) in [(compound, window), (window, compound)] {
+        let result = kernel
+            .boolean(BooleanOp::Intersection, a, b)
+            .expect("intersection with a compound");
+        let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+        let (min, max) = mesh_bounds(&mesh);
+        assert_close(min, [-6.0, -1.0, -1.0]);
+        assert_close(max, [6.0, 1.0, 1.0]);
+        let volume = signed_volume(&mesh);
+        assert!((volume - 16.0).abs() < 1.0e-6, "volume = {volume}");
+        assert_eq!(welded_boundary_edges(&mesh), 0);
+    }
+}
+
+/// The compound's shells are intersected individually, so the tool trims the
+/// shell it crosses instead of returning that shell whole.
+#[test]
+fn intersection_with_a_compound_uses_the_overlap() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let compound = kernel
+        .boolean(BooleanOp::Union, left, right)
+        .expect("compound union");
+    // Covers the right cube from x = 4.5 outwards, and misses the left one.
+    let window = cube(&mut kernel, [2.0; 3], [5.5, 0.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Intersection, compound, window)
+        .expect("intersection with a compound");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let (min, max) = mesh_bounds(&mesh);
+    assert_close(min, [4.5, -1.0, -1.0]);
+    assert_close(max, [6.0, 1.0, 1.0]);
+    let volume = signed_volume(&mesh);
+    assert!((volume - 6.0).abs() < 1.0e-6, "volume = {volume}");
+}
+
 /// Subtracting a solid that covers one shell of a compound removes that shell
 /// and keeps the rest.
 #[test]

@@ -524,10 +524,11 @@ For headless UI snapshots, see
   so it is slower than a matrix-only transform.
 - Truck booleans try exact tolerances `0.05`, `0.02`, then `0.01`, then a tiny
   difference-only corner nudge, then translated-operand retries. Disjoint
-  unions combine their shells directly, and difference can subtract from or by
-  a multi-shell compound shell by shell. Overlapping unions that Truck cannot
-  fuse still fail. The vendored shapeops patch prevents malformed wires from
-  panicking the application.
+  unions combine their shells directly, difference can subtract from or by a
+  multi-shell compound shell by shell, and intersection distributes over a
+  compound's shells. Overlapping unions that Truck cannot fuse still fail. The
+  vendored shapeops patch prevents malformed wires from panicking the
+  application.
 - Truck booleans can still fail on touching or coincident faces, and master
   shapeops has no spatial acceleration: an attempt costs one intersection-curve
   solve per face pair. Results are also not deterministic across runs, because

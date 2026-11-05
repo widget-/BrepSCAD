@@ -533,6 +533,13 @@ impl TruckKernel {
             return Ok(result);
         }
 
+        // Shapeops cannot consume a multi-shell solid, but an intersection
+        // distributes over the compound's shells:
+        // `(A ∪ B) ∩ C = (A ∩ C) ∪ (B ∩ C)`.
+        if op == BooleanOp::Intersection && (a.boundaries().len() > 1 || b.boundaries().len() > 1) {
+            return self.intersect_shell_sets(&a, &b);
+        }
+
         // Exact geometry first. A union must contain both operands: master
         // shapeops can return an amputated result (coplanar face pairs get
         // classified as inside and dropped), which is worse than failing.
@@ -747,6 +754,30 @@ impl TruckKernel {
         let mut boundaries = Vec::new();
         for id in merged {
             boundaries.extend(self.solid(id)?.clone().into_boundaries());
+        }
+        Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))))
+    }
+
+    /// Intersect a compound by intersecting every shell pair that can touch.
+    ///
+    /// The union of the pairwise intersections is the intersection of the two
+    /// shell sets. Bounds-disjoint pairs are skipped because their intersection
+    /// is empty; the surviving pieces are disjoint because the shells they came
+    /// from are.
+    fn intersect_shell_sets(&mut self, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+        let mut boundaries = Vec::new();
+        for shell_a in a.boundaries() {
+            for shell_b in b.boundaries() {
+                let left = Solid::new_unchecked(vec![shell_a.clone()]);
+                let right = Solid::new_unchecked(vec![shell_b.clone()]);
+                if disjoint(&left, &right) {
+                    continue;
+                }
+                let left = self.insert(OwnedShape::Solid(left));
+                let right = self.insert(OwnedShape::Solid(right));
+                let piece = self.boolean(BooleanOp::Intersection, left, right)?;
+                boundaries.extend(self.solid(piece)?.clone().into_boundaries());
+            }
         }
         Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))))
     }
