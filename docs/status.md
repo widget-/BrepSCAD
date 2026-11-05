@@ -440,6 +440,12 @@ vendor/
   instead of dispatching back into the compound split. A fusion that fails
   leaves a multi-shell solid, and re-entering the split once per merge recursed
   without bound on `opengrid-snap.scad` (stack overflow).
+- Shell-set merges run only the exact tolerances. If they fail, the merge
+  appends the shells as a compound instead of trying the normalized rescale,
+  nudges, and shifted operands; those retries did not fuse these degenerate
+  overlaps and were about half the boolean time on the OpenGrid models
+  (`opengrid-snap.scad` 1.45 s to 0.79 s, the full bin 22.5 s to 11.5 s, with
+  identical geometry).
 - The evaluator skips `difference` cutters whose bounds miss the subject,
   using `Kernel::aabb`. The truck adapter computes each shape's vertex AABB
   once at insertion and caches it, so the check never tessellates and repeated

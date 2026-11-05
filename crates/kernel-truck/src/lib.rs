@@ -584,7 +584,18 @@ impl TruckKernel {
             return self.intersect_shell_sets(&a, &b);
         }
 
-        self.merge_solids(op, &a, &b)
+        self.merge_solids(op, &a, &b, true)
+    }
+
+    /// Concatenate two shell sets into one compound solid, when either has
+    /// shells. This is the render fallback for overlaps shapeops cannot fuse.
+    fn append_compound(&mut self, a: &Solid, b: &Solid) -> Option<ShapeId> {
+        if a.boundaries().is_empty() && b.boundaries().is_empty() {
+            return None;
+        }
+        let mut boundaries = a.boundaries().clone();
+        boundaries.extend(b.boundaries().iter().cloned());
+        Some(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))))
     }
 
     /// Run the boolean engine on two solids without dispatching compounds.
@@ -593,7 +604,19 @@ impl TruckKernel {
     /// `boolean_impl` there recursed once per failed fusion, and a degenerate
     /// model overflowed the stack (`opengrid-snap.scad`). Shapeops accepts a
     /// multi-shell solid; the retry ladder and fallbacks below handle it.
-    fn merge_solids(&mut self, op: BooleanOp, a: &Solid, b: &Solid) -> KernelResult<ShapeId> {
+    ///
+    /// `full_ladder` enables the recovery retries (normalized rescale, nudges,
+    /// and shifted operands). Shell-set merges pass `false`: a failed pair
+    /// falls back to appending the shell anyway, so those retries only cost
+    /// time. They were about half the total boolean time on the OpenGrid
+    /// models, and produced no different geometry there.
+    fn merge_solids(
+        &mut self,
+        op: BooleanOp,
+        a: &Solid,
+        b: &Solid,
+        full_ladder: bool,
+    ) -> KernelResult<ShapeId> {
         let started = std::time::Instant::now();
 
         // Exact geometry first. A union must contain both operands: master
@@ -633,6 +656,15 @@ impl TruckKernel {
                     return Ok(self.insert(OwnedShape::Solid(candidate)));
                 }
             }
+        }
+
+        if !full_ladder
+            && op == BooleanOp::Union
+            && let Some(result) = self.append_compound(a, b)
+        {
+            // A shell-set merge that the exact tolerances could not fuse is a
+            // compound either way; skip the recovery retries.
+            return Ok(result);
         }
 
         // The normalized entry points rescale both operands and try their own
@@ -722,10 +754,8 @@ impl TruckKernel {
         if op == BooleanOp::Union {
             // Last-resort render fallback for overlapping shells that shapeops
             // cannot fuse.
-            let mut boundaries = a.boundaries().clone();
-            boundaries.extend(b.boundaries().iter().cloned());
-            if !boundaries.is_empty() {
-                return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(boundaries))));
+            if let Some(result) = self.append_compound(a, b) {
+                return Ok(result);
             }
         }
 
@@ -797,9 +827,12 @@ impl TruckKernel {
                 // Merge without dispatching back into the compound path:
                 // a failed fusion leaves a multi-shell solid here, and
                 // re-entering it once per merge recursed without bound.
+                // Recovery retries are off: a failure appends the shell below,
+                // and the retries were most of the boolean time on OpenGrid.
                 let pending_solid = self.solid(pending)?.clone();
                 let other_solid = self.solid(other)?.clone();
-                pending = self.merge_solids(BooleanOp::Union, &pending_solid, &other_solid)?;
+                pending =
+                    self.merge_solids(BooleanOp::Union, &pending_solid, &other_solid, false)?;
                 // The merged bounds just grew, so a shell that missed the last
                 // test may touch the new one.
                 index = 0;
