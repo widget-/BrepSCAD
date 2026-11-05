@@ -3,10 +3,11 @@
 This file tracks the current state. Dated snapshots live in
 [`notes/`](notes/).
 
-> Branch `wip/monstertruck` replaces the Truck stack with the `monstertruck`
-> fork. See [`notes/2026-11-03.md`](notes/2026-11-03.md) and
-> [`../vendor/README.md`](../vendor/README.md). The rest of this file describes
-> `main` until that trial is accepted.
+> `main` carries the `monstertruck` stack and the boolean correctness and
+> performance work from 2026-11-05. Branch `diag/planar-divide` carries the
+> planar-fallback diagnostics and the in-progress arrangement hardening. See
+> [`notes/2026-11-05.md`](notes/2026-11-05.md) and
+> [`../vendor/README.md`](../vendor/README.md).
 
 ## What this project is
 
@@ -36,6 +37,9 @@ crates/
   viewer/       eframe/egui/wgpu viewer
 assets/
   sample.scad   built-in cube-with-hole source
+corpus/
+  revisions.tsv          pinned upstream BOSL2 and MCAD checkouts
+  baseline-*.tsv         parse, evaluate, and model-metrics snapshots
 docs/
   status.md     current capabilities and next steps
   development.md development helpers, headless UI snapshots
@@ -48,6 +52,7 @@ examples/
 scripts/
   fetch-scad-corpus.sh   fetch the pinned BOSL2 + MCAD corpus
   check-scad-corpus.sh   compatibility runs over a .scad tree
+  check-model-metrics.sh geometry/time baseline over model files
   screenshot-viewer.sh   headless UI snapshots
 vendor/
   README.md     which Truck/monstertruck crates are vendored and what changed
@@ -440,6 +445,18 @@ vendor/
   instead of dispatching back into the compound split. A fusion that fails
   leaves a multi-shell solid, and re-entering the split once per merge recursed
   without bound on `opengrid-snap.scad` (stack overflow).
+- The vendored `curve_surface_projection` also retries in a loop instead of
+  recursing. Its 100 retry frames overflowed an 8 MB stack on the same model
+  once the shell-set recursion had consumed part of the stack.
+- An intersection with a multi-shell operand distributes over its shells: every
+  shell pair whose bounds touch is intersected and the pieces are concatenated.
+  Master shapeops cannot consume a multi-shell solid; the previous path
+  returned an empty solid.
+- The reduced OpenGrid models under
+  `crates/scad-eval/tests/data/opengrid_snap/` reproduce both overflows and are
+  evaluated by the evaluator tests. `scripts/check-model-metrics.sh --baseline
+  corpus/baseline-metrics.tsv` records wall time, triangles, vertices, volume,
+  and welded boundary/non-manifold edges for the model fixtures.
 - Shell-set merges run only the exact tolerances. If they fail, the merge
   appends the shells as a compound instead of trying the normalized rescale,
   nudges, and shifted operands; those retries did not fuse these degenerate
@@ -466,7 +483,7 @@ The project uses Nix/direnv because Rust is not installed system-wide.
 `shell.nix` provides `rustup`; `rust-toolchain.toml` pins Rust 1.95.0.
 
 ```sh
-cd /home/widget/code/misc/visual-openscad
+cd /home/widget/code/misc/brepscad
 direnv allow .
 nix-shell --run 'cargo test --workspace'
 nix-shell --run 'cargo run -p brepscad-viewer'
@@ -483,6 +500,15 @@ CLI:
 ```sh
 nix-shell --run 'cargo run -p brepscad -- path/to/model.scad'
 nix-shell --run 'cargo run -p brepscad -- --legacy-centering path/to/model.scad'
+```
+
+Model metrics (release build; see [`development.md`](development.md#model-metrics-check)):
+
+```sh
+cargo build --release -p brepscad
+scripts/check-model-metrics.sh --baseline corpus/baseline-metrics.tsv
+scripts/check-model-metrics.sh --write-baseline /tmp/opengrid.tsv path/to/opengrid-bin.scad path/to/opengrid-snap.scad
+scripts/check-model-metrics.sh --baseline /tmp/opengrid.tsv path/to/opengrid-bin.scad path/to/opengrid-snap.scad
 ```
 
 The viewer needs a working wgpu adapter (Vulkan or GLES). On this machine it
@@ -546,23 +572,33 @@ For headless UI snapshots, see
   so it is slower than a matrix-only transform.
 - Truck booleans try exact tolerances `0.05`, `0.02`, then `0.01`, then a tiny
   difference-only corner nudge, then translated-operand retries. Disjoint
-  unions combine their shells directly, difference can subtract from or by a
-  multi-shell compound shell by shell, and intersection distributes over a
-  compound's shells. Overlapping unions that Truck cannot fuse still fail. The
-  vendored shapeops patch prevents malformed wires from panicking the
-  application.
+  unions combine their shells directly; difference subtracts a multi-shell
+  compound shell by shell; intersection distributes over a compound's shells.
+  Shell-set union merges stop after the exact tolerances and fall back to
+  appending the shells, because the recovery retries did not fuse the degenerate
+  overlaps (about half the boolean time on the OpenGrid models). The vendored
+  shapeops patch keeps malformed wires from panicking the application.
 - Truck booleans can still fail on touching or coincident faces, and master
   shapeops has no spatial acceleration: an attempt costs one intersection-curve
   solve per face pair. Results are also not deterministic across runs, because
   Truck hashes topology IDs by `Arc` pointer address, so `FxHashMap` iteration
   order follows the process address layout.
-- The opengrid bin generator is the working stress case. Its 1x1 bin and the
-  2x2 bin body render reliably and in under a second. The full 2x2 model
-  (`bin()` plus `snap_grid()`) renders in about a third of runs; the rest either
-  report a boolean failure or stall in a pathological boolean or tessellation
-  step. The model also feeds `prism_stack()` tapered prisms whose caps collapse
-  to a knife edge, which produces self-intersecting polyhedron faces and
-  coincident faces between solids.
+- The opengrid bin generator is the working stress case. The full 2x2 model
+  (`bin()` plus `snap_grid()`) now evaluates in about 12 s on every run (was
+  about 22 s, and used to fail or stall depending on the run); the standalone
+  snap takes about 0.8 s. Both meshes are still open: 404 and 239 welded
+  boundary edges. Its `prism_stack()` tapered prisms collapse to knife edges,
+  producing self-intersecting polyhedron faces and coincident faces between
+  solids, which is the source of the remaining boolean failures.
+- The planar fallback for those cutouts still cannot close the unions. On the
+  reduced one-clip fixture it fails 401 of 577 face divisions: 299 from
+  `interior_point` (its probe clearance floor, `tol * 4`, is wider than the
+  knife-edge slivers) and 102 from the half-edge walk revisiting a zero-area
+  boundary spike whose edges are a hair above the `tol` vertex snap. Fixing
+  either class alone changes model volumes and adds open edges; the missing
+  step is propagating split points across adjacent faces before sewing.
+  `BREPSCAD_DEBUG_PLANAR` tags each failure exit and reports interior-point
+  geometry; branch `diag/planar-divide` carries the diagnostics.
 - Picking uses the analytic part scenes when the analytic preview is on; mesh
   triangles remain the fallback for parts without a scene.
 - Selection:
@@ -609,6 +645,14 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
      tessellated coverage. Raise the window or add a fallback tracer.
    - Prototype screen-space adaptive sampling for the compute preview.
 2. **Remaining library and kernel gaps**
+   - Close the planar fallback for the OpenGrid knife-edge cutouts: normalize
+     the arrangement boundary (collapse zero-area spikes and near-coincident
+     vertices), split cuts at crossings and T-junctions, use a piece-relative
+     interior point, and propagate split points across adjacent faces before
+     sewing. That last step is what closes the shell. Gate on the model-metrics
+     harness (volume stable, welded boundary edges to 0). See
+     [`notes/2026-11-05.md`](notes/2026-11-05.md); the diagnostics are on
+     `diag/planar-divide`.
    - Make Truck booleans deterministic: topology IDs hash `Arc` pointers, so
      results depend on the process address layout. A stable per-entity ID would
      make runs reproducible and make failures debuggable.
@@ -627,6 +671,10 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
      language errors from geometry and kernel gaps.
    - Refresh `corpus/baseline-parse.tsv` and `corpus/baseline-evaluate.tsv` only
      after intentional compatibility improvements.
+   - For boolean changes, also run
+     `scripts/check-model-metrics.sh --baseline corpus/baseline-metrics.tsv`,
+     and baseline the external OpenGrid models ad hoc with
+     `--write-baseline`/`--baseline`.
 4. **Finish the 2D/extrusion layer**
    - Polygonal profile smoothing and `$fn` sampling controls for offsets.
    - `linear_extrude` negative-side profiles.
