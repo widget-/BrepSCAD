@@ -74,6 +74,7 @@ mod content_hash_impls;
 mod bspline_conversion;
 mod curve_intersection;
 mod parameter_boundary;
+mod planar_arrangement;
 
 /// re-export all modules.
 pub mod prelude {
@@ -95,6 +96,7 @@ pub mod prelude {
     };
     pub use nurbs::*;
     pub use parameter_boundary::BoundaryCurve2D;
+    pub use planar_arrangement::{Arrangement, ArrangementSegment, arrange};
     pub use specifieds::*;
     pub use t_spline::*;
 }
