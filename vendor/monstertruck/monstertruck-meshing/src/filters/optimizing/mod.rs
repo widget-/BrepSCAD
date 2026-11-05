@@ -213,22 +213,42 @@ fn sub_remove_unused_attrs<'a, I: Iterator<Item = &'a mut usize>>(
     new2old
 }
 
-trait SameAttr: Copy + CastIntVector + MetricSpace<Metric = f64> {}
-impl<T> SameAttr for T where T: Copy + CastIntVector + MetricSpace<Metric = f64> {}
+trait SameAttr: Copy + CastIntVector + MetricSpace<Metric = f64> + PartialEq {}
+impl<T> SameAttr for T where T: Copy + CastIntVector + MetricSpace<Metric = f64> + PartialEq {}
 
 fn sub_put_together_same_attrs<T: SameAttr>(attrs: &[T], tol: f64) -> Vec<usize> {
     let mut uf = UnionFind::new(attrs.len());
     let map = create_blocks(attrs, tol);
     for indices in map.values() {
-        if indices.len() > 1 {
-            for (k, &i) in indices.iter().enumerate() {
-                for &j in &indices[(k + 1)..] {
-                    if attrs[i].has_nan() || attrs[j].has_nan() {
-                        continue;
-                    }
-                    if attrs[i].distance2(attrs[j]) < tol * tol {
-                        uf.union(i, j);
-                    }
+        if indices.len() < 2 {
+            continue;
+        }
+        // Identical attributes all land in the same block, and meshes have a
+        // lot of them: every flat cap normal is `[0, 0, 1]`, and planar faces
+        // repeat their UV corners. Comparing every pair made welding quadratic
+        // (seconds for a hundred-shell compound). Collapse exact duplicates to
+        // one representative and compare only the distinct values.
+        let mut representatives: Vec<(T, usize)> = Vec::new();
+        let mut distinct = Vec::new();
+        for &index in indices {
+            if attrs[index].has_nan() {
+                continue;
+            }
+            match representatives
+                .iter()
+                .find(|(value, _)| *value == attrs[index])
+            {
+                Some((_, representative)) => uf.union(index, *representative),
+                None => {
+                    representatives.push((attrs[index], index));
+                    distinct.push(index);
+                }
+            }
+        }
+        for (k, &i) in distinct.iter().enumerate() {
+            for &j in &distinct[(k + 1)..] {
+                if attrs[i].distance2(attrs[j]) < tol * tol {
+                    uf.union(i, j);
                 }
             }
         }

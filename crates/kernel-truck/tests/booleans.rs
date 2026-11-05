@@ -8,6 +8,7 @@
 use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_kernel_truck::TruckKernel;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 fn cube(kernel: &mut TruckKernel, size: [f64; 3], at: [f64; 3]) -> ShapeId {
     let shape = kernel
@@ -824,4 +825,47 @@ fn difference_across_a_chamfered_corner_is_closed() {
 
     assert_eq!(welded_boundary_edges(&mesh), 0);
     assert!(signed_volume(&mesh) > 0.0);
+}
+
+/// A 32-sided prism, the shape `$fn=32` makes in the evaluator.
+fn prism(kernel: &mut TruckKernel, at: [f64; 3]) -> ShapeId {
+    let points: Vec<[f64; 2]> = (0..32)
+        .map(|index| {
+            let angle = std::f64::consts::TAU * index as f64 / 32.0;
+            [angle.cos(), angle.sin()]
+        })
+        .collect();
+    let sketch = kernel
+        .sketch(Sketch::Polygon { points })
+        .expect("prism sketch");
+    let shape = kernel.extrude(sketch, 10.0).expect("prism extrude");
+    kernel
+        .transform(shape, Transform::from_translation(at))
+        .expect("translate prism")
+}
+
+/// Welding a compound must not compare every pair of identical attributes:
+/// all cap normals are the same vector and planar faces repeat their UVs, so
+/// the old block scan went quadratic and took seconds for a hundred shells.
+#[test]
+fn tessellating_a_many_shell_compound_stays_fast() {
+    let mut kernel = TruckKernel::new();
+    let mut compound = prism(&mut kernel, [0.0, 0.0, 0.0]);
+    for index in 1..100 {
+        let shape = prism(&mut kernel, [index as f64 * 5.0, 0.0, 0.0]);
+        compound = kernel
+            .boolean(BooleanOp::Union, compound, shape)
+            .expect("disjoint union");
+    }
+
+    let started = Instant::now();
+    let mesh = kernel.tessellate(compound, 0.05).expect("tessellate");
+    let elapsed = started.elapsed();
+
+    assert!(mesh.triangle_count() > 0);
+    assert_eq!(welded_boundary_edges(&mesh), 0);
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "compound tessellation took {elapsed:?}"
+    );
 }

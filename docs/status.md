@@ -437,6 +437,10 @@ vendor/
   using `Kernel::aabb`. It reads B-rep vertices instead of tessellating, so it
   can underestimate a curved surface; that makes "disjoint" safe to act on and
   "contained" unsafe.
+- Compound tessellation welds attributes with an exact-duplicate fast path
+  (vendored `monstertruck-meshing` patch). Identical cap normals and repeated
+  UV corners made the old weld quadratic: a 100-shell compound went from 3.0 s
+  to 71 ms.
 - Backend adapters should remain separate crates behind the common trait.
 - Native fast paths for common library constructs (for example, BOSL2 rounded
   boxes) are intended to avoid mesh-CSG workarounds; `scad-intrinsics` is not
