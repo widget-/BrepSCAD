@@ -1,6 +1,6 @@
 # mode: metrics
 # path	status	ms	triangles	vertices	volume	welded_boundary	welded_nonmanifold
-crates/scad-eval/tests/data/opengrid_hull_cut.scad	ok	222	992	1377	23755.313988941416	37	21
-crates/scad-eval/tests/data/snap_clip_cutout.scad	ok	215	304	423	3849.2085714614363	58	17
-crates/scad-eval/tests/data/opengrid_snap/snap_one_clip.scad	ok	463	474	699	1504.772599571651	80	2
-crates/scad-eval/tests/data/opengrid_snap/snap_two_clips.scad	ok	842	641	919	1454.8455685499566	160	4
+crates/scad-eval/tests/data/opengrid_hull_cut.scad	ok	216	992	1377	23755.313988941416	37	21
+crates/scad-eval/tests/data/snap_clip_cutout.scad	ok	226	304	423	3849.2085714197474	58	17
+crates/scad-eval/tests/data/opengrid_snap/snap_one_clip.scad	ok	432	460	682	1503.4062421353183	89	2
+crates/scad-eval/tests/data/opengrid_snap/snap_two_clips.scad	ok	813	625	896	1453.519996588663	164	4

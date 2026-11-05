@@ -473,18 +473,39 @@ fn cross_section_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             for pair in crossings.chunks_exact(2) {
                 let (a, b) = (frame.flat(pair[0]), frame.flat(pair[1]));
                 for (a, b) in clip_segment(outline, a, b, tol) {
+                    let raw = (frame.lift(a), frame.lift(b));
                     // Only endpoints the clip put on the outline may move: an
                     // endpoint that was already strictly inside the face is
-                    // where the cut genuinely stops, and pulling it to the
-                    // boundary would extend the cut.
-                    let snap = |flat: Point2| -> Point3 {
-                        let point = frame.lift(flat);
-                        match on_outline(outline, flat, tol * 0.5) {
-                            true => snap_to_boundary(point),
-                            false => point,
+                    // where the cut genuinely stops, and moving it would extend
+                    // the cut.
+                    let snap = |flat: Point2, point: Point3| -> Point3 {
+                        if !on_outline(outline, flat, tol * 0.5) {
+                            return point;
                         }
+                        // Solve the crossing on the boundary curve itself. The
+                        // clip produced this endpoint from a chord polyline, so
+                        // it can sit up to `tol` off the curve, and `note_split`
+                        // then refuses to split the boundary there.
+                        let mut best: Option<(f64, Point3)> = None;
+                        for edge in &boundary {
+                            let curve = edge.curve();
+                            for hit in segment_curve_intersections(
+                                &curve,
+                                curve.range_tuple(),
+                                raw.0,
+                                raw.1,
+                                plane.normal,
+                                tol,
+                            ) {
+                                let distance = hit.point.distance(point);
+                                if best.is_none_or(|(known, _)| distance < known) {
+                                    best = Some((distance, hit.point));
+                                }
+                            }
+                        }
+                        best.map_or_else(|| snap_to_boundary(point), |(_, hit)| hit)
                     };
-                    let (p0, p1) = (snap(a), snap(b));
+                    let (p0, p1) = (snap(a, raw.0), snap(b, raw.1));
                     // `tol`, not `eps`: a segment shorter than the vertex weld
                     // collapses to a single vertex in `sew`, and the resulting
                     // zero-length edge makes `Shell::extract` reject the shell.
