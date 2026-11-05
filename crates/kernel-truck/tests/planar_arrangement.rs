@@ -156,3 +156,48 @@ fn an_unconnected_inner_square_comes_out_as_a_hole() {
     assert!((areas[2] - 16.0).abs() < 0.1, "island: {areas:?}");
     assert!((areas[3] - 100.0).abs() < 0.1, "outer: {areas:?}");
 }
+
+#[test]
+fn a_square_cut_by_a_line_has_no_holes() {
+    let mut curves = square(0.0, 10.0);
+    curves.push(bezier(vec![point(5.0, 0.0), point(5.0, 10.0)]));
+    let arrangement = arrange(&curves, 0.01);
+    let loops = extract_loops(&arrangement, Vector3::unit_z(), 0.01);
+    let regions = nest_loops(&arrangement, &loops, Vector3::unit_z(), 0.01);
+    assert_eq!(regions.len(), 2, "the two halves");
+    assert!(regions.iter().all(|region| region.holes.is_empty()));
+}
+
+#[test]
+fn an_inner_square_becomes_a_hole_of_the_outer() {
+    let mut curves = square(0.0, 10.0);
+    curves.extend(square(3.0, 7.0));
+    let arrangement = arrange(&curves, 0.01);
+    let loops = extract_loops(&arrangement, Vector3::unit_z(), 0.01);
+    let regions = nest_loops(&arrangement, &loops, Vector3::unit_z(), 0.01);
+    assert_eq!(regions.len(), 2, "the annulus and the island");
+
+    let outer = regions
+        .iter()
+        .find(|region| (loops[region.outer].area - 100.0).abs() < 0.1)
+        .expect("outer region");
+    assert_eq!(outer.holes.len(), 1);
+    assert!((loops[outer.holes[0]].area + 16.0).abs() < 0.1);
+
+    let island = regions
+        .iter()
+        .find(|region| (loops[region.outer].area - 16.0).abs() < 0.1)
+        .expect("island region");
+    assert!(island.holes.is_empty());
+
+    // The unbounded face is a clockwise copy of the outermost boundary and must
+    // not be adopted as a hole by the boundary it lies on.
+    for region in &regions {
+        for hole in &region.holes {
+            assert!(
+                (loops[*hole].area + 100.0).abs() > 0.1,
+                "unbounded face adopted as a hole"
+            );
+        }
+    }
+}

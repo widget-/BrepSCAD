@@ -152,16 +152,9 @@ where
         + ParameterDivision1D<Point = Point3>
         + BoundedCurve,
 {
-    if plane_normal.magnitude2() <= 1.0e-24 {
+    let Some((u, v)) = plane_basis(plane_normal) else {
         return Vec::new();
-    }
-    let normal = plane_normal.normalize();
-    let helper = match normal.x.abs() < 0.9 {
-        true => Vector3::unit_x(),
-        false => Vector3::unit_y(),
     };
-    let u = normal.cross(helper).normalize();
-    let v = normal.cross(u);
 
     // Each piece is usable in both directions; `index ^ 1` is the other side of
     // the same piece.
@@ -220,20 +213,20 @@ where
             }
             current = next;
         }
-        let area = loop_area(arrangement, &pieces, u, v, tol);
+        let area = shoelace_area(&loop_polygon(arrangement, &pieces, u, v, tol));
         loops.push(Loop { pieces, area });
     }
     loops
 }
 
-/// Shoelace area of the loop, sampling each piece in the plane.
-fn loop_area<C>(
+/// The loop as a polygon in the plane, sampling each piece.
+fn loop_polygon<C>(
     arrangement: &Arrangement<C>,
     pieces: &[(usize, bool)],
     u: Vector3,
     v: Vector3,
     tol: f64,
-) -> f64
+) -> Vec<Point2>
 where
     C: ParametricCurve<Point = Point3, Vector = Vector3>
         + ParameterDivision1D<Point = Point3>
@@ -254,6 +247,11 @@ where
         flat.pop();
         points.extend(flat);
     }
+    points
+}
+
+/// Shoelace area of a polygon; positive when counter-clockwise.
+fn shoelace_area(points: &[Point2]) -> f64 {
     let count = points.len();
     if count < 3 {
         return 0.0;
@@ -266,4 +264,116 @@ where
         })
         .sum::<f64>()
         / 2.0
+}
+
+/// Orthonormal in-plane axes for a plane normal.
+fn plane_basis(normal: Vector3) -> Option<(Vector3, Vector3)> {
+    if normal.magnitude2() <= 1.0e-24 {
+        return None;
+    }
+    let normal = normal.normalize();
+    let helper = match normal.x.abs() < 0.9 {
+        true => Vector3::unit_x(),
+        false => Vector3::unit_y(),
+    };
+    let u = normal.cross(helper).normalize();
+    Some((u, normal.cross(u)))
+}
+
+/// One face of the arrangement: an outer boundary and the holes inside it.
+#[derive(Clone, Debug)]
+pub struct Region {
+    /// Index into the loop list of the outer boundary.
+    pub outer: usize,
+    /// Indices of the loops that bound holes in this face.
+    pub holes: Vec<usize>,
+}
+
+/// Assigns each hole loop to the smallest counter-clockwise loop that contains
+/// it.
+///
+/// A loop that merely touches another does not count as contained, which is
+/// what keeps the unbounded face (a clockwise copy of the outermost boundary)
+/// from being adopted as a hole by the boundary it lies on.
+pub fn nest_loops<C>(
+    arrangement: &Arrangement<C>,
+    loops: &[Loop],
+    plane_normal: Vector3,
+    tol: f64,
+) -> Vec<Region>
+where
+    C: ParametricCurve<Point = Point3, Vector = Vector3>
+        + ParameterDivision1D<Point = Point3>
+        + BoundedCurve,
+{
+    let Some((u, v)) = plane_basis(plane_normal) else {
+        return Vec::new();
+    };
+    let polygons: Vec<Vec<Point2>> = loops
+        .iter()
+        .map(|item| loop_polygon(arrangement, &item.pieces, u, v, tol))
+        .collect();
+    let mut regions: Vec<Region> = loops
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.area > tol * tol)
+        .map(|(index, _)| Region {
+            outer: index,
+            holes: Vec::new(),
+        })
+        .collect();
+    for (index, item) in loops.iter().enumerate() {
+        if item.area >= -tol * tol {
+            continue;
+        }
+        let Some(point) = polygons[index].first().copied() else {
+            continue;
+        };
+        let mut owner: Option<usize> = None;
+        for (slot, region) in regions.iter().enumerate() {
+            if !contains_strict(&polygons[region.outer], point, tol) {
+                continue;
+            }
+            let smaller = owner.is_none_or(|current: usize| {
+                loops[regions[current].outer].area > loops[region.outer].area
+            });
+            if smaller {
+                owner = Some(slot);
+            }
+        }
+        if let Some(slot) = owner {
+            regions[slot].holes.push(index);
+        }
+    }
+    regions
+}
+
+/// Whether `point` lies inside `polygon`, treating a point on the boundary as
+/// outside.
+fn contains_strict(polygon: &[Point2], point: Point2, tol: f64) -> bool {
+    let count = polygon.len();
+    if count < 3 {
+        return false;
+    }
+    for index in 0..count {
+        let start = polygon[index];
+        let end = polygon[(index + 1) % count];
+        let along = end - start;
+        let t = ((point - start).dot(along) / along.magnitude2().max(1.0e-300)).clamp(0.0, 1.0);
+        if (start + along * t).distance(point) <= tol {
+            return false;
+        }
+    }
+    let mut inside = false;
+    for index in 0..count {
+        let start = polygon[index];
+        let end = polygon[(index + 1) % count];
+        if (start.y > point.y) != (end.y > point.y) {
+            let crossing = start.x + (point.y - start.y) / (end.y - start.y) * (end.x - start.x);
+            if crossing > point.x {
+                inside = !inside;
+            }
+        }
+    }
+    inside
 }
