@@ -40,19 +40,43 @@ const BOOLEAN_NUDGES: [[f64; 3]; 6] = [
     [-2.0e-5, 0.0, 0.0],
 ];
 
-fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
+fn point_bounds(points: impl Iterator<Item = [f64; 3]>) -> Option<([f64; 3], [f64; 3])> {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
     let mut found = false;
-    for vertex in solid.vertex_iter() {
-        let point = vertex.point();
+    for point in points {
         found = true;
-        for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+        for (axis, value) in point.into_iter().enumerate() {
             min[axis] = min[axis].min(value);
             max[axis] = max[axis].max(value);
         }
     }
     found.then_some((min, max))
+}
+
+fn vertex_point(vertex: Vertex) -> [f64; 3] {
+    let point = vertex.point();
+    [point.x, point.y, point.z]
+}
+
+fn face_points(face: &Face) -> impl Iterator<Item = [f64; 3]> + '_ {
+    face.vertex_iter().map(vertex_point)
+}
+
+fn face_bounds(face: &Face) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(face_points(face))
+}
+
+fn faces_bounds(faces: &[Face]) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(faces.iter().flat_map(face_points))
+}
+
+fn solid_bounds(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(solid.vertex_iter().map(vertex_point))
+}
+
+fn shell_bounds(shell: &Shell) -> Option<([f64; 3], [f64; 3])> {
+    point_bounds(shell.face_iter().flat_map(face_points))
 }
 
 /// Signed volume of the solid's tessellation, or zero when it cannot be meshed.
@@ -73,23 +97,6 @@ fn solid_volume(solid: &Solid) -> f64 {
             .sum()
     }))
     .unwrap_or(0.0)
-}
-
-fn shell_bounds(shell: &Shell) -> Option<([f64; 3], [f64; 3])> {
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    let mut found = false;
-    for face in shell.face_iter() {
-        for vertex in face.vertex_iter() {
-            let point = vertex.point();
-            found = true;
-            for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
-                min[axis] = min[axis].min(value);
-                max[axis] = max[axis].max(value);
-            }
-        }
-    }
-    found.then_some((min, max))
 }
 
 /// True when `outer`'s bounds contain `inner`'s. Master shapeops can return a
@@ -478,6 +485,12 @@ impl TruckKernel {
                 }
             };
             return Ok(surviving);
+        }
+
+        if op == BooleanOp::Intersection && disjoint(&a, &b) {
+            // The operands cannot touch, so there is nothing left to intersect.
+            // Feeding shapeops an unavoidable miss costs a full attempt ladder.
+            return Ok(self.insert(OwnedShape::Solid(Solid::new_unchecked(Vec::new()))));
         }
 
         if op == BooleanOp::Union && disjoint(&a, &b) {
@@ -973,6 +986,14 @@ impl Kernel for TruckKernel {
     fn bounds(&self, shape: ShapeId, tolerance: f64) -> KernelResult<([f64; 3], [f64; 3])> {
         let mesh = self.tessellate(shape, tolerance)?;
         mesh_bounds(&mesh).ok_or_else(|| KernelError::Backend("shape has no geometry".to_owned()))
+    }
+
+    fn aabb(&self, shape: ShapeId) -> Option<([f64; 3], [f64; 3])> {
+        match self.shape(shape).ok()? {
+            OwnedShape::Solid(solid) => solid_bounds(solid),
+            OwnedShape::Face(face) => face_bounds(face),
+            OwnedShape::Faces(faces) => faces_bounds(faces),
+        }
     }
 
     fn polyhedron(&self, shape: ShapeId) -> Option<Polyhedron> {

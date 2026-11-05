@@ -433,6 +433,10 @@ vendor/
   every shell pair is the slowest path in the backend and rarely succeeds on
   degenerate input; appending an overlapping shell would keep both copies and
   double-count their shared volume.
+- The evaluator skips `difference` cutters whose bounds miss the subject,
+  using `Kernel::aabb`. It reads B-rep vertices instead of tessellating, so it
+  can underestimate a curved surface; that makes "disjoint" safe to act on and
+  "contained" unsafe.
 - Backend adapters should remain separate crates behind the common trait.
 - Native fast paths for common library constructs (for example, BOSL2 rounded
   boxes) are intended to avoid mesh-CSG workarounds; `scad-intrinsics` is not

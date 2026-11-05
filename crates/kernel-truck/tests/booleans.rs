@@ -5,7 +5,7 @@
 //! tests pin that behaviour down without depending on how tolerant shapeops is
 //! for a given piece of geometry.
 
-use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Transform};
+use brepscad_kernel_api::{BooleanOp, Kernel, Mesh, Primitive, ShapeId, Sketch, Transform};
 use brepscad_kernel_truck::TruckKernel;
 use std::collections::HashMap;
 
@@ -220,6 +220,37 @@ fn union_of_disjoint_cubes_keeps_both_shells() {
     let (min, max) = mesh_bounds(&mesh);
     assert_close(min, [-6.0, -1.0, -1.0]);
     assert_close(max, [6.0, 1.0, 1.0]);
+}
+
+/// The analysis AABB comes from B-rep vertices, so it does not tessellate.
+#[test]
+fn aabb_reports_vertex_bounds() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [2.0, 4.0, 6.0], [1.0, 2.0, 3.0]);
+    let (min, max) = kernel.aabb(block).expect("solid aabb");
+    assert_close(min, [0.0, 0.0, 0.0]);
+    assert_close(max, [2.0, 4.0, 6.0]);
+
+    let sketch = kernel
+        .sketch(Sketch::Square { size: [2.0, 4.0] })
+        .expect("square");
+    let (min, max) = kernel.aabb(sketch).expect("sketch aabb");
+    assert_close(min, [-1.0, -2.0, 0.0]);
+    assert_close(max, [1.0, 2.0, 0.0]);
+}
+
+/// Bounds-disjoint operands have no intersection, so the engine is not asked.
+#[test]
+fn intersection_of_disjoint_bounds_is_empty() {
+    let mut kernel = TruckKernel::new();
+    let left = cube(&mut kernel, [2.0; 3], [-5.0, 0.0, 0.0]);
+    let right = cube(&mut kernel, [2.0; 3], [5.0, 0.0, 0.0]);
+    let result = kernel
+        .boolean(BooleanOp::Intersection, left, right)
+        .expect("disjoint intersection");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    assert_eq!(mesh.triangle_count(), 0);
 }
 
 /// A union that involves a compound fuses only the shells whose bounds touch
