@@ -41,7 +41,12 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     others: &[&Face<Point3, C, S>],
     tol: f64,
 ) -> Option<Pieces<C, S>> {
-    let plane = plane_of(face)?;
+    let Some(plane) = plane_of(face) else {
+        if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+            eprintln!("PLANAR-FAIL plane");
+        }
+        return None;
+    };
     let frame = Frame::new(plane);
     let own_outline = outline(face, &frame, tol);
     let mut vertices: Vec<Vertex<Point3>> = Vec::new();
@@ -137,7 +142,7 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let mut here = start;
         loop {
             let back = halves[here].arrive;
-            let next = (0..count)
+            let next = match (0..count)
                 .filter(|&k| halves[k].from == halves[here].to)
                 .min_by(|&a, &b| {
                     let turn = |k: usize| {
@@ -155,11 +160,30 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                         t
                     };
                     turn(a).total_cmp(&turn(b))
-                })?;
+                })
+            {
+                Some(next) => next,
+                None => {
+                    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+                        eprintln!(
+                            "PLANAR-FAIL dangling here={here} to={} count={count}",
+                            halves[here].to
+                        );
+                    }
+                    return None;
+                }
+            };
             if next == start {
                 break;
             }
             if used[next] || cycle.len() > count {
+                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+                    eprintln!(
+                        "PLANAR-FAIL cycle next={next} used={} len={} count={count}",
+                        used[next],
+                        cycle.len()
+                    );
+                }
                 return None;
             }
             used[next] = true;
@@ -215,7 +239,15 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 break;
             }
         }
-        let owner = owner?;
+        let owner = match owner {
+            Some(owner) => owner,
+            None => {
+                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+                    eprintln!("PLANAR-FAIL owner hole={hole}");
+                }
+                return None;
+            }
+        };
         holes_of[owner].push(hole);
     }
     let surface = face.surface();
@@ -235,7 +267,15 @@ pub(super) fn divide<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             .chain(holes_of[o].iter().copied())
             .map(|k| shapes[k].1.clone())
             .collect();
-        let point = interior_point(&polygons, tol)?;
+        let point = match interior_point(&polygons, tol) {
+            Some(point) => point,
+            None => {
+                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+                    eprintln!("PLANAR-FAIL interior polygons={}", polygons.len());
+                }
+                return None;
+            }
+        };
         let overlap = others.iter().position(|other| {
             let theirs = outline(other, &frame, tol);
             inside(&theirs, point) && !on_outline(&theirs, point, tol)

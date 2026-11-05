@@ -140,7 +140,7 @@ pub(super) fn interior_point(polygons: &[Vec<Point2>], tol: f64) -> Option<Point
         })
         .collect();
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-    candidates
+    let result = candidates
         .into_iter()
         .take(16)
         .find_map(|(length, middle, along)| {
@@ -152,5 +152,21 @@ pub(super) fn interior_point(polygons: &[Vec<Point2>], tol: f64) -> Option<Point
                 .into_iter()
                 .map(|k: f64| middle + left * k.signum() * (length * k.abs()).max(tol * 4.0))
                 .find(|p| inside(polygons, *p) && !on_outline(polygons, *p, tol))
-        })
+        });
+    if result.is_none() && std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+        let area: f64 = polygons.iter().map(|p| polygon_area(p).abs()).sum();
+        let edges: usize = polygons.iter().map(|p| p.len()).sum();
+        let longest: f64 = polygons
+            .iter()
+            .flat_map(|polygon| {
+                let n = polygon.len();
+                (0..n).map(move |i| (polygon[(i + 1) % n] - polygon[i]).magnitude())
+            })
+            .fold(0.0, f64::max);
+        eprintln!(
+            "INTERIOR-FAIL polygons={} edges={edges} area={area:.3e} longest={longest:.6} tol={tol:.6}",
+            polygons.len()
+        );
+    }
+    result
 }
