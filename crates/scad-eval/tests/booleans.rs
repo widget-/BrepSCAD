@@ -1,9 +1,10 @@
 mod common;
 
 use std::cell::Cell;
+use std::path::Path;
 use std::rc::Rc;
 
-use brepscad_eval::{evaluate, evaluate_to_meshes};
+use brepscad_eval::{EvaluationOptions, evaluate, evaluate_file_with_options, evaluate_to_meshes};
 use brepscad_kernel_api::{
     BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Transform,
 };
@@ -183,4 +184,34 @@ fn difference_keeps_a_cutter_that_touches_the_subject() {
     evaluate(source, &mut kernel, 0.01).expect("evaluate");
 
     assert_eq!(booleans.get(), 1, "touching cutter was pruned");
+}
+
+fn evaluate_snap_fixture(name: &str) -> brepscad_eval::Evaluation {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/opengrid_snap")
+        .join(name);
+    let mut kernel = TruckKernel::new();
+    evaluate_file_with_options(&path, &mut kernel, EvaluationOptions::default())
+        .expect("evaluate snap fixture")
+}
+
+/// One clip from the OpenGrid snap used to overflow the stack: the boolean
+/// engine's curve/surface projection recursed once per retry, and the
+/// shell-set union recursed again on failed fusions. See the fixture README.
+#[test]
+fn opengrid_snap_with_one_clip_does_not_overflow_the_stack() {
+    let evaluation = evaluate_snap_fixture("snap_one_clip.scad");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 1502.65).abs() < 5.0, "volume = {volume}");
+}
+
+/// Two clips are the smallest variant that overflowed the shell-set merge on
+/// its own, after the projection retry recursion was fixed.
+#[test]
+fn opengrid_snap_with_two_clips_does_not_overflow_the_stack() {
+    let evaluation = evaluate_snap_fixture("snap_two_clips.scad");
+    assert_eq!(evaluation.shapes.len(), 1);
+    let volume = signed_volume(&evaluation.shapes[0].mesh);
+    assert!((volume - 1446.0).abs() < 5.0, "volume = {volume}");
 }
