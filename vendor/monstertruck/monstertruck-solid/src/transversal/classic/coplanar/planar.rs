@@ -13,7 +13,7 @@ use super::{divide, inner_point, plane_of, PlaneOf};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
 
@@ -287,6 +287,109 @@ fn report_open_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     );
 }
 
+/// Divides `face` by the curves of `others` with the exact planar arrangement:
+/// every curve is split at its mutual intersections, the faces are walked, and
+/// the holes are nested.
+///
+/// Unlike `divide`, the pieces are cut from the curves themselves and meet at
+/// shared nodes, so a divided face cannot inherit a wire gap from a sampling
+/// tolerance. Returns `None` when the arrangement cannot describe the face, so
+/// the caller can fall back to `divide`.
+fn divide_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    face: &Face<Point3, C, S>,
+    others: &[&Face<Point3, C, S>],
+    tol: f64,
+) -> Option<Vec<Face<Point3, C, S>>> {
+    let plane = plane_of(face)?;
+    let frame = Frame::new(plane);
+    let own_outline = outline(face, &frame, tol);
+
+    let mut curves: Vec<C> = Vec::new();
+    for wire in face.boundaries() {
+        for edge in wire.edge_iter() {
+            curves.push(edge.curve());
+        }
+    }
+    let boundary_count = curves.len();
+    let mut seen = HashSet::new();
+    for other in others {
+        for edge in other.edge_iter() {
+            if !seen.insert(edge.id()) {
+                continue;
+            }
+            let sampled = samples(&edge.curve(), tol);
+            let flat: Vec<Point2> = sampled.iter().map(|(_, point)| frame.flat(*point)).collect();
+            if flat.len() < 2 {
+                continue;
+            }
+            let middle = match flat.len() > 2 {
+                true => flat[flat.len() / 2],
+                false => flat[0] + (flat[1] - flat[0]) * 0.5,
+            };
+            if on_outline(&own_outline, middle, tol) || !inside(&own_outline, middle) {
+                continue;
+            }
+            curves.push(edge.curve());
+        }
+    }
+    if curves.len() == boundary_count {
+        return Some(vec![face.clone()]);
+    }
+
+    let arrangement = arrange(&curves, tol);
+    let loops = extract_loops(&arrangement, plane.normal, tol);
+    let regions = nest_loops(&arrangement, &loops, plane.normal, tol);
+    if regions.is_empty() {
+        return None;
+    }
+    let vertices: Vec<Vertex<Point3>> = arrangement
+        .nodes
+        .iter()
+        .map(|point| Vertex::new(*point))
+        .collect();
+    let surface = face.surface();
+    let mut out = Vec::new();
+    for region in &regions {
+        let mut wires: Vec<Wire<Point3, C>> = Vec::new();
+        let mut usable = true;
+        for loop_index in std::iter::once(region.outer).chain(region.holes.iter().copied()) {
+            let mut edges = Vec::new();
+            for &(segment, forward) in &loops[loop_index].pieces {
+                let piece = &arrangement.segments[segment];
+                if piece.from == piece.to {
+                    usable = false;
+                    break;
+                }
+                let curve = piece.curve.clone();
+                // The piece's own curve always runs `from -> to`; a backward
+                // traversal is the same edge with its orientation flipped, not
+                // a rebuilt curve.
+                edges.push(match forward {
+                    true => Edge::new(&vertices[piece.from], &vertices[piece.to], curve),
+                    false => Edge::new(&vertices[piece.from], &vertices[piece.to], curve).inverse(),
+                });
+            }
+            if !usable {
+                break;
+            }
+            wires.push(edges.into());
+        }
+        if !usable || wires.is_empty() {
+            return None;
+        }
+        let absolute: Vec<Wire<Point3, C>> = match face.orientation() {
+            true => wires,
+            false => wires.iter().map(Wire::inverse).collect(),
+        };
+        let mut piece = Face::new_unchecked(absolute, surface.clone());
+        if !face.orientation() {
+            piece.invert();
+        }
+        out.push(piece);
+    }
+    Some(out)
+}
+
 /// Split one face by the cross-section of `other` on its plane, then keep the
 /// pieces on the correct side for the operation.
 fn split_and_keep<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -352,14 +455,18 @@ fn split_and_keep<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             ));
         }
         let refs: Vec<&Face<Point3, C, S>> = holders.iter().collect();
-        match divide(&split_face, &refs, tol) {
-            Some(pieces) => pieces.into_iter().map(|(piece, _)| piece).collect(),
-            None => {
-                if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
-                    eprintln!("PLANAR: divide failed, keeping whole face");
+        let arranged = divide_arrangement(&split_face, &refs, tol);
+        match arranged {
+            Some(pieces) if !pieces.is_empty() => pieces,
+            _ => match divide(&split_face, &refs, tol) {
+                Some(pieces) => pieces.into_iter().map(|(piece, _)| piece).collect(),
+                None => {
+                    if std::env::var_os("BREPSCAD_DEBUG_PLANAR").is_some() {
+                        eprintln!("PLANAR: divide failed, keeping whole face");
+                    }
+                    vec![split_face]
                 }
-                vec![split_face]
-            }
+            },
         }
     };
 
