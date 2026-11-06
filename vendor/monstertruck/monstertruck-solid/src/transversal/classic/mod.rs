@@ -177,21 +177,34 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let altshell1: AltCurveShell<C, S> =
         shell1.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
     timer.mark("map-shells");
-    let loops_store::LoopsStoreQuadruple {
-        geom_loops_store0: loops_store0,
-        geom_loops_store1: loops_store1,
-        ..
-    } = loops_store::create_loops_stores(
+    let stores = loops_store::create_loops_stores(
         &altshell0,
         &poly_shell0,
         &altshell1,
         &poly_shell1,
         flat.then_some(tol),
         tol,
-    )?;
+    );
+    if stores.is_none() && trace.is_some() {
+        eprintln!("TRACE failed at create_loops_stores (tol {tol})");
+    }
+    let loops_store::LoopsStoreQuadruple {
+        geom_loops_store0: loops_store0,
+        geom_loops_store1: loops_store1,
+        ..
+    } = stores?;
     timer.mark("loops-stores");
-    let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
-    let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
+    let divided0 = divide_face::divide_faces(&altshell0, &loops_store0, tol);
+    let divided1 = divide_face::divide_faces(&altshell1, &loops_store1, tol);
+    if trace.is_some() && (divided0.is_none() || divided1.is_none()) {
+        eprintln!(
+            "TRACE failed at divide_faces (shell0 {}, shell1 {}, tol {tol})",
+            divided0.is_some(),
+            divided1.is_some()
+        );
+    }
+    let mut cls0 = divided0?;
+    let mut cls1 = divided1?;
     timer.mark("divide-faces");
     let alt_ids = |shell: &Shell<Point3, C, S>,
                    alt: &AltCurveShell<C, S>,
