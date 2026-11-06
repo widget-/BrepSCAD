@@ -240,3 +240,117 @@ fn cylinder_accepts_openscad_positional_radii_and_frustums() {
     let expected = std::f64::consts::PI * 4.0 * 4.0 / 3.0;
     assert!((signed_volume(&cone.shapes[0].mesh) - expected).abs() < 0.3);
 }
+
+/// A sweep whose last slice keeps its full chamfer while the height collapses
+/// to 1e-6 makes its end cap a self-intersecting octagon. The solid still
+/// builds - OpenSCAD renders it - but the face has no well-defined outward
+/// side, so the evaluator has to say so rather than let it show up as red
+/// faces later.
+#[test]
+fn a_self_intersecting_polyhedron_face_is_reported() {
+    let source = r#"
+function rev(v) = [for (i = [0 : len(v) - 1]) v[len(v) - 1 - i]];
+function crect(base, chamfer) = [
+    [ base[0]/2 - chamfer, -base[1]/2],
+    [ base[0]/2, -base[1]/2 + chamfer],
+    [ base[0]/2,  base[1]/2 - chamfer],
+    [ base[0]/2 - chamfer,  base[1]/2],
+    [-base[0]/2 + chamfer,  base[1]/2],
+    [-base[0]/2,  base[1]/2 - chamfer],
+    [-base[0]/2, -base[1]/2 + chamfer],
+    [-base[0]/2 + chamfer, -base[1]/2]
+];
+
+module sweep(slices) {
+    n = len(slices);
+    pp = 8;
+    points = [
+        for (s = slices)
+            for (p = crect([s[1], s[2]], s[3]))
+                [p[0], p[1], s[0]]
+    ];
+    bottom = rev([for (i = [0 : pp - 1]) i]);
+    top_start = (n - 1) * pp;
+    top = [for (i = [0 : pp - 1]) top_start + i];
+    sides = concat(
+        [for (i = [0 : n - 2]) for (j = [0 : pp - 1])
+            [i*pp + j, i*pp + (j + 1) % pp, (i + 1)*pp + (j + 1) % pp]],
+        [for (i = [0 : n - 2]) for (j = [0 : pp - 1])
+            [i*pp + j, (i + 1)*pp + (j + 1) % pp, (i + 1)*pp + j]]
+    );
+    faces = [for (f = concat([bottom], [top], sides)) rev(f)];
+    polyhedron(points = points, faces = faces, convexity = 10);
+}
+
+sweep([
+    [0, 12, 0.4, 0.4 / 3],
+    [1.3, 12, 0.4, 0.4 / 3],
+    [1.5, 11.6, 0.000001, 0.4 / 3]
+]);
+"#;
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    assert!(
+        evaluation
+            .messages
+            .iter()
+            .any(|message| message.contains("crosses itself")),
+        "expected a self-intersection warning, got {:?}",
+        evaluation.messages
+    );
+}
+
+/// The same sweep without the collapsing slice is a valid solid and must not
+/// warn.
+#[test]
+fn a_valid_sweep_is_not_reported() {
+    let source = r#"
+function rev(v) = [for (i = [0 : len(v) - 1]) v[len(v) - 1 - i]];
+function crect(base, chamfer) = [
+    [ base[0]/2 - chamfer, -base[1]/2],
+    [ base[0]/2, -base[1]/2 + chamfer],
+    [ base[0]/2,  base[1]/2 - chamfer],
+    [ base[0]/2 - chamfer,  base[1]/2],
+    [-base[0]/2 + chamfer,  base[1]/2],
+    [-base[0]/2,  base[1]/2 - chamfer],
+    [-base[0]/2, -base[1]/2 + chamfer],
+    [-base[0]/2 + chamfer, -base[1]/2]
+];
+
+module sweep(slices) {
+    n = len(slices);
+    pp = 8;
+    points = [
+        for (s = slices)
+            for (p = crect([s[1], s[2]], s[3]))
+                [p[0], p[1], s[0]]
+    ];
+    bottom = rev([for (i = [0 : pp - 1]) i]);
+    top_start = (n - 1) * pp;
+    top = [for (i = [0 : pp - 1]) top_start + i];
+    sides = concat(
+        [for (i = [0 : n - 2]) for (j = [0 : pp - 1])
+            [i*pp + j, i*pp + (j + 1) % pp, (i + 1)*pp + (j + 1) % pp]],
+        [for (i = [0 : n - 2]) for (j = [0 : pp - 1])
+            [i*pp + j, (i + 1)*pp + (j + 1) % pp, (i + 1)*pp + j]]
+    );
+    faces = [for (f = concat([bottom], [top], sides)) rev(f)];
+    polyhedron(points = points, faces = faces, convexity = 10);
+}
+
+sweep([
+    [0, 12, 0.4, 0.4 / 3],
+    [1.3, 12, 0.4, 0.4 / 3]
+]);
+"#;
+    let mut kernel = TruckKernel::new();
+    let evaluation = evaluate(source, &mut kernel, 0.01).expect("evaluate");
+    assert!(
+        evaluation
+            .messages
+            .iter()
+            .all(|message| !message.contains("crosses itself")),
+        "unexpected warning: {:?}",
+        evaluation.messages
+    );
+}

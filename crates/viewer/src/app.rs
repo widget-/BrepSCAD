@@ -147,6 +147,7 @@ impl ViewerApp {
         if let Some(diagnostic) = &error_diagnostic {
             diagnostics.push(diagnostic.clone());
         }
+        diagnostics.extend(evaluation_warnings(&source, &evaluation.messages));
 
         let lsp_uri = "file:///untitled.scad".to_owned();
         let (lsp, lsp_log) = match lsp::LspClient::start() {
@@ -363,6 +364,7 @@ impl ViewerApp {
         if let Some(diagnostic) = &self.evaluation_diagnostic {
             diagnostics.push(diagnostic.clone());
         }
+        diagnostics.extend(evaluation_warnings(&self.source, &self.evaluation.messages));
         diagnostics.extend(self.lsp_diagnostics.iter().cloned());
         diagnostics.sort_by_key(|diagnostic| {
             (
@@ -1625,6 +1627,19 @@ fn lsp_candidate(item: lsp::CompletionItem) -> editor::Candidate {
             _ => editor::CandidateKind::Parameter,
         },
     }
+}
+
+/// Evaluation messages as warnings, pointing at the first `polyhedron` call.
+///
+/// The evaluator's messages are plain strings (the same channel as `echo`), so
+/// there is no per-message range to underline. The call that produces these
+/// warnings is `polyhedron(...)`, which is what the source has to fix.
+fn evaluation_warnings(source: &str, messages: &[String]) -> Vec<Diagnostic> {
+    let offset = source.find("polyhedron").unwrap_or(0);
+    messages
+        .iter()
+        .map(|message| Diagnostic::warning(message.clone(), offset..offset))
+        .collect()
 }
 
 fn line_number(source: &str, offset: usize) -> usize {

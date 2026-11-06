@@ -140,12 +140,17 @@ fn union_is_closed(result: &Solid, tolerance: f64) -> bool {
 }
 
 fn shell_is_closed(shell: &Shell, tolerance: f64) -> bool {
+    shell_boundary_edges(shell, tolerance) == 0
+}
+
+/// Edges used by exactly one triangle of the shell's welded tessellation.
+pub(crate) fn shell_boundary_edges(shell: &Shell, tolerance: f64) -> usize {
     let poly = shell.triangulation(tolerance);
     let mut welded: HashMap<(i64, i64, i64), u32> = HashMap::new();
     let mut edges: HashMap<(u32, u32), usize> = HashMap::new();
     for face in poly.face_iter() {
         let Some(mesh) = face.surface() else {
-            return false;
+            return usize::MAX;
         };
         let positions = mesh.positions();
         for triangle in mesh.faces().triangle_iter() {
@@ -174,7 +179,7 @@ fn shell_is_closed(shell: &Shell, tolerance: f64) -> bool {
             }
         }
     }
-    !edges.values().any(|count| *count == 1)
+    edges.values().filter(|count| **count == 1).count()
 }
 
 /// Clip `solid` to one side of an axis-aligned plane.
@@ -688,7 +693,13 @@ impl TruckKernel {
                     let shells: Vec<_> = candidate
                         .boundaries()
                         .iter()
-                        .map(|shell| (shell.face_iter().count(), shell_bounds(shell)))
+                        .map(|shell| {
+                            (
+                                shell.face_iter().count(),
+                                shell_boundary_edges(shell, tolerance),
+                                shell_bounds(shell),
+                            )
+                        })
                         .collect();
                     eprintln!(
                         "BOOLEAN REJECT {op:?} @ {tolerance}: bounds={:?} covers={covers} outer={outer} shells={shells:?}",
@@ -729,7 +740,13 @@ impl TruckKernel {
                     let shells: Vec<_> = result
                         .boundaries()
                         .iter()
-                        .map(|shell| (shell.face_iter().count(), shell_bounds(shell)))
+                        .map(|shell| {
+                            (
+                                shell.face_iter().count(),
+                                shell_boundary_edges(shell, BOOLEAN_TOLERANCES[0]),
+                                shell_bounds(shell),
+                            )
+                        })
                         .collect();
                     eprintln!(
                         "BOOLEAN REJECT normalized {op:?}: bounds={:?} covers={covers} outer={outer} shells={shells:?}",

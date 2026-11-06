@@ -29,6 +29,15 @@ impl Diagnostic {
             source_path: None,
         }
     }
+
+    pub fn warning(message: impl Into<String>, range: Range<usize>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            message: message.into(),
+            range,
+            source_path: None,
+        }
+    }
 }
 
 pub fn parse_diagnostics(source: &str, errors: &[SyntaxError]) -> Vec<Diagnostic> {

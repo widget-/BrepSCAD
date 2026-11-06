@@ -1578,6 +1578,18 @@ impl<K: Kernel> Evaluator<'_, K> {
                     .or_else(|| args.named.get("triangles"))
                     .ok_or_else(|| bad_args("polyhedron", "expected faces"))?
                     .as_faces("polyhedron", points.len())?;
+                if let Some(index) = faces
+                    .iter()
+                    .position(|face| face_crosses_itself(&points, face))
+                {
+                    // Not an error: OpenSCAD renders these, and the face only
+                    // affects a knife edge. But its outward side is undefined,
+                    // so a boolean against this solid can leave gaps - say so
+                    // instead of letting it show up as red faces.
+                    self.messages.push(format!(
+                        "polyhedron: face {index} crosses itself (a chamfer larger than half its height?); its outward side is undefined, so a boolean against this solid may leave gaps"
+                    ));
+                }
                 let shape = self
                     .kernel
                     .primitive(Primitive::Polyhedron { points, faces })?;
@@ -4367,6 +4379,46 @@ fn call_children(node: &SyntaxNode) -> Vec<SyntaxNode> {
         Some(block) => block.children().collect(),
         None => single_child_statement(node).into_iter().collect(),
     }
+}
+
+/// Whether a face polygon crosses itself.
+///
+/// A simple polygon's signed area equals its unsigned area; in a self-crossing
+/// one most of it cancels away. The tapered end of an OpenGrid sweep is the
+/// usual source: the ring is 1e-6 high but keeps its full chamfer, so opposite
+/// corners pass each other. Triangles cannot cross themselves, and a fully
+/// degenerate face has no area to compare, so both are left alone.
+fn face_crosses_itself(points: &[[f64; 3]], face: &[usize]) -> bool {
+    if face.len() < 4 {
+        return false;
+    }
+    let base = points[face[0]];
+    let mut signed = [0.0f64; 3];
+    let mut unsigned = 0.0;
+    for index in 1..face.len() - 1 {
+        let a = [
+            points[face[index]][0] - base[0],
+            points[face[index]][1] - base[1],
+            points[face[index]][2] - base[2],
+        ];
+        let b = [
+            points[face[index + 1]][0] - base[0],
+            points[face[index + 1]][1] - base[1],
+            points[face[index + 1]][2] - base[2],
+        ];
+        let cross = [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ];
+        for (slot, value) in signed.iter_mut().zip(cross) {
+            *slot += value;
+        }
+        unsigned += 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+    }
+    let magnitude =
+        0.5 * (signed[0] * signed[0] + signed[1] * signed[1] + signed[2] * signed[2]).sqrt();
+    unsigned > 0.0 && magnitude < 0.5 * unsigned
 }
 
 fn merge_parameters(node: &mut Node, parameters: &[Parameter]) {
