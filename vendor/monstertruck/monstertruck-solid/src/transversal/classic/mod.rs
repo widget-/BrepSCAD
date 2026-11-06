@@ -82,6 +82,54 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 /// Split one pair of shells into `[and_shell, or_shell]` (0.3.2 verbatim): build
 /// intersection loops, divide faces, classify each divided face as `and`/`or`,
 /// then ray-cast the remaining `unknown` faces against the other shell.
+/// A point to follow through the pipeline, from `BREPSCAD_DEBUG_TRACE=x,y,z`.
+///
+/// Aggregates - face counts, volumes, boundary totals - cannot say *which* face
+/// vanished. Following one point can: each stage reports how many faces' bounds
+/// cover it, so the stage where coverage drops is the stage that lost it.
+fn trace_point() -> Option<Point3> {
+    let value = std::env::var("BREPSCAD_DEBUG_TRACE").ok()?;
+    let parts: Vec<f64> = value
+        .split(',')
+        .filter_map(|part| part.trim().parse().ok())
+        .collect();
+    match parts.len() == 3 {
+        true => Some(Point3::new(parts[0], parts[1], parts[2])),
+        false => None,
+    }
+}
+
+/// Reports how many of `shell`'s faces have bounds covering `point`.
+///
+/// Bounds come from the boundary vertices rather than from `BoundingBox`, which
+/// `Face` does not expose; that is enough to follow a point.
+fn trace_shell<C, S>(label: &str, shell: &Shell<Point3, C, S>, point: Point3) {
+    let margin = 1.0e-6;
+    let (mut total, mut hits) = (0usize, 0usize);
+    for face in shell.face_iter() {
+        total += 1;
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for wire in face.boundaries() {
+            for vertex in wire.vertex_iter() {
+                let p = vertex.point();
+                min = Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
+                max = Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
+            }
+        }
+        if point.x >= min.x - margin
+            && point.x <= max.x + margin
+            && point.y >= min.y - margin
+            && point.y <= max.y + margin
+            && point.z >= min.z - margin
+            && point.z <= max.z + margin
+        {
+            hits += 1;
+        }
+    }
+    eprintln!("TRACE {label}: {hits} of {total} faces cover {point:?}");
+}
+
 fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
@@ -116,6 +164,11 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     };
     let planar_pair = planar(shell0) && planar(shell1);
     timer.mark("planar-check");
+    let trace = trace_point();
+    if let Some(point) = trace {
+        trace_shell("input/shell0", shell0, point);
+        trace_shell("input/shell1", shell1, point);
+    }
     let poly_shell0 = shell0.triangulation(tol);
     let poly_shell1 = shell1.triangulation(tol);
     timer.mark("triangulate");
@@ -339,6 +392,10 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
     let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
     timer.mark("assemble");
+    if let Some(point) = trace {
+        trace_shell("assembled/and", &and, point);
+        trace_shell("assembled/or", &or, point);
+    }
     let result = match flat {
         // PATCH(BrepSCAD): a half that cannot be sewn is kept unsewn rather than
         // failing the whole pair. `sew` only merges coincident vertices and
@@ -357,6 +414,15 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         false => Some([and, or]),
     };
     timer.mark("sew");
+    if let Some(point) = trace {
+        match &result {
+            Some([sewn_and, sewn_or]) => {
+                trace_shell("sewn/and", sewn_and, point);
+                trace_shell("sewn/or", sewn_or, point);
+            }
+            None => eprintln!("TRACE sewn: the pair produced no shells"),
+        }
+    }
     result
 }
 
