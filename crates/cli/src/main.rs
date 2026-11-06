@@ -76,6 +76,30 @@ fn main() -> Result<()> {
     monstertruck_core::provenance::dump_if_requested();
 
     println!("meshes: {}", meshes.len());
+    // Debug aid: write the mesh as OFF so its triangles can be inspected
+    // (`BREPSCAD_DUMP_MESH=/tmp/out` writes `/tmp/out.0.off`).
+    if let Some(prefix) = std::env::var_os("BREPSCAD_DUMP_MESH") {
+        use std::io::Write;
+        for (index, mesh) in meshes.iter().enumerate() {
+            let path = std::path::PathBuf::from(&prefix).with_extension(format!("{index}.off"));
+            let Ok(mut file) = std::fs::File::create(&path) else {
+                continue;
+            };
+            let _ = writeln!(
+                file,
+                "OFF {} {} 0",
+                mesh.positions.len(),
+                mesh.indices.len() / 3
+            );
+            for position in &mesh.positions {
+                let _ = writeln!(file, "{} {} {}", position[0], position[1], position[2]);
+            }
+            for triangle in mesh.indices.chunks_exact(3) {
+                let _ = writeln!(file, "3 {} {} {}", triangle[0], triangle[1], triangle[2]);
+            }
+            eprintln!("wrote {}", path.display());
+        }
+    }
     for (index, mesh) in meshes.iter().enumerate() {
         let mut min = [f64::INFINITY; 3];
         let mut max = [f64::NEG_INFINITY; 3];

@@ -482,5 +482,61 @@ fn rounded_offset_scene_is_fully_analytic() {
         hit.position[2] - 10.0,
     ];
     let radius = (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
-    assert!((radius - 5.0).abs() < 1e-6, "corner radius {radius}");
+    assert!((radius - 5.0).abs() < 1.0e-6, "corner radius {radius}");
+}
+
+/// A difference turns the cutter's surface into a cavity wall, and that wall has
+/// to face *out of* the remaining material: looking into the bore, its normal
+/// points back at the viewer.
+///
+/// The viewer paints a surface whose normal points away from the eye red, as a
+/// back-face overlay. If a correctly cut hole came out red the overlay would be
+/// useless - it would flag good geometry - so this pins the convention the
+/// overlay depends on.
+///
+/// It fails: the analytic scene reports the bore wall's normal as `[0, 1, 0]`
+/// where the tessellation reports `[0, -1, 0]`. The mesh is right (checked
+/// independently: every bore triangle faces the axis), so `scene_from_solid`
+/// disagrees with the mesh it is meant to mirror, and the viewer paints a
+/// correctly cut hole red.
+#[test]
+#[ignore = "known: the analytic scene inverts cavity-wall normals"]
+fn a_cavity_wall_faces_out_of_the_material() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [2.0, 2.0, 2.0], [0.0; 3]);
+    let bore = kernel
+        .primitive(Primitive::Cylinder {
+            radius: 0.5,
+            height: 4.0,
+        })
+        .expect("cylinder");
+    let cut = kernel
+        .boolean(BooleanOp::Difference, block, bore)
+        .expect("difference");
+    let scene = kernel.raycast_scene(cut, 0.01).expect("scene");
+
+    // Look into the bore from above and in front: the ray clears the opening in
+    // the top face and lands on the far wall, at y = +0.5.
+    let ray = Ray::new([0.0, -1.0, 5.0], [0.0, 1.5, -5.0]);
+    let hit = scene.cast(&ray).expect("hit on the bore wall");
+    assert!(
+        hit.position[1] > 0.3,
+        "expected the far bore wall, got {:?}",
+        hit.position
+    );
+    assert!(
+        hit.normal[1] < -0.5,
+        "the bore wall faces away from the viewer: {:?}",
+        hit.normal
+    );
+    // Facing the viewer is what the overlay calls a front face, so it stays blue.
+    let towards_eye = [
+        0.0 - hit.position[0],
+        -1.0 - hit.position[1],
+        5.0 - hit.position[2],
+    ];
+    let facing = hit.normal[0] * towards_eye[0]
+        + hit.normal[1] * towards_eye[1]
+        + hit.normal[2] * towards_eye[2];
+    assert!(facing > 0.0, "the bore wall is not front-facing: {facing}");
 }
