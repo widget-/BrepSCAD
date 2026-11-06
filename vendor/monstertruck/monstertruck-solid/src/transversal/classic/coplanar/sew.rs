@@ -170,6 +170,11 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // The fragment encloses no area and its neighbours meet at the welded
     // vertex, so removing it from the wire keeps the wire closed.
     drop_collapsed_edges(&mut compressed);
+    // PATCH(BrepSCAD): a wire that runs out along an edge and straight back
+    // along a duplicate revisits its turn vertex, and `Shell::extract` rejects
+    // the whole shell as `NotSimpleWire`. The excursion encloses no area, so
+    // dropping the pair leaves the region unchanged and the wire simple.
+    drop_wire_spikes(&mut compressed);
     let out_vertices = compressed.vertices.len();
     let out_edges = compressed.edges.len();
     let out_faces = compressed.faces.len();
@@ -246,6 +251,55 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 /// Opt-in dump of the wires `Shell::extract` is about to reject, grouped by the
 /// error it will raise, so each class can be attacked on its own.
+/// Removes zero-area spikes from every face wire.
+///
+/// A spike is an edge followed by its own reverse: the wire runs out along one
+/// edge and straight back along a duplicate, enclosing nothing. `Shell::extract`
+/// rejects such a wire as `NotSimpleWire` because the turn vertex appears twice,
+/// which discards the whole shell - and with it every face in it. Dropping the
+/// pair cannot change the enclosed region, since the excursion has no area.
+fn drop_wire_spikes<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
+    let endpoints: Vec<(usize, usize)> = compressed
+        .edges
+        .iter()
+        .map(|edge| (edge.vertices.0, edge.vertices.1))
+        .collect();
+    let directed = |use_: &CompressedEdgeIndex| -> (usize, usize) {
+        let (start, end) = endpoints[use_.index];
+        match use_.orientation {
+            true => (start, end),
+            false => (end, start),
+        }
+    };
+    for face in &mut compressed.faces {
+        for wire in &mut face.boundaries {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                let count = wire.len();
+                if count < 2 {
+                    break;
+                }
+                for index in 0..count {
+                    let next = (index + 1) % count;
+                    let (a0, a1) = directed(&wire[index]);
+                    let (b0, b1) = directed(&wire[next]);
+                    if a0 == b1 && a1 == b0 {
+                        let (low, high) = match index < next {
+                            true => (index, next),
+                            false => (next, index),
+                        };
+                        wire.remove(high);
+                        wire.remove(low);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C, S>) {
     let collapsed: Vec<usize> = compressed
         .edges
@@ -326,6 +380,53 @@ fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C
                 a,
                 b
             );
+        }
+    }
+    // A repeated vertex is what `Shell::extract` reports as `NotSimpleWire`.
+    // Dump the wire so the revisit is visible instead of inferred.
+    for (face_index, face) in compressed.faces.iter().enumerate() {
+        for (wire_index, wire) in face.boundaries.iter().enumerate() {
+            let mut seen: Vec<(usize, usize)> = Vec::new();
+            let mut repeat = None;
+            for (k, use_) in wire.iter().enumerate() {
+                let edge = &compressed.edges[use_.index];
+                let start = match use_.orientation {
+                    true => edge.vertices.0,
+                    false => edge.vertices.1,
+                };
+                match seen.iter().find(|(vertex, _)| *vertex == start) {
+                    Some((_, first)) => {
+                        repeat = Some((*first, k, start));
+                        break;
+                    }
+                    None => seen.push((start, k)),
+                }
+            }
+            let Some((first, again, vertex)) = repeat else {
+                continue;
+            };
+            eprintln!(
+                "  repeated face={face_index} wire={wire_index} len={} vertex={vertex} at {first} and {again} {:?}",
+                wire.len(),
+                compressed.vertices[vertex]
+            );
+            for (k, use_) in wire.iter().enumerate() {
+                let edge = &compressed.edges[use_.index];
+                let (start, end) = match use_.orientation {
+                    true => (edge.vertices.0, edge.vertices.1),
+                    false => (edge.vertices.1, edge.vertices.0),
+                };
+                let a = compressed.vertices[start];
+                let b = compressed.vertices[end];
+                eprintln!(
+                    "    {k}: e{} {start}->{end} len={:.6} {:?} -> {:?}",
+                    use_.index,
+                    (b - a).magnitude(),
+                    a,
+                    b
+                );
+            }
+            return;
         }
     }
     for index in collapsed.iter().take(3) {
