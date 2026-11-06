@@ -1,5 +1,11 @@
 // Reduced OpenGrid snap: outer shell minus one horizontal and one vertical
-// clip cutout. Their 45-degree ends overlap at a knife edge.
+// clip cutout. Their ends overlap inside the shell.
+//
+// The cutouts stop at a full cross-section rather than tapering to a 1e-6
+// knife edge. A 1e-6-high slice while keeping the 0.4/0.2 chamfer makes the
+// end cap a self-intersecting octagon: its outward side is undefined, the
+// boolean cannot resolve the knife-edge overlap, and the shell comes out with
+// boundary edges. OpenSCAD renders that input; this backend reports it.
 $fn = 16;
 
 function rev(v) = [for (i = [0 : len(v) - 1]) v[len(v) - 1 - i]];
@@ -53,8 +59,7 @@ module horizontal_cutout() {
     rotate([-90, 0, 0])
     sweep([
         [0, 12, 0.4, 0.4 / 3],
-        [1.3, 12, 0.4, 0.4 / 3],
-        [1.5, 11.6, 0.000001, 0.4 / 3]
+        [1.3, 12, 0.4, 0.4 / 3]
     ]);
 }
 
@@ -62,8 +67,7 @@ module vertical_cutout() {
     translate([0, -11.1, -0.2])
     sweep([
         [0, 12, 0.6, 0.2],
-        [5.8, 12, 0.6, 0.2],
-        [6.1, 11.4, 0.000001, 0.2]
+        [5.8, 12, 0.6, 0.2]
     ]);
 }
 

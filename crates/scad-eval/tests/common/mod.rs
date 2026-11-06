@@ -28,3 +28,33 @@ pub fn signed_volume(mesh: &Mesh) -> f64 {
         .sum::<f64>()
         / 6.0
 }
+
+/// Edges used by exactly one triangle after welding by position.
+#[allow(dead_code)]
+pub fn welded_boundary_edges(mesh: &Mesh) -> usize {
+    use std::collections::HashMap;
+    let mut welded: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut edges: HashMap<(u32, u32), usize> = HashMap::new();
+    for triangle in mesh.indices.chunks_exact(3) {
+        let mut indices = [0u32; 3];
+        for (slot, index) in triangle.iter().enumerate() {
+            let position = mesh.positions[*index as usize];
+            let key = (
+                (position[0] * 1.0e5).round() as i64,
+                (position[1] * 1.0e5).round() as i64,
+                (position[2] * 1.0e5).round() as i64,
+            );
+            let next = welded.len() as u32;
+            indices[slot] = *welded.entry(key).or_insert(next);
+        }
+        for (start, end) in [
+            (indices[0], indices[1]),
+            (indices[1], indices[2]),
+            (indices[2], indices[0]),
+        ] {
+            let edge = (start.min(end), start.max(end));
+            *edges.entry(edge).or_default() += 1;
+        }
+    }
+    edges.values().filter(|count| **count == 1).count()
+}

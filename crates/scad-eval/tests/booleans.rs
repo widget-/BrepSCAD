@@ -9,7 +9,7 @@ use brepscad_kernel_api::{
     BooleanOp, Capabilities, Kernel, KernelError, Mesh, Primitive, ShapeId, Transform,
 };
 use brepscad_kernel_truck::TruckKernel;
-use common::{bounds, signed_volume};
+use common::{bounds, signed_volume, welded_boundary_edges};
 
 /// Counts boolean calls so tests can see whether an operand reached the kernel.
 struct CountingKernel {
@@ -126,10 +126,11 @@ fn difference_with_a_sphere_tessellates() {
     assert_eq!(evaluation.shapes[0].parts.len(), 2);
 }
 
-/// The horizontal and vertical clip cutouts overlap at a pair of 45-degree
-/// knife edges. The classic loop assembly collapses the tangency intersection
-/// to a point and drops the vertical cutout; the planar fallback must keep the
-/// flex slot. Expected volume is the OpenSCAD result, 3849.09.
+/// The horizontal and vertical clip cutouts overlap inside the shell. Their
+/// ends stop at full cross-sections: the original 1e-6 taper kept its 0.4/0.2
+/// chamfer, which makes the end cap a self-intersecting octagon, and the
+/// resulting knife-edge overlap is below the boolean's tolerance. Expected
+/// volume is the OpenSCAD result, 3849.09.
 #[test]
 fn snap_clip_cutouts_keep_the_flex_slot() {
     let source = include_str!("data/snap_clip_cutout.scad");
@@ -141,6 +142,11 @@ fn snap_clip_cutouts_keep_the_flex_slot() {
     assert!(
         (volume - 3849.09).abs() < 20.0,
         "volume = {volume}; expected about 3849.09"
+    );
+    assert_eq!(
+        welded_boundary_edges(&evaluation.shapes[0].mesh),
+        0,
+        "both cutouts leave a closed shell"
     );
 }
 
