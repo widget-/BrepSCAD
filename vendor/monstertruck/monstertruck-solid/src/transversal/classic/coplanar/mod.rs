@@ -43,7 +43,13 @@ pub(super) fn plane_of<C, S: TryIntoAnalyticSurfaceKind + Clone>(
 }
 
 pub(super) fn coplanar(a: PlaneOf, b: PlaneOf, tol: f64) -> bool {
-    a.normal.cross(b.normal).magnitude() < 1.0e-7 && (b.origin - a.origin).dot(a.normal).abs() < tol
+    // Coincidence is a `confusion` question, not a modelling-tolerance one.
+    // Testing the distance against `tol` declared any two parallel faces closer
+    // than 0.05 coincident, so a cutter 0.01 away from a face was imprinted
+    // against it and the face dropped.
+    let precision = Precision::from_modelling(tol);
+    a.normal.cross(b.normal).magnitude() < precision.angular
+        && (b.origin - a.origin).dot(a.normal).abs() < precision.confusion
 }
 
 pub(super) fn inner_point<C, S: ShapeOpsSurface>(
