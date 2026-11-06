@@ -402,14 +402,29 @@ impl<C> LoopsStore<Point3, C> {
                 let curve = self[loops_index][wire_index][edge_index].curve();
                 let projection =
                     curve_surface_projection(&curve, None, another_surface, None, v.point(), 100);
-                let Some((pt, t, _)) = projection else {
-                    if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
-                        eprintln!(
-                            "TRACE loops: curve_surface_projection failed on face {loops_index} wire {wire_index} edge {edge_index} at {:?}",
-                            v.point()
-                        );
+                // PATCH(BrepSCAD): the fixed-point projection cannot converge when
+                // the edge runs nearly tangent to the other surface, which is what
+                // a knife edge meeting a wall looks like. The vertex is already a
+                // point of the intersection curve, so it lies on both surfaces and
+                // the nearest parameter on the edge is enough to place it. Failing
+                // the whole boolean over a refinement step is far worse than
+                // placing the vertex to within `SEARCH_TOLERANCE`.
+                let (pt, t) = match projection {
+                    Some((pt, t, _)) => (pt, t),
+                    None => {
+                        let t = curve.search_nearest_parameter(v.point(), None, 100)?;
+                        let pt = curve.evaluate(t);
+                        let offset = pt.distance(v.point());
+                        if offset > SEARCH_TOLERANCE {
+                            if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                                eprintln!(
+                                    "TRACE loops: projection failed and the nearest point is {offset:.6} away on face {loops_index} wire {wire_index} edge {edge_index}"
+                                );
+                            }
+                            return None;
+                        }
+                        (pt, t)
                     }
-                    return None;
                 };
                 let edge = self[loops_index][wire_index][edge_index].absolute_clone();
                 let (front, back) = edge.curve().range_tuple();
@@ -438,6 +453,14 @@ impl<C> LoopsStore<Point3, C> {
         Some(())
     }
 }
+
+/// How far the fallback projection may place a vertex from where the caller said
+/// it is before the placement is treated as unreliable.
+///
+/// The vertex being placed is already a point of the intersection curve, so it
+/// lies on both surfaces and the nearest point on the edge should be essentially
+/// coincident. This is a sanity bound, not a modelling tolerance.
+const SEARCH_TOLERANCE: f64 = 1.0e-3;
 
 fn curve_surface_projection<C, S>(
     curve: &C,
@@ -468,7 +491,15 @@ where
         }
         let l = curve.derivative(t);
         let n = surface.normal(u, v);
-        let t0 = (pt1 - pt0).dot(n) / l.dot(n);
+        let denominator = l.dot(n);
+        // A curve tangent to the surface has no transverse direction to step in.
+        // Without this the step becomes `inf` and every later hint is `nan`, so
+        // the iteration cannot recover - which is how a knife edge meeting a wall
+        // loses the whole boolean.
+        if denominator.abs() <= f64::EPSILON {
+            return None;
+        }
+        let t0 = (pt1 - pt0).dot(n) / denominator;
         curve_hint = Some(t);
         surface_hint = Some((u, v));
         point = pt0 + t0 * l;
