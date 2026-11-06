@@ -62,7 +62,19 @@ impl<P, C, S> Face<P, C, S> {
             orientation: true,
             surface: Arc::new(Mutex::new(surface)),
             stable_id: StableId::UNASSIGNED,
+            tolerance: 0.0,
         }
+    }
+
+    /// How far this face's surface may sit from the geometry it represents.
+    #[inline(always)]
+    pub const fn tolerance(&self) -> f64 { self.tolerance }
+
+    /// Raises the face's tolerance. An operation may add error but cannot
+    /// remove error that is already there, so this never lowers it.
+    #[inline(always)]
+    pub fn raise_tolerance(&mut self, tolerance: f64) {
+        self.tolerance = self.tolerance.max(tolerance);
     }
 
     /// Returns the stable persistent identifier of this face.
@@ -187,6 +199,7 @@ impl<P, C, S> Face<P, C, S> {
             surface: Arc::clone(&self.surface),
             orientation: true,
             stable_id: self.stable_id,
+            tolerance: self.tolerance,
         }
     }
 
@@ -896,6 +909,7 @@ impl<P, C, S> Face<P, C, S> {
             orientation: self.orientation,
             surface: Arc::new(Mutex::new(self.surface())),
             stable_id: StableId::UNASSIGNED,
+            tolerance: self.tolerance,
         };
         let boundary = &mut face0.boundaries[0];
         let i = boundary
@@ -920,6 +934,7 @@ impl<P, C, S> Face<P, C, S> {
             orientation: self.orientation,
             surface: Arc::new(Mutex::new(self.surface())),
             stable_id: StableId::UNASSIGNED,
+            tolerance: self.tolerance,
         };
         Some((face0, face1))
     }
@@ -1022,6 +1037,7 @@ impl<P, C, S> Face<P, C, S> {
             orientation: self.orientation(),
             surface: Arc::new(Mutex::new(surface)),
             stable_id: StableId::UNASSIGNED,
+            tolerance: self.tolerance,
         })
     }
 
@@ -1130,6 +1146,7 @@ impl<P, C, S> Clone for Face<P, C, S> {
             orientation: self.orientation,
             surface: Arc::clone(&self.surface),
             stable_id: self.stable_id,
+            tolerance: self.tolerance,
         }
     }
 }

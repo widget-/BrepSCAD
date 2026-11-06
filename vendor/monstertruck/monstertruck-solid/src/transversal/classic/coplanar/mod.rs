@@ -25,6 +25,9 @@ use split::*;
 pub(super) struct PlaneOf {
     origin: Point3,
     normal: Vector3,
+    /// The source face's tolerance, so coincidence can be judged against the
+    /// two faces' budgets rather than a single global number.
+    tolerance: f64,
 }
 
 pub(super) fn plane_of<C, S: TryIntoAnalyticSurfaceKind + Clone>(
@@ -36,6 +39,7 @@ pub(super) fn plane_of<C, S: TryIntoAnalyticSurfaceKind + Clone>(
             Some(PlaneOf {
                 origin: plane.origin(),
                 normal: if face.orientation() { normal } else { -normal },
+                tolerance: face.tolerance(),
             })
         }
         _ => None,
@@ -48,8 +52,14 @@ pub(super) fn coplanar(a: PlaneOf, b: PlaneOf, tol: f64) -> bool {
     // than 0.05 coincident, so a cutter 0.01 away from a face was imprinted
     // against it and the face dropped.
     let precision = Precision::from_modelling(tol);
+    // OCCT's rule: two faces interfere when the distance is within the sum of
+    // their own tolerances, plus a fuzzy value. A face built from exact
+    // primitives carries zero, so this is the fuzzy value alone; a face that
+    // went through an approximating operation carries a budget of its own and
+    // does not have to be re-derived from the modelling tolerance.
     a.normal.cross(b.normal).magnitude() < precision.angular
-        && (b.origin - a.origin).dot(a.normal).abs() < precision.confusion
+        && (b.origin - a.origin).dot(a.normal).abs()
+            < a.tolerance + b.tolerance + precision.confusion
 }
 
 pub(super) fn inner_point<C, S: ShapeOpsSurface>(

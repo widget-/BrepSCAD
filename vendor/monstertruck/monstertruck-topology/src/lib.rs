@@ -162,6 +162,11 @@ pub struct Face<P, C, S> {
     orientation: bool,
     surface: Arc<Mutex<S>>,
     stable_id: StableId,
+    /// How far this face's surface may sit from the geometry it represents.
+    /// Zero for a face built from exact primitives; operations that approximate
+    /// raise it. Whether two faces are coincident is judged against the sum of
+    /// their tolerances, not against the modelling tolerance.
+    tolerance: f64,
 }
 
 /// Shell, a connected compounded faces.

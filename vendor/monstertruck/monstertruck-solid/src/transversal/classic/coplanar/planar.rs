@@ -399,6 +399,11 @@ fn divide_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         if !face.orientation() {
             piece.invert();
         }
+        // The pieces are cut from the source curves and meet at intersected
+        // points, so they carry the accumulated error of that construction.
+        // Recording it lets a later coincidence test judge them against their
+        // own budget instead of the modelling tolerance.
+        piece.raise_tolerance(Precision::from_modelling(tol).confusion);
         out.push(piece);
     }
     Some(out)
