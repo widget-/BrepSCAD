@@ -375,7 +375,28 @@ fn attempt_boolean(op: BooleanOp, a: &Solid, b: &Solid, tolerance: f64) -> Optio
             .map_err(|e| format!("{e:?}")),
     }));
     match attempt {
-        Ok(Ok(solid)) => Some(solid),
+        Ok(Ok(solid)) => {
+            if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
+                let shells: Vec<_> = solid
+                    .boundaries()
+                    .iter()
+                    .map(|shell| {
+                        (
+                            shell.face_iter().count(),
+                            shell_boundary_edges(shell, tolerance),
+                            shell_bounds(shell),
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "BOOLEAN ATTEMPT {op:?} @ {tolerance}: {} shell(s), {} face(s), volume {:.3}, shells={shells:?}",
+                    solid.boundaries().len(),
+                    solid.face_iter().count(),
+                    solid_volume(&solid)
+                );
+            }
+            Some(solid)
+        }
         Ok(Err(error)) => {
             if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
                 eprintln!("BOOLEAN ATTEMPT {op:?} @ {tolerance}: {error}");
@@ -1076,11 +1097,23 @@ impl Kernel for TruckKernel {
         let result = self.boolean_impl(op, a_id, b_id)?;
         if std::env::var_os("BREPSCAD_DEBUG_BOOLEAN").is_some() {
             let describe = |solid: &Solid| {
+                let shells: Vec<_> = solid
+                    .boundaries()
+                    .iter()
+                    .map(|shell| {
+                        (
+                            shell.face_iter().count(),
+                            shell_boundary_edges(shell, BOOLEAN_TOLERANCES[0]),
+                            shell_bounds(shell),
+                        )
+                    })
+                    .collect();
                 (
                     solid.boundaries().len(),
                     solid.face_iter().count(),
                     solid_bounds(solid),
                     solid_volume(solid),
+                    shells,
                 )
             };
             let a = self.solid(a_id).map(describe).ok();
