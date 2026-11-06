@@ -175,6 +175,11 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // the whole shell as `NotSimpleWire`. The excursion encloses no area, so
     // dropping the pair leaves the region unchanged and the wire simple.
     drop_wire_spikes(&mut compressed);
+    // PATCH(BrepSCAD): a wire that passes through a vertex twice is a pinch
+    // point, not a defect in the region. `Shell::extract` rejects the whole
+    // shell as `NotSimpleWire`; splitting the inner run out as its own loop
+    // keeps every face.
+    split_wire_at_repeats(&mut compressed);
     let out_vertices = compressed.vertices.len();
     let out_edges = compressed.edges.len();
     let out_faces = compressed.faces.len();
@@ -300,6 +305,67 @@ fn drop_wire_spikes<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
     }
 }
 
+/// Splits a wire that revisits a vertex into separate loops.
+///
+/// A wire like `12 13 17 15 14 6 0 14 12` passes through vertex 14 twice, and
+/// the run between the two visits closes on itself. `Shell::extract` rejects
+/// such a wire as `NotSimpleWire` and the whole shell is lost with every face in
+/// it. That inner run is a closed loop in its own right, so it becomes an
+/// additional boundary of the same face - the split `c9ab63b` makes for
+/// arrangement loops. Unlike a zero-area spike it does enclose area, so it is
+/// kept rather than dropped.
+fn split_wire_at_repeats<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
+    let endpoints: Vec<(usize, usize)> = compressed
+        .edges
+        .iter()
+        .map(|edge| (edge.vertices.0, edge.vertices.1))
+        .collect();
+    let start_of = |use_: &CompressedEdgeIndex| -> usize {
+        let (start, end) = endpoints[use_.index];
+        match use_.orientation {
+            true => start,
+            false => end,
+        }
+    };
+    for face in &mut compressed.faces {
+        let mut index = 0;
+        while index < face.boundaries.len() {
+            let mut split = None;
+            let mut seen: Vec<(usize, usize)> = Vec::new();
+            for (k, use_) in face.boundaries[index].iter().enumerate() {
+                let start = start_of(use_);
+                match seen.iter().find(|(vertex, _)| *vertex == start) {
+                    Some((_, first)) => {
+                        split = Some((*first, k));
+                        break;
+                    }
+                    None => seen.push((start, k)),
+                }
+            }
+            let Some((first, again)) = split else {
+                index += 1;
+                continue;
+            };
+            // `first..again` starts and ends on the same vertex, so it is a
+            // closed loop on its own. Re-examine the shortened wire afterwards:
+            // it may still repeat.
+            let inner: Vec<_> = face.boundaries[index].drain(first..again).collect();
+            face.boundaries.push(inner);
+        }
+    }
+}
+
+/// How many defective wires to dump before going quiet.
+///
+/// Console noise is the only reason to cap this at all, so the cap is generous
+/// and `BREPSCAD_DEBUG_SEW_LIMIT` overrides it.
+fn report_limit() -> usize {
+    std::env::var("BREPSCAD_DEBUG_SEW_LIMIT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20)
+}
+
 fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C, S>) {
     let collapsed: Vec<usize> = compressed
         .edges
@@ -383,8 +449,11 @@ fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C
         }
     }
     // A repeated vertex is what `Shell::extract` reports as `NotSimpleWire`.
-    // Dump the wire so the revisit is visible instead of inferred.
-    for (face_index, face) in compressed.faces.iter().enumerate() {
+    // Dump every such wire, up to the noise cap, so a fix can be checked against
+    // what remains instead of being hidden behind the first one.
+    let mut dumped = 0usize;
+    let limit = report_limit();
+    'wires: for (face_index, face) in compressed.faces.iter().enumerate() {
         for (wire_index, wire) in face.boundaries.iter().enumerate() {
             let mut seen: Vec<(usize, usize)> = Vec::new();
             let mut repeat = None;
@@ -426,7 +495,11 @@ fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C
                     b
                 );
             }
-            return;
+            dumped += 1;
+            if dumped >= limit {
+                eprintln!("  (capped at {limit}; BREPSCAD_DEBUG_SEW_LIMIT raises this)");
+                break 'wires;
+            }
         }
     }
     for index in collapsed.iter().take(3) {
