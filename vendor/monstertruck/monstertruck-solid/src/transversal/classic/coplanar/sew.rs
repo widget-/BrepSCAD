@@ -774,7 +774,7 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         let edges = &compressed.edges;
         let vertices = &compressed.vertices;
-        let check = |&index: &usize| -> (Option<(usize, usize, f64)>, usize) {
+        let check = |&index: &usize| -> (Option<(usize, usize, f64, f64)>, usize) {
             let edge = &edges[index];
             let (a, b) = edge.vertices;
             let (t0, t1) = edge.curve.range_tuple();
@@ -805,13 +805,14 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 let Some(t) = edge.curve.search_nearest_parameter(point, Some(hint), 30) else {
                     continue;
                 };
-                if edge.curve.subs(t).distance(point) > tol {
+                let distance = edge.curve.subs(t).distance(point);
+                if distance > tol {
                     continue;
                 }
                 if t <= t0 + margin || t >= t1 - margin {
                     continue;
                 }
-                edge_split = Some((index, vertex, t));
+                edge_split = Some((index, vertex, t, distance));
                 break;
             }
             (edge_split, checks)
@@ -845,9 +846,35 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 .collect(),
             false => Vec::new(),
         };
+        // How many faces touch each vertex. A vertex shared by several faces is
+        // legitimate stitching; one touched by a single face cannot be explained
+        // by stitching and would mean the weld over-merged.
+        let face_uses: Vec<usize> = match diagnostics::sew_enabled() {
+            true => {
+                let mut counts = vec![0usize; compressed.vertices.len()];
+                for face in &compressed.faces {
+                    let mut seen = HashSet::new();
+                    for wire in &face.boundaries {
+                        for use_ in wire {
+                            let (a, b) = endpoints[use_.index];
+                            if seen.insert(a) {
+                                counts[a] += 1;
+                            }
+                            if seen.insert(b) {
+                                counts[b] += 1;
+                            }
+                        }
+                    }
+                }
+                counts
+            }
+            false => Vec::new(),
+        };
         let mut pinches = 0usize;
+        let mut pinch_faces: Vec<usize> = Vec::new();
+        let mut pinch_distances: Vec<f64> = Vec::new();
         let split_count = splits.len();
-        for (index, vertex, t) in splits {
+        for (index, vertex, t, distance) in splits {
             let old_uses = uses[index];
             if let Some(stats) = stats.as_mut() {
                 stats.splits += 1;
@@ -885,6 +912,8 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                         });
                         if already {
                             pinches += 1;
+                            pinch_faces.push(face_uses.get(vertex).copied().unwrap_or(0));
+                            pinch_distances.push(distance);
                         }
                     }
                     for use_ in wire.drain(..) {
@@ -927,7 +956,9 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             }
         }
         if diagnostics::sew_enabled() && pinches > 0 {
-            eprintln!("SEW-SPLIT pinches={pinches} of {split_count} splits in one pass");
+            eprintln!(
+                "SEW-SPLIT pinches={pinches} of {split_count} splits, faces per pinch vertex {pinch_faces:?}, snap distance {pinch_distances:?}"
+            );
         }
     }
 }
