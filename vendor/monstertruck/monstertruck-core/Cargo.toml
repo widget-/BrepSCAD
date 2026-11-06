@@ -13,6 +13,10 @@ categories = ["graphics"]
 
 [features]
 rkyv = ["dep:rkyv"]
+# Records the lineage of each geometry object through the operations that made
+# it. Off by default: without it the module does not exist and no call site is
+# compiled, so a release build pays nothing.
+provenance = []
 
 [dependencies]
 cgmath = { workspace = true }

@@ -14,3 +14,7 @@ monstertruck-geometry.workspace = true
 monstertruck-meshing.workspace = true
 monstertruck-modeling.workspace = true
 monstertruck-solid.workspace = true
+
+[features]
+# Forward the monstertruck provenance recorder.
+provenance = ["monstertruck-solid/provenance"]

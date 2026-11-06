@@ -50,6 +50,9 @@ pub mod hash;
 pub mod id;
 pub use id::{StableId, StableIdAllocator};
 pub mod newton;
+/// Lineage of geometry through the operations that produced it.
+#[cfg(feature = "provenance")]
+pub mod provenance;
 /// Scalar trait hierarchy for scalar-generic kernel infrastructure.
 pub mod scalar;
 /// Setting Tolerance

@@ -218,6 +218,23 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 inside += 1;
             }
         }
+        // Provenance: the point the classification probed and the verdict it
+        // reached. A face that ends up on the wrong side is explained here.
+        #[cfg(feature = "provenance")]
+        {
+            use monstertruck_core::provenance;
+            let key = face.provenance_key();
+            provenance::label(key, "face");
+            provenance::record(
+                key,
+                "classify_shell0",
+                format!(
+                    "probe {pt:?} inside={} rays={rays}",
+                    inside * 2 > rays
+                ),
+                &[],
+            );
+        }
         if inside * 2 > rays {
             and0.push(face);
         } else {
@@ -250,6 +267,23 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 inside += 1;
             }
         }
+        // Provenance: the point the classification probed and the verdict it
+        // reached. A face that ends up on the wrong side is explained here.
+        #[cfg(feature = "provenance")]
+        {
+            use monstertruck_core::provenance;
+            let key = face.provenance_key();
+            provenance::label(key, "face");
+            provenance::record(
+                key,
+                "classify_shell1",
+                format!(
+                    "probe {pt:?} inside={} rays={rays}",
+                    inside * 2 > rays
+                ),
+                &[],
+            );
+        }
         if inside * 2 > rays {
             and1.push(face);
         } else {
@@ -270,6 +304,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
+
     let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
     timer.mark("assemble");
     let result = match flat {

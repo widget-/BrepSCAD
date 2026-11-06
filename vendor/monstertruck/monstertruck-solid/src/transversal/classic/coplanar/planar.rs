@@ -404,6 +404,27 @@ fn divide_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         // Recording it lets a later coincidence test judge them against their
         // own budget instead of the modelling tolerance.
         piece.raise_tolerance(Precision::from_modelling(tol).confusion);
+        // Provenance: this piece exists because `divide` split the source face
+        // into these regions. A wire defect on the piece can be traced back to
+        // the face and the arrangement that produced it.
+        #[cfg(feature = "provenance")]
+        {
+            use monstertruck_core::provenance;
+            let key = piece.provenance_key();
+            provenance::label(key, "piece");
+            provenance::record(
+                key,
+                "divide",
+                format!(
+                    "region area {:.4} of {} regions, {} pieces, {} curves",
+                    loops[region.outer].area,
+                    regions.len(),
+                    arrangement.segments.len(),
+                    curves.len()
+                ),
+                &[face.provenance_key()],
+            );
+        }
         out.push(piece);
     }
     Some(out)

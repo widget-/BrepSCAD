@@ -72,6 +72,9 @@ fn main() -> Result<()> {
         vec![combined]
     };
 
+    #[cfg(feature = "provenance")]
+    monstertruck_core::provenance::dump_if_requested();
+
     println!("meshes: {}", meshes.len());
     for (index, mesh) in meshes.iter().enumerate() {
         let mut min = [f64::INFINITY; 3];

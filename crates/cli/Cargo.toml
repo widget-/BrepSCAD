@@ -12,3 +12,8 @@ brepscad-kernel-api.workspace = true
 brepscad-kernel-truck.workspace = true
 brepscad-eval.workspace = true
 brepscad-syntax.workspace = true
+monstertruck-core.workspace = true
+
+[features]
+# Record and dump the lineage of every geometry object. Debugging only.
+provenance = ["brepscad-kernel-truck/provenance"]

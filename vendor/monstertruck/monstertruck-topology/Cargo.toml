@@ -12,6 +12,8 @@ keywords = ["truck", "graphics"]
 categories = ["graphics"]
 
 [features]
+# Expose `Face::provenance_key` for the core recorder.
+provenance = ["monstertruck-core/provenance"]
 default = ["rclite"]
 nightly = ["parking_lot/nightly"]
 rkyv = ["dep:rkyv", "monstertruck-core/rkyv"]

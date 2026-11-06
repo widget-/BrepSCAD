@@ -70,6 +70,17 @@ impl<P, C, S> Face<P, C, S> {
     #[inline(always)]
     pub const fn tolerance(&self) -> f64 { self.tolerance }
 
+    /// Identity of this face for [`provenance`](monstertruck_core::provenance)
+    /// recording: the address of its surface.
+    ///
+    /// Process-local and not stable across runs, which is acceptable for a
+    /// debugging aid and is the same key the crate's `Hash` impls already use.
+    #[cfg(feature = "provenance")]
+    #[inline(always)]
+    pub fn provenance_key(&self) -> usize {
+        Arc::as_ptr(&self.surface) as *const () as usize
+    }
+
     /// Raises the face's tolerance. An operation may add error but cannot
     /// remove error that is already there, so this never lowers it.
     #[inline(always)]
