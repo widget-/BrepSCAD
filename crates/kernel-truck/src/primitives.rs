@@ -171,10 +171,46 @@ pub(crate) fn polyhedron(points: &[[f64; 3]], faces: &[Vec<usize>]) -> KernelRes
         }
 
         let wire: Wire = wire_edges.into_iter().collect();
-        built_faces.push(
-            builder::try_attach_plane(vec![wire])
-                .map_err(|error| KernelError::Backend(format!("polyhedron face: {error:?}")))?,
-        );
+        // `try_attach_plane` infers the plane from the wire's points and gives
+        // up when the result is below its tolerance. A hull of nearly tangent
+        // curved surfaces leaves slivers like that (normals around 1e-6), and
+        // they are still valid triangles, so fall back to the exact plane those
+        // three points define. The frame is orthonormal: using the two edges as
+        // axes would leave a sliver with a badly skewed parameterisation. The
+        // normal path is kept whenever it works, because the boolean result is
+        // sensitive to how the face is parameterised.
+        let attached = if face.len() == 3 {
+            builder::try_attach_plane(vec![wire.clone()]).ok()
+        } else {
+            Some(
+                builder::try_attach_plane(vec![wire.clone()])
+                    .map_err(|error| KernelError::Backend(format!("polyhedron face: {error:?}")))?,
+            )
+        };
+        let built = match attached {
+            Some(face) => face,
+            None => {
+                let [a, b, c] = [welded[face[0]], welded[face[1]], welded[face[2]]];
+                let origin = Point3::new(a[0], a[1], a[2]);
+                let one = Point3::new(b[0], b[1], b[2]);
+                let another = Point3::new(c[0], c[1], c[2]);
+                let normal = (one - origin).cross(another - origin);
+                let length = normal.magnitude();
+                if length <= f64::MIN_POSITIVE {
+                    return Err(KernelError::Backend(
+                        "polyhedron face is degenerate".to_owned(),
+                    ));
+                }
+                let normal = normal / length;
+                let along = (one - origin).normalize();
+                let across = normal.cross(along);
+                Face::new_unchecked(
+                    vec![wire],
+                    Surface::Plane(Plane::new(origin, origin + along, origin + across)),
+                )
+            }
+        };
+        built_faces.push(built);
     }
 
     if uses

@@ -949,3 +949,24 @@ fn tessellating_a_many_shell_compound_stays_fast() {
         "compound tessellation took {elapsed:?}"
     );
 }
+
+/// A hull of nearly tangent curved surfaces leaves slivers whose plane fit is
+/// below `attach_plane`'s tolerance. A triangle's plane is exact, so the
+/// polyhedron builder takes it directly instead of rejecting the whole solid.
+#[test]
+fn polyhedron_accepts_a_thin_triangle() {
+    let mut kernel = TruckKernel::new();
+    // The z = 0 face has its three points nearly collinear: 1e-7 of offset.
+    let points = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [2.0, 1.0e-7, 0.0],
+        [1.0, 0.5, 1.0],
+    ];
+    let faces = vec![vec![0, 2, 1], vec![0, 1, 3], vec![1, 2, 3], vec![2, 0, 3]];
+    let shape = kernel
+        .primitive(Primitive::Polyhedron { points, faces })
+        .expect("thin triangle polyhedron");
+    let mesh = kernel.tessellate(shape, 0.05).expect("tessellate");
+    assert!(mesh.triangle_count() > 0);
+}
