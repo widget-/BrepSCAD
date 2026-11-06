@@ -109,32 +109,50 @@ fn trace_point() -> Option<Point3> {
     }
 }
 
-/// Reports how many of `shell`'s faces have bounds covering `point`.
-///
-/// Bounds come from the boundary vertices rather than from `BoundingBox`, which
-/// `Face` does not expose; that is enough to follow a point.
-fn trace_shell<C, S>(label: &str, shell: &Shell<Point3, C, S>, point: Point3) {
+/// Whether a face's boundary bounds contain `point`.
+fn face_covers<C, S>(face: &Face<Point3, C, S>, point: Point3) -> bool {
     let margin = 1.0e-6;
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for wire in face.boundaries() {
+        for vertex in wire.vertex_iter() {
+            let p = vertex.point();
+            min = Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
+            max = Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
+        }
+    }
+    point.x >= min.x - margin
+        && point.x <= max.x + margin
+        && point.y >= min.y - margin
+        && point.y <= max.y + margin
+        && point.z >= min.z - margin
+        && point.z <= max.z + margin
+}
+
+/// Reports how many of `shell`'s faces have bounds covering `point`.
+fn trace_shell<C, S>(label: &str, shell: &Shell<Point3, C, S>, point: Point3) {
     let (mut total, mut hits) = (0usize, 0usize);
     for face in shell.face_iter() {
         total += 1;
-        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for wire in face.boundaries() {
-            for vertex in wire.vertex_iter() {
-                let p = vertex.point();
-                min = Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
-                max = Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
-            }
-        }
-        if point.x >= min.x - margin
-            && point.x <= max.x + margin
-            && point.y >= min.y - margin
-            && point.y <= max.y + margin
-            && point.z >= min.z - margin
-            && point.z <= max.z + margin
-        {
+        if face_covers(face, point) {
             hits += 1;
+        }
+    }
+    eprintln!("TRACE {label}: {hits} of {total} faces cover {point:?}");
+}
+
+/// Reports how many of a finished solid's faces cover `point`.
+///
+/// Each operation keeps only one half of the pair it builds, so a face present in
+/// both halves can still be discarded. This is the check that says which.
+fn trace_solid<C, S>(label: &str, solid: &Solid<Point3, C, S>, point: Point3) {
+    let (mut total, mut hits) = (0usize, 0usize);
+    for shell in solid.boundaries() {
+        for face in shell.face_iter() {
+            total += 1;
+            if face_covers(face, point) {
+                hits += 1;
+            }
         }
     }
     eprintln!("TRACE {label}: {hits} of {total} faces cover {point:?}");
@@ -499,7 +517,11 @@ pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [res, _] = pair(&and_shell, shell)?;
         and_shell = res;
     }
-    finalize(operation, and_shell)
+    let solid = finalize(operation, and_shell)?;
+    if let Some(point) = trace_point() {
+        trace_solid("and-result", &solid, point);
+    }
+    Ok(solid)
 }
 
 /// OR operation between two solids (classic backend).
@@ -532,7 +554,11 @@ pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [_, res] = pair(&or_shell, shell)?;
         or_shell = res;
     }
-    finalize(operation, or_shell)
+    let solid = finalize(operation, or_shell)?;
+    if let Some(point) = trace_point() {
+        trace_solid("or-result", &solid, point);
+    }
+    Ok(solid)
 }
 
 /// Difference: the region inside `solid0` but outside `solid1` (classic backend).
