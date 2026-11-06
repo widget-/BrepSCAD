@@ -340,7 +340,14 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
     timer.mark("assemble");
     let result = match flat {
-        true => Some([coplanar::sew(&and, tol)?, coplanar::sew(&or, tol)?]),
+        // PATCH(BrepSCAD): a half that cannot be sewn is kept unsewn rather than
+        // failing the whole pair. `sew` only merges coincident vertices and
+        // edges; returning `None` threw away a half that was otherwise fine, and
+        // with it the boolean. The `planar_pair` arm below already did this.
+        true => Some([
+            coplanar::sew(&and, tol).unwrap_or(and),
+            coplanar::sew(&or, tol).unwrap_or(or),
+        ]),
         // PATCH(BrepSCAD): an all-planar non-coplanar pair can still leave
         // split edges; run the general sew for those.
         false if planar_pair => Some([

@@ -4,7 +4,9 @@ use super::super::super::integrate::{ShapeOpsCurve, ShapeOpsSurface};
 use crate::diagnostics;
 use monstertruck_geometry::PRESEARCH_DIVISION;
 use monstertruck_geometry::prelude::*;
-use monstertruck_topology::compress::{CompressedEdge, CompressedEdgeIndex, CompressedShell};
+use monstertruck_topology::compress::{
+    CompressedEdge, CompressedEdgeIndex, CompressedFace, CompressedShell,
+};
 use monstertruck_topology::*;
 use monstertruck_traits::algo::curve::{PresearchSamples, presearch_samples};
 use std::collections::HashSet;
@@ -179,7 +181,7 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // point, not a defect in the region. `Shell::extract` rejects the whole
     // shell as `NotSimpleWire`; splitting the inner run out as its own loop
     // keeps every face.
-    split_wire_at_repeats(&mut compressed);
+    split_wire_at_repeats(&mut compressed, tol);
     let out_vertices = compressed.vertices.len();
     let out_edges = compressed.edges.len();
     let out_faces = compressed.faces.len();
@@ -305,16 +307,19 @@ fn drop_wire_spikes<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
     }
 }
 
-/// Splits a wire that revisits a vertex into separate loops.
+/// Splits a wire that revisits a vertex into separate faces.
 ///
 /// A wire like `12 13 17 15 14 6 0 14 12` passes through vertex 14 twice, and
 /// the run between the two visits closes on itself. `Shell::extract` rejects
 /// such a wire as `NotSimpleWire` and the whole shell is lost with every face in
-/// it. That inner run is a closed loop in its own right, so it becomes an
-/// additional boundary of the same face - the split `c9ab63b` makes for
-/// arrangement loops. Unlike a zero-area spike it does enclose area, so it is
-/// kept rather than dropped.
-fn split_wire_at_repeats<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
+/// it. Unlike a zero-area spike the inner run does enclose area, so it is kept.
+///
+/// It has to become its own *face*, not an extra boundary of this one:
+/// `Face::try_new` also rejects a face whose wires share a vertex
+/// (`Wire::disjoint_wires`), and a pinch point is precisely two loops meeting at
+/// one. Two faces sharing that vertex is the representation the topology allows,
+/// and it is what the region actually is.
+fn split_wire_at_repeats<C, S: Clone>(compressed: &mut CompressedShell<Point3, C, S>, tol: f64) {
     let endpoints: Vec<(usize, usize)> = compressed
         .edges
         .iter()
@@ -327,7 +332,25 @@ fn split_wire_at_repeats<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
             false => end,
         }
     };
-    for face in &mut compressed.faces {
+    let mut added: Vec<CompressedFace<S>> = Vec::new();
+    let positions: Vec<Point3> = compressed.vertices.clone();
+    // Newell's method: the normal of the polygon a loop traces, in the loop's own
+    // order. Comparing the inner run's normal with the outer wire's says whether
+    // the two wind the same way, which is what decides the new face's
+    // orientation - a blanket flip is wrong, since it depends on the pinch.
+    let loop_normal = |wire: &[CompressedEdgeIndex]| -> Vector3 {
+        let count = wire.len();
+        let mut normal = Vector3::new(0.0, 0.0, 0.0);
+        for k in 0..count {
+            let a = positions[start_of(&wire[k])];
+            let b = positions[start_of(&wire[(k + 1) % count])];
+            normal.x += (a.y - b.y) * (a.z + b.z);
+            normal.y += (a.z - b.z) * (a.x + b.x);
+            normal.z += (a.x - b.x) * (a.y + b.y);
+        }
+        normal
+    };
+    for (face_index, face) in compressed.faces.iter_mut().enumerate() {
         let mut index = 0;
         while index < face.boundaries.len() {
             let mut split = None;
@@ -350,9 +373,58 @@ fn split_wire_at_repeats<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
             // closed loop on its own. Re-examine the shortened wire afterwards:
             // it may still repeat.
             let inner: Vec<_> = face.boundaries[index].drain(first..again).collect();
-            face.boundaries.push(inner);
+            let outer_normal = loop_normal(&face.boundaries[index]);
+            let inner_normal = loop_normal(&inner);
+            let perimeter = |wire: &[CompressedEdgeIndex]| -> f64 {
+                let count = wire.len();
+                (0..count)
+                    .map(|k| {
+                        let a = positions[start_of(&wire[k])];
+                        let b = positions[start_of(&wire[(k + 1) % count])];
+                        (a - b).magnitude()
+                    })
+                    .sum()
+            };
+            // A loop thinner than `tol` encloses nothing: its area is round-off
+            // against its own perimeter. Making a face from it adds a degenerate
+            // sliver that lies on top of its neighbours, which is what makes two
+            // triangles disagree about winding. Drop it, as a spike is dropped.
+            if inner_normal.magnitude() * 0.5 <= tol * perimeter(&inner) {
+                continue;
+            }
+            let winds_alike = outer_normal.dot(inner_normal) >= 0.0;
+            if diagnostics::sew_enabled() {
+                let show = |wire: &[CompressedEdgeIndex]| -> String {
+                    wire.iter()
+                        .map(|use_| {
+                            let point = positions[start_of(use_)];
+                            format!("({:.4}, {:.4}, {:.4})", point.x, point.y, point.z)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                eprintln!(
+                    "SPLIT face={face_index} wire={index} at {first}..{again} \
+                     winds_alike={winds_alike} face_orientation={}\n  \
+                     outer {} -> normal {:?}\n  inner {} -> normal {:?}",
+                    face.orientation,
+                    show(&face.boundaries[index]),
+                    outer_normal,
+                    show(&inner),
+                    inner_normal
+                );
+            }
+            added.push(CompressedFace {
+                boundaries: vec![inner],
+                orientation: match winds_alike {
+                    true => face.orientation,
+                    false => !face.orientation,
+                },
+                surface: face.surface.clone(),
+            });
         }
     }
+    compressed.faces.extend(added);
 }
 
 /// How many defective wires to dump before going quiet.
