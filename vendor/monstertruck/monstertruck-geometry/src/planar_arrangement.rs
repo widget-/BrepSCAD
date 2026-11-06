@@ -213,10 +213,61 @@ where
             }
             current = next;
         }
-        let area = shoelace_area(&loop_polygon(arrangement, &pieces, u, v, tol));
-        loops.push(Loop { pieces, area });
+        for pieces in split_self_touching(arrangement, pieces) {
+            let area = shoelace_area(&loop_polygon(arrangement, &pieces, u, v, tol));
+            loops.push(Loop { pieces, area });
+        }
     }
     loops
+}
+
+/// Splits a closed walk at every node it revisits.
+///
+/// A walk that crosses a bridge comes back along the same piece, so the loop
+/// touches itself at the bridge's endpoint. A face boundary cannot do that, and
+/// dropping the loop would lose the face, so the walk is split into the loops
+/// that do not. A two-piece out-and-back is the degenerate case and is
+/// discarded: it bounds no area.
+fn split_self_touching<C>(
+    arrangement: &Arrangement<C>,
+    pieces: Vec<(usize, bool)>,
+) -> Vec<Vec<(usize, bool)>> {
+    let mut result = Vec::new();
+    let mut pending = vec![pieces];
+    while let Some(current) = pending.pop() {
+        let mut seen: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let mut split = None;
+        for (index, &(segment, forward)) in current.iter().enumerate() {
+            let node = match forward {
+                true => arrangement.segments[segment].from,
+                false => arrangement.segments[segment].to,
+            };
+            match seen.get(&node) {
+                Some(&first) => {
+                    split = Some((first, index));
+                    break;
+                }
+                None => {
+                    seen.insert(node, index);
+                }
+            }
+        }
+        match split {
+            Some((first, index)) => {
+                let inner: Vec<(usize, bool)> = current[first..index].to_vec();
+                let mut outer: Vec<(usize, bool)> = current[..first].to_vec();
+                outer.extend_from_slice(&current[index..]);
+                if inner.len() >= 3 {
+                    pending.push(inner);
+                }
+                if outer.len() >= 3 {
+                    pending.push(outer);
+                }
+            }
+            None => result.push(current),
+        }
+    }
+    result
 }
 
 /// The loop as a polygon in the plane, sampling each piece.
