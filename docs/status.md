@@ -602,13 +602,22 @@ For headless UI snapshots, see
   boundary edges. Its `prism_stack()` tapered prisms collapse to knife edges,
   producing self-intersecting polyhedron faces and coincident faces between
   solids, which is the source of the remaining boolean failures.
-- The planar fallback for those cutouts still cannot close the unions. The
-  reduced one-clip fixture now loses 4 shells to `Shell::extract` (3
-  `NotClosedWire`, 1 `NotSimpleWire`), down from 40, and its mesh has 46 welded
-  boundary edges. Two of its edges are inconsistently wound, both on the `x = 6`
-  wall at a pinch point. Volumes are not a usable signal while those holes
-  remain - they move in both directions as faces are kept or lost, so judge by
-  welded boundary edges and by the viewer, not by volume.
+- The planar fallback for those cutouts no longer fails on the reduced one-clip
+  fixture's band: the union of the two small shells there succeeds, because a
+  degenerate intersection curve (a leader polyline deduping to one point) is now
+  passed through as a zero-length curve instead of failing the pair. That alone
+  moved the fixture from 1397.66 to 1482.17 against OpenSCAD's 1495.32 and took
+  inconsistently wound edges from 2 to 0. Its mesh still has ~51 welded boundary
+  edges, slightly worse than before, because pairs that were discarded now exist
+  and expose their seams.
+- The snap's top face is still missing from the mesh while the solid reaches
+  `z = 0` (root result `195 faces, volume 1482.17`), and the OFF dump has no
+  triangle near `(0, -12, -0.05)`. That is a tessellation question, not a boolean
+  one: either the `z = 0` face is absent and the bounds come from the walls, or
+  it exists and its trim produces nothing.
+- Volumes are still a weak signal while holes remain - they move in both
+  directions as faces are kept or lost. Judge by welded boundary edges, by the
+  viewer, and by tracing a point through the pipeline.
 - `sew` runs on the `and` and `or` halves separately, so an open boundary in
   one of them is expected and `left_boundary > 0` is not a defect. Only
   `Shell::extract` rejections are unambiguous. Two repairs are in place and both
