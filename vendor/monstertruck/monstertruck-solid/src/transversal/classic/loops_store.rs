@@ -338,12 +338,25 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
         loops_index: usize,
         v: &Vertex<P>,
         emap: &mut HashMap<EdgeId<C>, Edge<P, C>>,
+        tol: f64,
     ) -> Option<(usize, usize, ParameterKind)>
     where
+        P: MetricSpace<Metric = f64>,
         C: Cut<Point = P> + SearchParameter<CurveParameter, Point = P>,
     {
         let pt = v.point();
         let (wire_index, edge_index, kind) = self[loops_index].search_parameter(pt)?;
+        if let ParameterKind::Inner(t) = kind {
+            // `search_parameter` returns the nearest parameter with no distance
+            // bound, so a vertex well off the edge is accepted here and then
+            // rejected by the exact curve in `add_geom_vertex`, which loses the
+            // whole pair. Bound it to the modelling tolerance so the polyline and
+            // the curve agree about what "on this edge" means.
+            let curve = self[loops_index][wire_index][edge_index].curve();
+            if curve.evaluate(t).distance(pt) > tol {
+                return None;
+            }
+        }
         match kind {
             ParameterKind::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
@@ -377,12 +390,24 @@ impl<C> LoopsStore<Point3, C> {
         kind: ParameterKind,
         another_surface: &S,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
+        tol: f64,
     ) -> Option<()>
     where
         C: Cut<Point = Point3, Vector = Vector3>
             + SearchNearestParameter<CurveParameter, Point = Point3>,
         S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
+        // PATCH(BrepSCAD): the indices come from the *polygon* store's
+        // `search_parameter`, but they are used to index the *geometry* store.
+        // The two layouts diverge as soon as one has had an edge cut and the
+        // other has not, and indexing then panics - which reaches the caller as a
+        // crash rather than the clean failure the retry ladder expects.
+        if loops_index >= self.len()
+            || wire_index >= self[loops_index].len()
+            || edge_index >= self[loops_index][wire_index].len()
+        {
+            return None;
+        }
         match kind {
             ParameterKind::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
@@ -415,7 +440,13 @@ impl<C> LoopsStore<Point3, C> {
                         let t = curve.search_nearest_parameter(v.point(), None, 100)?;
                         let pt = curve.evaluate(t);
                         let offset = pt.distance(v.point());
-                        if offset > SEARCH_TOLERANCE {
+                        // The gap between the polyline and the exact curve reaches
+                        // 0.073 on the snap, which is 1.5x the modelling tolerance.
+                        // The vertex came from the intersection curve, so snapping
+                        // it onto the edge is closer to right than discarding the
+                        // pair and every face in it, but it is still bounded so a
+                        // vertex belonging to some other edge cannot be dragged in.
+                        if offset > tol * 2.0 {
                             if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
                                 eprintln!(
                                     "TRACE loops: projection failed and the nearest point is {offset:.6} away on face {loops_index} wire {wire_index} edge {edge_index}"
@@ -453,14 +484,6 @@ impl<C> LoopsStore<Point3, C> {
         Some(())
     }
 }
-
-/// How far the fallback projection may place a vertex from where the caller said
-/// it is before the placement is treated as unreliable.
-///
-/// The vertex being placed is already a point of the intersection curve, so it
-/// lies on both surfaces and the nearest point on the edge should be essentially
-/// coincident. This is a sanity bound, not a modelling tolerance.
-const SEARCH_TOLERANCE: f64 = 1.0e-3;
 
 fn curve_surface_projection<C, S>(
     curve: &C,
@@ -733,7 +756,7 @@ where
                         let mut gemap0 = HashMap::default();
                         let mut gemap1 = HashMap::default();
                         let idx00 =
-                            poly_loops_store0.add_polygon_vertex(face_index0, &pv0, &mut pemap0);
+                            poly_loops_store0.add_polygon_vertex(face_index0, &pv0, &mut pemap0, tol);
                         if let Some((wire_index, edge_index, kind)) = idx00 {
                             geom_loops_store0.add_geom_vertex(
                                 (face_index0, wire_index, edge_index),
@@ -741,12 +764,13 @@ where
                                 kind,
                                 &surface1,
                                 &mut gemap0,
+                                tol,
                             )?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.first_mut().unwrap() = gv0.point();
                         }
                         let idx01 =
-                            poly_loops_store0.add_polygon_vertex(face_index0, &pv1, &mut pemap1);
+                            poly_loops_store0.add_polygon_vertex(face_index0, &pv1, &mut pemap1, tol);
                         if let Some((wire_index, edge_index, kind)) = idx01 {
                             geom_loops_store0.add_geom_vertex(
                                 (face_index0, wire_index, edge_index),
@@ -754,12 +778,13 @@ where
                                 kind,
                                 &surface1,
                                 &mut gemap1,
+                                tol,
                             )?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.last_mut().unwrap() = gv1.point();
                         }
                         let idx10 =
-                            poly_loops_store1.add_polygon_vertex(face_index1, &pv0, &mut pemap0);
+                            poly_loops_store1.add_polygon_vertex(face_index1, &pv0, &mut pemap0, tol);
                         if let Some((wire_index, edge_index, kind)) = idx10 {
                             geom_loops_store1.add_geom_vertex(
                                 (face_index1, wire_index, edge_index),
@@ -767,12 +792,13 @@ where
                                 kind,
                                 &surface0,
                                 &mut gemap0,
+                                tol,
                             )?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.first_mut().unwrap() = gv0.point();
                         }
                         let idx11 =
-                            poly_loops_store1.add_polygon_vertex(face_index1, &pv1, &mut pemap1);
+                            poly_loops_store1.add_polygon_vertex(face_index1, &pv1, &mut pemap1, tol);
                         if let Some((wire_index, edge_index, kind)) = idx11 {
                             geom_loops_store1.add_geom_vertex(
                                 (face_index1, wire_index, edge_index),
@@ -780,6 +806,7 @@ where
                                 kind,
                                 &surface0,
                                 &mut gemap1,
+                                tol,
                             )?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.last_mut().unwrap() = gv1.point();
