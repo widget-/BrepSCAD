@@ -2405,6 +2405,8 @@ impl<K: Kernel> Evaluator<'_, K> {
                 }
 
                 let shape = if name == "hull" {
+                    let hull_clock = std::time::Instant::now();
+                    let hull_debug = std::env::var_os("BREPSCAD_DEBUG_HULL").is_some();
                     let mut points = Vec::new();
                     for child in &children {
                         // Vertices from the topology are the exact hull inputs;
@@ -2417,10 +2419,30 @@ impl<K: Kernel> Evaluator<'_, K> {
                             }
                         }
                     }
+                    if hull_debug {
+                        eprintln!(
+                            "HULL points={} collected in {:?}",
+                            points.len(),
+                            hull_clock.elapsed()
+                        );
+                    }
                     let (points, faces) = hull::convex_hull(&points)
                         .ok_or_else(|| bad_args("hull", "degenerate hull"))?;
-                    self.kernel
-                        .primitive(Primitive::Polyhedron { points, faces })?
+                    if hull_debug {
+                        eprintln!(
+                            "HULL result points={} faces={} after {:?}",
+                            points.len(),
+                            faces.len(),
+                            hull_clock.elapsed()
+                        );
+                    }
+                    let built = self
+                        .kernel
+                        .primitive(Primitive::Polyhedron { points, faces })?;
+                    if hull_debug {
+                        eprintln!("HULL built in {:?}", hull_clock.elapsed());
+                    }
+                    built
                 } else if children.len() == 1 {
                     children[0].shape
                 } else if let Some((index, radius)) =

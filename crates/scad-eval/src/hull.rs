@@ -62,7 +62,14 @@ pub(crate) fn convex_hull(points: &[Point]) -> Option<(Vec<Point>, Vec<Vec<usize
             .enumerate()
             .filter_map(|(face_index, face)| {
                 let normal = face_normal(&points, *face)?;
-                (dot(normal, subtract(point, points[face.a])) > epsilon).then_some(face_index)
+                // `face_normal` is a cross product, not a unit vector, so the
+                // raw dot product is scaled by the face's area: a sliver with a
+                // tiny normal was "visible" from almost anywhere, its horizon
+                // then covered faces that were actually hidden, and the hull
+                // grew new faces faster than it removed them. Divide out the
+                // area so `epsilon` means a distance for every face.
+                let distance = dot(normal, subtract(point, points[face.a])) / norm(normal);
+                (distance > epsilon).then_some(face_index)
             })
             .collect();
         if visible.is_empty() {
@@ -185,6 +192,21 @@ fn compact(
     faces: Vec<Face>,
     epsilon: f64,
 ) -> Option<(Vec<Point>, Vec<Vec<usize>>)> {
+    if std::env::var_os("BREPSCAD_DEBUG_HULL").is_some() {
+        let mut lengths: Vec<f64> = faces
+            .iter()
+            .filter_map(|face| face_normal(&points, *face).map(norm))
+            .collect();
+        lengths.sort_by(f64::total_cmp);
+        let low = lengths.iter().filter(|length| **length < 1.0e-6).count();
+        let mid = lengths.iter().filter(|length| **length < 1.0e-3).count();
+        eprintln!(
+            "HULL compact: faces={} with_normal={} under_1e-6={low} under_1e-3={mid} smallest={:?}",
+            faces.len(),
+            lengths.len(),
+            lengths.first()
+        );
+    }
     let faces: Vec<Face> = faces
         .into_iter()
         .filter(|face| face_normal(&points, *face).is_some())

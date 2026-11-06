@@ -148,3 +148,26 @@ fn minkowski_needs_one_sphere_and_one_solid() {
     };
     assert!(error.contains("exactly one sphere"), "{error}");
 }
+
+/// Two disjoint spheres hull to a capsule: one sphere's worth of caps plus the
+/// cylinder between them. The incremental hull used to re-triangulate the same
+/// region forever here - the visibility test compared against an unnormalised
+/// face normal, so slivers counted as visible from anywhere and the face list
+/// grew to hundreds of thousands instead of a few thousand.
+#[test]
+fn hull_of_two_disjoint_spheres_is_a_bounded_capsule() {
+    let evaluation =
+        evaluate_source("hull() { sphere(r = 1); translate([10, 0, 0]) sphere(r = 1); }");
+    let mesh = &evaluation.shapes[0].mesh;
+    let volume = signed_volume(mesh);
+    let expected = 4.0 / 3.0 * std::f64::consts::PI + std::f64::consts::PI * 10.0;
+    assert!(
+        (volume - expected).abs() < expected * 0.02,
+        "volume = {volume}, expected about {expected}"
+    );
+    assert!(
+        mesh.triangle_count() < 12_000,
+        "hull exploded to {} triangles",
+        mesh.triangle_count()
+    );
+}
