@@ -263,8 +263,9 @@ fn check(case: &Case) {
 
 /// Cases that currently fail, recorded so the failure is visible and a fix
 /// shows up as this list shrinking. Each one has a dedicated `#[ignore]`d test
-/// below that asserts the *correct* answer.
-const KNOWN_BROKEN: &[&str] = &["overlap_0p01_difference"];
+/// below that asserts the *correct* answer. Empty: the near-tangent difference
+/// below was the only entry.
+const KNOWN_BROKEN: &[&str] = &[];
 
 #[test]
 fn box_pairs_stay_within_their_analytic_volumes() {
@@ -301,15 +302,16 @@ fn box_pairs_stay_within_their_analytic_volumes() {
 }
 
 /// A difference whose cutter overlaps the subject by less than the kernel's
-/// tolerance drops the cut face instead of trimming it.
+/// tolerance.
 ///
-/// The cutter reaches 0.01 into the `x = 5` face, so the answer should be 999:
-/// the subject with a 0.01-wide strip removed. The engine returns 833.33, which
-/// is exactly 1000 - 1000/6: the subject cube with that whole face gone (10
-/// triangles instead of 12). The 0.05, 0.02 and 0.01 tolerance attempts all
-/// treat the overlap as touching and then lose the face.
+/// The cutter reaches 0.01 into the `x = 5` face, so the answer is 999: the
+/// subject with a 0.01-wide strip removed. This used to return 833.33, exactly
+/// 1000 - 1000/6 - the subject cube with that whole face gone. Two things were
+/// wrong: the coplanar test judged the two faces coincident because they are
+/// closer than the modelling tolerance, and the classification probe fell back
+/// to a face *corner* for non-coplanar pairs, which lies on the other solid's
+/// surface.
 #[test]
-#[ignore = "known: near-tangent difference drops the cut face instead of trimming it"]
 fn near_tangent_difference_keeps_the_trimmed_face() {
     let case = cases()
         .into_iter()

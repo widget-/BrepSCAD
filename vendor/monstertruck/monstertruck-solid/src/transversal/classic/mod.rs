@@ -159,32 +159,54 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     cls0.integrate_by_component();
     cls1.integrate_by_component();
     timer.mark("integrate-components");
-    let meshes: HashMap<FaceId<S>, PolygonMesh> = match flat {
-        true => altshell0
-            .face_iter()
-            .zip(poly_shell0.face_iter())
-            .chain(altshell1.face_iter().zip(poly_shell1.face_iter()))
-            .filter_map(|(face, poly)| Some((face.id(), poly.surface()?)))
-            .collect(),
-        false => Default::default(),
-    };
+    // PATCH(BrepSCAD): keep every face's mesh, not only for coplanar pairs. The
+    // triangulation already exists, and without it the classification below has
+    // no interior point to sample.
+    let meshes: HashMap<FaceId<S>, PolygonMesh> = altshell0
+        .face_iter()
+        .zip(poly_shell0.face_iter())
+        .chain(altshell1.face_iter().zip(poly_shell1.face_iter()))
+        .filter_map(|(face, poly)| Some((face.id(), poly.surface()?)))
+        .collect();
     timer.mark("collect-meshes");
-    let probe = |face: &Face<Point3, AltCurve<C, S>, S>| -> Point3 {
-        let from_mesh = || {
-            let mesh = meshes.get(&face.id())?;
+    // Classification samples several points on a face rather than one. A face
+    // that straddles the other solid's surface has no single correct answer, and
+    // a lone probe - especially a vertex, which lies on the neighbouring faces
+    // too - decides it arbitrarily. Spread the samples over the face and let the
+    // vote decide.
+    let probes = |face: &Face<Point3, AltCurve<C, S>, S>| -> Vec<Point3> {
+        let mut points: Vec<Point3> = Vec::new();
+        // Not gated on `flat`: a non-coplanar pair needs an interior probe just
+        // as much.
+        if let Some(point) = coplanar::inner_point(face, tol) {
+            points.push(point);
+        }
+        if let Some(mesh) = meshes.get(&face.id()) {
             let positions = mesh.positions();
-            mesh.faces()
+            let mut triangles: Vec<[Point3; 3]> = mesh
+                .faces()
                 .triangle_iter()
-                .map(|t| t.map(|v| positions[v.pos]))
-                .max_by(|a, b| {
-                    let area = |t: &[Point3; 3]| (t[1] - t[0]).cross(t[2] - t[0]).magnitude();
-                    area(a).total_cmp(&area(b))
-                })
-                .map(|[a, b, c]| Point3::from_vec((a.to_vec() + b.to_vec() + c.to_vec()) / 3.0))
-        };
-        flat.then(|| coplanar::inner_point(face, tol).or_else(from_mesh))
-            .flatten()
-            .unwrap_or_else(|| face.boundaries()[0].vertex_iter().next().unwrap().point())
+                .map(|triangle| triangle.map(|vertex| positions[vertex.pos]))
+                .collect();
+            let area = |t: &[Point3; 3]| (t[1] - t[0]).cross(t[2] - t[0]).magnitude();
+            triangles.sort_by(|left, right| area(right).total_cmp(&area(left)));
+            for triangle in triangles.iter().take(4) {
+                let [a, b, c] = *triangle;
+                points.push(Point3::from_vec(
+                    (a.to_vec() + b.to_vec() + c.to_vec()) / 3.0,
+                ));
+            }
+        }
+        if points.is_empty() {
+            points.push(face.boundaries()[0].vertex_iter().next().unwrap().point());
+        }
+        let mut distinct: Vec<Point3> = Vec::new();
+        for point in points {
+            if !distinct.iter().any(|known| known.distance(point) <= tol) {
+                distinct.push(point);
+            }
+        }
+        distinct
     };
     // PATCH(BrepSCAD): a negated (difference) shell is inverted even when the
     // pair is not coplanar. Without the shift, the subject's outer faces are
@@ -195,27 +217,30 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let (shift0, shift1) = (inverted(&poly_shell0), inverted(&poly_shell1));
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
     unknown0.into_iter().try_for_each(|face| {
-        let pt = probe(&face);
+        let points = probes(&face);
         let rays = if flat { 5 } else { 1 };
-        let mut inside = 0;
-        for k in 0..rays {
-            let dir = hash::take_one_unit(
-                pt + Vector3::new(k as f64 * 0.37, k as f64 * 0.11, k as f64 * 0.23),
-            );
-            let count = poly_shell1.iter().try_fold(0, |count, face| {
-                let poly = face.surface()?;
-                let crossed = poly.signed_crossing_faces(pt, dir);
-                Some(
-                    count
-                        + if face.orientation() {
-                            crossed
-                        } else {
-                            -crossed
-                        },
-                )
-            })?;
-            if count + shift1 >= 1 {
-                inside += 1;
+        let (mut inside, mut total) = (0, 0);
+        for pt in points.iter() {
+            for k in 0..rays {
+                let dir = hash::take_one_unit(
+                    *pt + Vector3::new(k as f64 * 0.37, k as f64 * 0.11, k as f64 * 0.23),
+                );
+                let count = poly_shell1.iter().try_fold(0, |count, face| {
+                    let poly = face.surface()?;
+                    let crossed = poly.signed_crossing_faces(*pt, dir);
+                    Some(
+                        count
+                            + if face.orientation() {
+                                crossed
+                            } else {
+                                -crossed
+                            },
+                    )
+                })?;
+                total += 1;
+                if count + shift1 >= 1 {
+                    inside += 1;
+                }
             }
         }
         // Provenance: the point the classification probed and the verdict it
@@ -229,13 +254,16 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 key,
                 "classify_shell0",
                 format!(
-                    "probe {pt:?} inside={} rays={rays}",
-                    inside * 2 > rays
+                    "points={} inside={} votes={inside}/{total}",
+                    points.len(),
+                    inside * 2 >= total
                 ),
                 &[],
             );
         }
-        if inside * 2 > rays {
+        // A tie means the face straddles the other solid's surface, so keep it:
+        // dropping is what loses material.
+        if inside * 2 >= total {
             and0.push(face);
         } else {
             or0.push(face);
@@ -244,27 +272,30 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })?;
     let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
     unknown1.into_iter().try_for_each(|face| {
-        let pt = probe(&face);
+        let points = probes(&face);
         let rays = if flat { 5 } else { 1 };
-        let mut inside = 0;
-        for k in 0..rays {
-            let dir = hash::take_one_unit(
-                pt + Vector3::new(k as f64 * 0.37, k as f64 * 0.11, k as f64 * 0.23),
-            );
-            let count = poly_shell0.iter().try_fold(0, |count, face| {
-                let poly = face.surface()?;
-                let crossed = poly.signed_crossing_faces(pt, dir);
-                Some(
-                    count
-                        + if face.orientation() {
-                            crossed
-                        } else {
-                            -crossed
-                        },
-                )
-            })?;
-            if count + shift0 >= 1 {
-                inside += 1;
+        let (mut inside, mut total) = (0, 0);
+        for pt in points.iter() {
+            for k in 0..rays {
+                let dir = hash::take_one_unit(
+                    *pt + Vector3::new(k as f64 * 0.37, k as f64 * 0.11, k as f64 * 0.23),
+                );
+                let count = poly_shell0.iter().try_fold(0, |count, face| {
+                    let poly = face.surface()?;
+                    let crossed = poly.signed_crossing_faces(*pt, dir);
+                    Some(
+                        count
+                            + if face.orientation() {
+                                crossed
+                            } else {
+                                -crossed
+                            },
+                    )
+                })?;
+                total += 1;
+                if count + shift0 >= 1 {
+                    inside += 1;
+                }
             }
         }
         // Provenance: the point the classification probed and the verdict it
@@ -278,13 +309,14 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 key,
                 "classify_shell1",
                 format!(
-                    "probe {pt:?} inside={} rays={rays}",
-                    inside * 2 > rays
+                    "points={} inside={} votes={inside}/{total}",
+                    points.len(),
+                    inside * 2 >= total
                 ),
                 &[],
             );
         }
-        if inside * 2 > rays {
+        if inside * 2 >= total {
             and1.push(face);
         } else {
             or1.push(face);
