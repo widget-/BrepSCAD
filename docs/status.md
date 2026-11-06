@@ -617,7 +617,17 @@ For headless UI snapshots, see
   it exists and its trim produces nothing.
 - Volumes are still a weak signal while holes remain - they move in both
   directions as faces are kept or lost. Judge by welded boundary edges, by the
-  viewer, and by tracing a point through the pipeline.
+  viewer, and by tracing a point through the pipeline. A face that lies in a
+  coordinate plane contributes nothing to the divergence-theorem sum, so a
+  missing `y = 0` face can leave the volume untouched while the mesh is open.
+- A cutter whose cap is exactly flush with a triangulated flat face loses most
+  of that face: the coplanar imprint has to split the face's many coplanar
+  triangles against the cap and drops them. The cable clip's screw hole
+  (`cylinder(h = thickness)` through a hull-built tab) shows it as a black
+  rectangle on the `y = 0` side under legacy centering; overhanging the same
+  cutter by 0.1 takes the tab from 37 welded boundary edges to 3. Affects both
+  the mesh and the analytic scene. Not fixed; see
+  [`notes/2026-11-06.md`](notes/2026-11-06.md).
 - `sew` runs on the `and` and `or` halves separately, so an open boundary in
   one of them is expected and `left_boundary > 0` is not a defect. Only
   `Shell::extract` rejections are unambiguous. Two repairs are in place and both
