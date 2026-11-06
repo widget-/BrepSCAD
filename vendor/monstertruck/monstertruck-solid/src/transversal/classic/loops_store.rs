@@ -333,30 +333,46 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
             .for_each(|loops| loops.swap_edge_into_wire(edge_id, new_wire))
     }
 
-    fn add_polygon_vertex(
-        &mut self,
+    /// Finds where a vertex belongs, without changing the store.
+    ///
+    /// `add_polygon_vertex` used to decide and mutate in one step, which cut the
+    /// polygon wire before the geometry store had been told about the same
+    /// vertex. The two layouts then disagreed about the edge indices and the
+    /// geometry side indexed past its own store. Deciding first lets both stores
+    /// be updated from the same indices.
+    fn find_polygon_vertex(
+        &self,
         loops_index: usize,
-        v: &Vertex<P>,
-        emap: &mut HashMap<EdgeId<C>, Edge<P, C>>,
+        pt: P,
         tol: f64,
     ) -> Option<(usize, usize, ParameterKind)>
     where
         P: MetricSpace<Metric = f64>,
-        C: Cut<Point = P> + SearchParameter<CurveParameter, Point = P>,
+        C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P>,
     {
-        let pt = v.point();
         let (wire_index, edge_index, kind) = self[loops_index].search_parameter(pt)?;
         if let ParameterKind::Inner(t) = kind {
             // `search_parameter` returns the nearest parameter with no distance
-            // bound, so a vertex well off the edge is accepted here and then
-            // rejected by the exact curve in `add_geom_vertex`, which loses the
-            // whole pair. Bound it to the modelling tolerance so the polyline and
-            // the curve agree about what "on this edge" means.
+            // bound, so a vertex well off the edge would be accepted here.
             let curve = self[loops_index][wire_index][edge_index].curve();
             if curve.evaluate(t).distance(pt) > tol {
                 return None;
             }
         }
+        Some((wire_index, edge_index, kind))
+    }
+
+    /// Applies the placement `find_polygon_vertex` decided.
+    fn apply_polygon_vertex(
+        &mut self,
+        loops_index: usize,
+        v: &Vertex<P>,
+        emap: &mut HashMap<EdgeId<C>, Edge<P, C>>,
+        (wire_index, edge_index, kind): (usize, usize, ParameterKind),
+    ) -> Option<()>
+    where
+        C: Cut<Point = P> + SearchParameter<CurveParameter, Point = P>,
+    {
         match kind {
             ParameterKind::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
@@ -378,7 +394,7 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
                 self.swap_edge_into_wire(edge_id, &new_wire);
             }
         }
-        Some((wire_index, edge_index, kind))
+        Some(())
     }
 }
 
@@ -406,6 +422,16 @@ impl<C> LoopsStore<Point3, C> {
             || wire_index >= self[loops_index].len()
             || edge_index >= self[loops_index][wire_index].len()
         {
+            if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                eprintln!(
+                    "TRACE loops: index out of range loops={loops_index}/{} wire={wire_index}/{} edge={edge_index}",
+                    self.len(),
+                    match loops_index < self.len() {
+                        true => self[loops_index].len(),
+                        false => 0,
+                    }
+                );
+            }
             return None;
         }
         match kind {
@@ -755,59 +781,63 @@ where
                         let mut pemap1 = HashMap::default();
                         let mut gemap0 = HashMap::default();
                         let mut gemap1 = HashMap::default();
-                        let idx00 =
-                            poly_loops_store0.add_polygon_vertex(face_index0, &pv0, &mut pemap0, tol);
-                        if let Some((wire_index, edge_index, kind)) = idx00 {
+                        if let Some(found) =
+                            poly_loops_store0.find_polygon_vertex(face_index0, pv0.point(), tol)
+                        {
                             geom_loops_store0.add_geom_vertex(
-                                (face_index0, wire_index, edge_index),
+                                (face_index0, found.0, found.1),
                                 &gv0,
-                                kind,
+                                found.2,
                                 &surface1,
                                 &mut gemap0,
                                 tol,
                             )?;
+                            poly_loops_store0.apply_polygon_vertex(face_index0, &pv0, &mut pemap0, found)?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.first_mut().unwrap() = gv0.point();
                         }
-                        let idx01 =
-                            poly_loops_store0.add_polygon_vertex(face_index0, &pv1, &mut pemap1, tol);
-                        if let Some((wire_index, edge_index, kind)) = idx01 {
+                        if let Some(found) =
+                            poly_loops_store0.find_polygon_vertex(face_index0, pv1.point(), tol)
+                        {
                             geom_loops_store0.add_geom_vertex(
-                                (face_index0, wire_index, edge_index),
+                                (face_index0, found.0, found.1),
                                 &gv1,
-                                kind,
+                                found.2,
                                 &surface1,
                                 &mut gemap1,
                                 tol,
                             )?;
+                            poly_loops_store0.apply_polygon_vertex(face_index0, &pv1, &mut pemap1, found);
                             let polyline = intersection_curve.leader_mut();
                             *polyline.last_mut().unwrap() = gv1.point();
                         }
-                        let idx10 =
-                            poly_loops_store1.add_polygon_vertex(face_index1, &pv0, &mut pemap0, tol);
-                        if let Some((wire_index, edge_index, kind)) = idx10 {
+                        if let Some(found) =
+                            poly_loops_store1.find_polygon_vertex(face_index1, pv0.point(), tol)
+                        {
                             geom_loops_store1.add_geom_vertex(
-                                (face_index1, wire_index, edge_index),
+                                (face_index1, found.0, found.1),
                                 &gv0,
-                                kind,
+                                found.2,
                                 &surface0,
                                 &mut gemap0,
                                 tol,
                             )?;
+                            poly_loops_store1.apply_polygon_vertex(face_index1, &pv0, &mut pemap0, found);
                             let polyline = intersection_curve.leader_mut();
                             *polyline.first_mut().unwrap() = gv0.point();
                         }
-                        let idx11 =
-                            poly_loops_store1.add_polygon_vertex(face_index1, &pv1, &mut pemap1, tol);
-                        if let Some((wire_index, edge_index, kind)) = idx11 {
+                        if let Some(found) =
+                            poly_loops_store1.find_polygon_vertex(face_index1, pv1.point(), tol)
+                        {
                             geom_loops_store1.add_geom_vertex(
-                                (face_index1, wire_index, edge_index),
+                                (face_index1, found.0, found.1),
                                 &gv1,
-                                kind,
+                                found.2,
                                 &surface0,
                                 &mut gemap1,
                                 tol,
                             )?;
+                            poly_loops_store1.apply_polygon_vertex(face_index1, &pv1, &mut pemap1, found);
                             let polyline = intersection_curve.leader_mut();
                             *polyline.last_mut().unwrap() = gv1.point();
                         }
