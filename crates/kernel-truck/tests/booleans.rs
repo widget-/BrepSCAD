@@ -545,6 +545,38 @@ fn nested_coplanar_difference_is_closed() {
     );
 }
 
+/// The built-in sample with legacy centering: a through-hole whose cutter end
+/// cap is exactly coplanar with the subject's bottom face. The bottom face must
+/// keep the hole and the cylinder wall must close it, so the result is a closed
+/// solid with the hole's volume gone.
+#[test]
+fn through_hole_whose_cutter_cap_is_flush_is_closed() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [2.0; 3], [1.0, 1.0, 1.0]);
+    let cutter = kernel
+        .primitive(Primitive::Cylinder {
+            radius: 0.5,
+            height: 4.0,
+        })
+        .expect("cylindrical cutter");
+    let cutter = kernel
+        .transform(cutter, Transform::from_translation([1.2, 1.0, 2.0]))
+        .expect("translate cutter");
+    let result = kernel
+        .boolean(BooleanOp::Difference, block, cutter)
+        .expect("flush through-hole difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    let volume = signed_volume(&mesh);
+    let expected = 8.0 - std::f64::consts::PI * 0.25 * 2.0;
+    assert!((volume - expected).abs() < 0.2, "volume = {volume}");
+    assert_eq!(
+        welded_boundary_edges(&mesh),
+        0,
+        "flush through-hole is closed"
+    );
+}
+
 /// A half-space cut on a closed cube must produce a closed half-cube with a
 /// planar cut face.
 #[test]

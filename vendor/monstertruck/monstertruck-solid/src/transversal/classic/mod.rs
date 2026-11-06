@@ -141,6 +141,46 @@ fn trace_shell<C, S>(label: &str, shell: &Shell<Point3, C, S>, point: Point3) {
     eprintln!("TRACE {label}: {hits} of {total} faces cover {point:?}");
 }
 
+/// Reports the and/or/unknown split of a divided shell, and the unknown faces
+/// that the ray-cast classification will have to decide.
+fn trace_classification<C, S>(
+    label: &str,
+    classified: &faces_classification::FacesClassification<Point3, C, S>,
+) {
+    let [and, or, unknown] = classified.and_or_unknown();
+    eprintln!(
+        "TRACE {label}: and={} or={} unknown={}",
+        and.face_iter().count(),
+        or.face_iter().count(),
+        unknown.face_iter().count()
+    );
+    let bounds = |face: &Face<Point3, C, S>| {
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for vertex in face.vertex_iter() {
+            let p = vertex.point();
+            min = Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
+            max = Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
+        }
+        (min, max)
+    };
+    for (status, shell) in [("and", &and), ("or", &or), ("unknown", &unknown)] {
+        for face in shell.face_iter() {
+            let (min, max) = bounds(face);
+            eprintln!(
+                "TRACE {label} {status}: verts={} bounds=[{:.3}, {:.3}, {:.3}]..[{:.3}, {:.3}, {:.3}]",
+                face.vertex_iter().count(),
+                min.x,
+                min.y,
+                min.z,
+                max.x,
+                max.y,
+                max.z
+            );
+        }
+    }
+}
+
 /// Reports how many of a finished solid's faces cover `point`.
 ///
 /// Each operation keeps only one half of the pair it builds, so a face present in
@@ -250,8 +290,16 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         ),
         None => (Vec::new(), Vec::new()),
     };
+    if trace.is_some() {
+        trace_classification("divide/shell0", &cls0);
+        trace_classification("divide/shell1", &cls1);
+    }
     cls0.integrate_by_component();
     cls1.integrate_by_component();
+    if trace.is_some() {
+        trace_classification("integrated/shell0", &cls0);
+        trace_classification("integrated/shell1", &cls1);
+    }
     timer.mark("integrate-components");
     // PATCH(BrepSCAD): keep every face's mesh, not only for coplanar pairs. The
     // triangulation already exists, and without it the classification below has

@@ -29,6 +29,24 @@ Local patches:
   face when `Face::try_new` rejects its wires (boolean-generated wires are often
   non-simple) by falling back to `Face::new_unchecked`, instead of failing the
   whole boolean.
+- `monstertruck-solid/src/transversal/classic/divide_face.rs` unwraps each
+  loop's parameter-space polygon across a periodic axis, then shifts it into one
+  canonical periodic image. A `RevolutionSurface`'s angle comes back from
+  `search_parameter` in `[0, 2π)`, and a seam vertex can report `2π` where its
+  neighbours report `0`. The polygon then has a spike, its signed area flips,
+  and the piece reads as its complement and is dropped. Because the wrap
+  depends on the sign of a cross product, the failure appeared only for some
+  translations of the same geometry; `translate([0.1, 0.1, 0.1])` around
+  `cube - cylinder` was enough.
+- `monstertruck-solid/src/transversal/classic/loops_store.rs` judges the
+  "curve runs along both face boundaries" filter at `tol`, not `tol * 10`. At
+  ten modelling tolerances, a real cut 0.2 from a wall seam counted as a
+  boundary curve and was discarded, which lost the cut through a face.
+- `monstertruck-solid/src/transversal/classic/divide_face.rs` and `mod.rs` add
+  `BREPSCAD_DEBUG_TRACE` output for the divide stage: each face's loops with
+  their signed parameter area and status, the and/or/unknown split before and
+  after component integration, and the per-face loop stores. Without it the
+  stage reports only that a face vanished.
 - `monstertruck-solid/src/transversal/classic/loops_store.rs` snaps a projected
   vertex to the nearer end of its curve when the intersection parameter lands
   on, or a rounding error outside, the curve's range.
@@ -100,6 +118,14 @@ normalized entry point. If the engine still cannot produce a valid shell, the
 adapter falls back to an axis-aligned slab clip, keeps the subject for a
 sub-millimetre sliver, or keeps the subject rather than rendering an inside-out
 cavity. Set `BREPSCAD_DEBUG_BOOLEAN=1` to log each attempt and rejection.
+
+A difference tool whose end cap lies exactly on a subject face is slid outward
+along that axis before the first attempt, when its other end already reaches
+past the subject. The moved material is outside the subject, so the cut is
+identical, but the coplanar pair no longer exists. This matters when the tool
+also crosses a side face: the legacy-centering built-in sample (a corner groove)
+lost the groove walls through the coplanar imprint, and moving the cutter 2e-3
+out along Z takes it from volume 7.744 / ten boundary edges to 7.421 / three.
 
 ## Truck stack (retained, unused on this branch)
 

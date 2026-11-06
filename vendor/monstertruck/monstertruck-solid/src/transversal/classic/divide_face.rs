@@ -14,6 +14,39 @@ use monstertruck_topology::*;
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::Deref;
 
+/// Keep a parameter-space polygon contiguous across a periodic axis, then put
+/// it in the canonical image whose minimum lies inside the first period.
+///
+/// A `RevolutionSurface`'s turn angle is periodic, and `search_parameter`
+/// returns it in `[0, 2π)`. A vertex on the seam can come back as `2π` instead
+/// of `0` (the sign of `proj_angle`'s cross product decides), which turns a
+/// rectangle into a self-overlapping polygon with the wrong signed area - a
+/// piece of the face then reads as its complement and is dropped. Unwrapping
+/// against the previous point fixes the seam; the final shift makes every loop
+/// of the face agree on one periodic image.
+fn unwrap_periodic(points: &mut [Point2], period_u: Option<f64>, period_v: Option<f64>) {
+    for (component, period) in [(0usize, period_u), (1usize, period_v)] {
+        let Some(period) = period.filter(|period| *period > 0.0) else {
+            continue;
+        };
+        for index in 1..points.len() {
+            let previous = points[index - 1][component];
+            let value = points[index][component];
+            points[index][component] = value + ((previous - value) / period).round() * period;
+        }
+        let minimum = points
+            .iter()
+            .map(|point| point[component])
+            .fold(f64::INFINITY, f64::min);
+        if minimum.is_finite() {
+            let shift = (minimum / period).floor() * period;
+            for point in points.iter_mut() {
+                point[component] -= shift;
+            }
+        }
+    }
+}
+
 fn create_parameter_boundary<P, C, S>(
     face: &Face<P, C, S>,
     wire: &Wire<P, C>,
@@ -23,12 +56,12 @@ fn create_parameter_boundary<P, C, S>(
 where
     P: Copy,
     C: BoundedCurve<Point = P> + ParameterDivision1D<Point = P>,
-    S: Clone + SearchParameter<SurfaceParameter, Point = P>,
+    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = P>,
 {
     let surface = face.surface();
     let pt = wire.front_vertex().unwrap().point();
     let p: Point2 = surface.search_parameter(pt, None, 100)?.into();
-    let vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
+    let mut vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
         let poly = polys.entry(edge.id()).or_insert_with(|| {
             let curve = edge.curve();
             let div = curve.parameter_division(curve.range_tuple(), tol).1;
@@ -46,6 +79,7 @@ where
         vec.append(&mut add?);
         Some(vec)
     })?;
+    unwrap_periodic(&mut vec, surface.period_u(), surface.period_v());
     Some(PolylineCurve(vec))
 }
 
@@ -78,6 +112,21 @@ where
     let (mut pre_faces, mut negative_wires) = (Vec::new(), Vec::new());
     let mut map = HashMap::default();
     let surface = face.surface();
+    if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        for vertex in face.vertex_iter() {
+            let point = vertex.point();
+            for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+        eprintln!(
+            "TRACE divide: face {min:.3?}..{max:.3?} loops={}",
+            loops.len()
+        );
+    }
     let scale = |at: Point2| {
         surface
             .uder(at.x, at.y)
@@ -88,7 +137,26 @@ where
     loops.iter().try_for_each(|wire| {
         let poly = create_parameter_boundary(face, wire, &mut map, tol)?;
         let area = poly.area();
+        if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+            eprintln!(
+                "TRACE divide: loop area={area:.6} status={:?} boundary={} face_orientation={}",
+                wire.status(),
+                wire.is_boundary(),
+                face.orientation()
+            );
+            if area < 0.0 {
+                let points = poly
+                    .iter()
+                    .map(|p| format!("({:.3}, {:.3})", p.x, p.y))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                eprintln!("TRACE divide: negative loop points {points}");
+            }
+        }
         if negligible(area, poly.front()) {
+            if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                eprintln!("TRACE divide: skipped a negligible loop, area={area:.6}");
+            }
             return Some(());
         }
         match area > 0.0 {
@@ -118,8 +186,20 @@ where
             (Some(i), _) => pre_faces[i].push(chunk),
             // If the sum of areas is zero, the face is canceled.
             // This happens when an intersection loop exactly matches the face boundary.
-            (None, Some(&i)) => pre_faces[i].clear(),
-            (None, None) => {}
+            (None, Some(&i)) => {
+                if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                    eprintln!(
+                        "TRACE divide: canceled pre-face {i}, chunk_area={chunk_area:.6}, loop_area={:.6}",
+                        pre_faces[i][0].poly.area()
+                    );
+                }
+                pre_faces[i].clear();
+            }
+            (None, None) => {
+                if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                    eprintln!("TRACE divide: dropped a negative loop with no parent");
+                }
+            }
         }
         Some(())
     })?;
@@ -186,6 +266,9 @@ where
             Some((new_face, status))
         })
         .collect::<Option<Vec<_>>>()?;
+    if vec.is_empty() && std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+        eprintln!("TRACE divide: a face produced no pre-faces");
+    }
     Some(vec)
 }
 

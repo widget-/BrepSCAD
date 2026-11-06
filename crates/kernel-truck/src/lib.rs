@@ -264,6 +264,36 @@ fn slab_difference(a: &Solid, b: &Solid, tolerance: f64) -> Option<Solid> {
     None
 }
 
+/// Move a difference tool outward along any axis where its end cap lies on the
+/// subject's face and its other end already reaches past the subject.
+///
+/// No material inside the subject changes: the cap is the tool's extreme along
+/// that axis, so moving it further out only adds volume the subject does not
+/// occupy. What it does change is that the cap is no longer coplanar with the
+/// subject's face, which the backend handles badly when the tool also crosses a
+/// side face. A cap whose other end is *inside* the subject is left alone -
+/// moving that one would leave a skin of uncut material.
+fn open_flush_tool(a: &Solid, b: &Solid) -> Option<Solid> {
+    let ((a_min, a_max), (b_min, b_max)) = (solid_bounds(a)?, solid_bounds(b)?);
+    let mut offset = [0.0; 3];
+    let mut moved = false;
+    for axis in 0..3 {
+        let scale = (a_max[axis] - a_min[axis]).abs().max(1.0);
+        let flush = 1.0e-4 * scale;
+        let margin = 1.0e-2 * scale;
+        let lower_flush = (b_min[axis] - a_min[axis]).abs() <= flush;
+        let upper_flush = (b_max[axis] - a_max[axis]).abs() <= flush;
+        if lower_flush && b_max[axis] > a_max[axis] + margin {
+            offset[axis] = -1.0e-3 * scale;
+            moved = true;
+        } else if upper_flush && b_min[axis] < a_min[axis] - margin {
+            offset[axis] = 1.0e-3 * scale;
+            moved = true;
+        }
+    }
+    moved.then(|| builder::translated(b, Vector3::new(offset[0], offset[1], offset[2])))
+}
+
 /// A difference result must keep the subject's unreachable slabs and enclose
 /// positive volume. A non-positive volume means the engine returned the
 /// inverted tool or a cavity surface instead of the cut subject.
@@ -618,6 +648,19 @@ impl TruckKernel {
         full_ladder: bool,
     ) -> KernelResult<ShapeId> {
         let started = std::time::Instant::now();
+
+        // A cutter cap lying exactly on the subject's face is the backend's
+        // weakest case: the coplanar imprint runs, and on a groove (a cutter
+        // crossing two side faces as well) it loses the wall pieces that the
+        // transversal path would have kept. Sliding the tool outward along that
+        // axis is exact - the moved material is outside the subject - and turns
+        // the degeneracy into an ordinary crossing.
+        let opened = if op == BooleanOp::Difference {
+            open_flush_tool(a, b)
+        } else {
+            None
+        };
+        let b = opened.as_ref().unwrap_or(b);
 
         // Exact geometry first. A union must contain both operands: master
         // shapeops can return an amputated result (coplanar face pairs get

@@ -645,6 +645,22 @@ where
     let mut poly_loops_store1: LoopsStore<_, _> = poly_shell1.face_iter().collect();
     let store0_len = geom_loops_store0.len();
     let store1_len = geom_loops_store1.len();
+    if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+        for (label, shell) in [("shell0", poly_shell0), ("shell1", poly_shell1)] {
+            for (index, face) in shell.face_iter().enumerate() {
+                let mut min = [f64::INFINITY; 3];
+                let mut max = [f64::NEG_INFINITY; 3];
+                for vertex in face.vertex_iter() {
+                    let point = vertex.point();
+                    for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+                        min[axis] = min[axis].min(value);
+                        max[axis] = max[axis].max(value);
+                    }
+                }
+                eprintln!("TRACE face/{label}[{index}]: {min:.3?}..{max:.3?}");
+            }
+        }
+    }
     let bounds = |shell: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>| -> Vec<Option<BoundingBox<Point3>>> {
         shell
             .face_iter()
@@ -710,6 +726,14 @@ where
         let surface0 = geom_shell0[face_index0].surface();
         let surface1 = geom_shell1[face_index1].surface();
         let planar = planes0[face_index0].is_some() && planes1[face_index1].is_some();
+        if traced {
+            eprintln!(
+                "TRACE loops: pair {face_index0} x {face_index1} interference={} tris={}x{} planar={planar}",
+                polygon0.extract_interference(&polygon1).len(),
+                polygon0.faces().triangle_iter().count(),
+                polygon1.faces().triangle_iter().count()
+            );
+        }
         let mut curves = match intersection_curve::intersection_curves(
             surface0.clone(),
             &polygon0,
@@ -734,12 +758,23 @@ where
                     !polyline.windows(2).all(|pair| {
                         (0..=4).all(|k| {
                             let p = pair[0] + (pair[1] - pair[0]) * (k as f64 / 4.0);
-                            along_boundary(&poly_shell0[face_index0], p, tol * 10.0)
-                                && along_boundary(&poly_shell1[face_index1], p, tol * 10.0)
+                            along_boundary(&poly_shell0[face_index0], p, tol)
+                                && along_boundary(&poly_shell1[face_index1], p, tol)
                         })
                     })
                 })
                 .collect();
+        }
+        if curves.is_empty() && traced {
+            eprintln!(
+                "TRACE loops: pair {face_index0} x {face_index1} found no intersection curve (planar={planar})"
+            );
+        }
+        if traced && !curves.is_empty() {
+            eprintln!(
+                "TRACE loops: pair {face_index0} x {face_index1} found {} curve(s) (planar={planar})",
+                curves.len()
+            );
         }
         if curves.is_empty() && planar {
             for points in super::coplanar::planar_intersections(
@@ -888,6 +923,21 @@ where
                     Some(())
                 })
         })?;
+    if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+        for (label, store) in [
+            ("shell0", &poly_loops_store0),
+            ("shell1", &poly_loops_store1),
+        ] {
+            for (index, loops) in store.iter().enumerate() {
+                let wires = loops
+                    .iter()
+                    .map(|wire| format!("{}e/{:?}", wire.len(), wire.status()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                eprintln!("TRACE loops store/{label}[{index}]: {wires}");
+            }
+        }
+    }
     Some(LoopsStoreQuadruple {
         geom_loops_store0,
         poly_loops_store0,
