@@ -400,8 +400,17 @@ impl<C> LoopsStore<Point3, C> {
             }
             ParameterKind::Inner(_) => {
                 let curve = self[loops_index][wire_index][edge_index].curve();
-                let (pt, t, _) =
-                    curve_surface_projection(&curve, None, another_surface, None, v.point(), 100)?;
+                let projection =
+                    curve_surface_projection(&curve, None, another_surface, None, v.point(), 100);
+                let Some((pt, t, _)) = projection else {
+                    if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                        eprintln!(
+                            "TRACE loops: curve_surface_projection failed on face {loops_index} wire {wire_index} edge {edge_index} at {:?}",
+                            v.point()
+                        );
+                    }
+                    return None;
+                };
                 let edge = self[loops_index][wire_index][edge_index].absolute_clone();
                 let (front, back) = edge.curve().range_tuple();
                 // PATCH(BrepSCAD): the projected parameter can land on, or a
@@ -562,8 +571,25 @@ where
             })
         };
     let curves_of = |&(face_index0, face_index1): &(usize, usize)| {
-        let polygon0 = poly_shell0[face_index0].surface()?;
-        let polygon1 = poly_shell1[face_index1].surface()?;
+        let traced = std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some();
+        let polygon0 = match poly_shell0[face_index0].surface() {
+            Some(polygon) => polygon,
+            None => {
+                if traced {
+                    eprintln!("TRACE loops: shell0 face {face_index0} has no polygon");
+                }
+                return None;
+            }
+        };
+        let polygon1 = match poly_shell1[face_index1].surface() {
+            Some(polygon) => polygon,
+            None => {
+                if traced {
+                    eprintln!("TRACE loops: shell1 face {face_index1} has no polygon");
+                }
+                return None;
+            }
+        };
         let surface0 = geom_shell0[face_index0].surface();
         let surface1 = geom_shell1[face_index1].surface();
         let planar = planes0[face_index0].is_some() && planes1[face_index1].is_some();
@@ -575,7 +601,14 @@ where
         ) {
             Some(curves) => curves,
             None if planar => Vec::new(),
-            None => return None,
+            None => {
+                if traced {
+                    eprintln!(
+                        "TRACE loops: no intersection curve for {face_index0} x {face_index1} (planar={planar})"
+                    );
+                }
+                return None;
+            }
         };
         if let Some(tol) = flat {
             curves = curves
@@ -631,7 +664,17 @@ where
             curves
                 .into_iter()
                 .try_for_each(|(polyline, mut intersection_curve)| {
-                    let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
+                    let status = match ShapesOpStatus::from_is_curve(&intersection_curve) {
+                        Some(status) => status,
+                        None => {
+                            if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                                eprintln!(
+                                    "TRACE loops: no status for the curve between {face_index0} and {face_index1}"
+                                );
+                            }
+                            return None;
+                        }
+                    };
                     let (status0, status1) = match (ori0, ori1) {
                         (true, true) => (status, status.not()),
                         (true, false) => (status.not(), status.not()),
