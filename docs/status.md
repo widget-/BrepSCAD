@@ -650,15 +650,26 @@ For headless UI snapshots, see
 
 ## Recommended next steps
 
-A corpus run over BOSL2 and MCAD (109 files) now parses every file. Full
-evaluation succeeds on 89 files (88 with no geometry, plus BOSL2
-`examples/lsystems.scad`), with 9 kernel boolean failures, 1 BOSL2 assertion
-failure, 3 language errors from standalone library files, 2 geometry errors,
-4 other evaluation errors, and 1 timeout (`spring_handle.scad`, which is
-functionally correct at reduced size but too slow at its default size). The arithmetic, built-in, primitive,
-color/render, loop, search, and empty-boolean gaps from the previous pass are
-fixed; the remaining failures are mostly library-context, kernel, and deeper
-BOSL2 math/semantics issues.
+A corpus run over BOSL2 and MCAD (109 files) parses every file. Full
+evaluation succeeds on 95 files (88 with no geometry, plus BOSL2
+`examples/attachments.scad` and `examples/lsystems.scad`, MCAD
+`bitmap/alphabet_block.scad`, `bitmap/height_map.scad`,
+`bitmap/letter_necklace.scad`, `bitmap/test_name_tag.scad`, and
+`trochoids.scad`), with 1 kernel failure
+(`examples/spherical_patch.scad`: the generated polyhedron shell is
+rejected as not closed), 3 language errors from standalone library files,
+3 geometry errors, 6 other evaluation errors, and 1 timeout
+(`spring_handle.scad`, which is functionally correct at reduced size but
+too slow at its default size). There are no assertion failures, and
+`MCAD/bitmap/letter_necklace.scad` moved from a kernel failure to ok. The
+arithmetic, built-in, primitive, color/render, loop, search, and
+empty-boolean gaps from the previous pass are fixed; the remaining
+failures are mostly library-context, kernel, and deeper BOSL2
+math/semantics issues.
+
+Run the corpus with `CORPUS_TIMEOUT=20`: at the script's default 8 s,
+`MCAD/bitmap/test_name_tag.scad` takes about 10 s and is reported as a
+timeout even though it completes.
 
 “ok” here only means the file evaluated without an error; nearly all are pure
 library files with no top-level geometry. BOSL2’s module surface is now partly
