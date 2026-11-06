@@ -174,6 +174,24 @@ enum ParameterKind {
     Inner(f64),
 }
 
+/// What the geometry side did with a vertex, so the polygon side can follow it.
+///
+/// The two stores used to classify the same vertex independently - once from the
+/// polyline parameter, once from the exact curve's projection - and disagreed
+/// wherever the polyline and the curve differ enough to move the parameter across
+/// a range end. The polygon store then cut an edge the geometry store had only
+/// snapped to, and the next index past that point was off by one. The geometry
+/// side decides now, and this says what it decided.
+#[derive(Clone, Debug, Copy, PartialEq)]
+enum Placement {
+    /// Snapped to the edge's front vertex, no cut.
+    Front,
+    /// Snapped to the edge's back vertex, no cut.
+    Back,
+    /// Cut the edge in two at the given parameter.
+    Cut(f64),
+}
+
 impl ParameterKind {
     fn try_new(t: f64, (t0, t1): (f64, f64)) -> Option<ParameterKind> {
         if t0.near(&t) {
@@ -362,31 +380,45 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
         Some((wire_index, edge_index, kind))
     }
 
-    /// Applies the placement `find_polygon_vertex` decided.
+    /// Applies the placement the geometry side decided.
+    ///
+    /// `kind` is this store's own classification of the vertex and `placement` is
+    /// what the geometry store did with it. They can disagree: the geometry side
+    /// re-derives the parameter from the exact curve and snaps to an existing
+    /// vertex when it lands at a range end, while this store classified from the
+    /// polyline. Following `placement` keeps the two layouts the same shape, so a
+    /// cut on one side is a cut on the other.
     fn apply_polygon_vertex(
         &mut self,
         loops_index: usize,
         v: &Vertex<P>,
         emap: &mut HashMap<EdgeId<C>, Edge<P, C>>,
         (wire_index, edge_index, kind): (usize, usize, ParameterKind),
+        placement: Placement,
     ) -> Option<()>
     where
         C: Cut<Point = P> + SearchParameter<CurveParameter, Point = P>,
     {
-        match kind {
-            ParameterKind::Front => {
+        match placement {
+            Placement::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_front()
                     .clone();
                 self.change_vertex(&old_vertex, v, emap);
             }
-            ParameterKind::Back => {
+            Placement::Back => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_back()
                     .clone();
                 self.change_vertex(&old_vertex, v, emap);
             }
-            ParameterKind::Inner(t) => {
+            Placement::Cut(_) => {
+                // Cut at this store's own parameter: the polyline and the curve
+                // do not share a parameterisation, so the geometry side's `t`
+                // would land somewhere else entirely.
+                let ParameterKind::Inner(t) = kind else {
+                    return None;
+                };
                 let edge = self[loops_index][wire_index][edge_index].absolute_clone();
                 let edge_id = edge.id();
                 let (edge0, edge1) = edge.cut_with_parameter(v, t)?;
@@ -407,7 +439,7 @@ impl<C> LoopsStore<Point3, C> {
         another_surface: &S,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
         tol: f64,
-    ) -> Option<()>
+    ) -> Option<Placement>
     where
         C: Cut<Point = Point3, Vector = Vector3>
             + SearchNearestParameter<CurveParameter, Point = Point3>,
@@ -434,13 +466,14 @@ impl<C> LoopsStore<Point3, C> {
             }
             return None;
         }
-        match kind {
+        let placement = match kind {
             ParameterKind::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_front()
                     .clone();
                 v.set_point(old_vertex.point());
                 self.change_vertex(&old_vertex, v, emap);
+                Placement::Front
             }
             ParameterKind::Back => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
@@ -448,6 +481,7 @@ impl<C> LoopsStore<Point3, C> {
                     .clone();
                 v.set_point(old_vertex.point());
                 self.change_vertex(&old_vertex, v, emap);
+                Placement::Back
             }
             ParameterKind::Inner(_) => {
                 let curve = self[loops_index][wire_index][edge_index].curve();
@@ -494,20 +528,23 @@ impl<C> LoopsStore<Point3, C> {
                     let old_vertex = edge.absolute_front().clone();
                     v.set_point(old_vertex.point());
                     self.change_vertex(&old_vertex, v, emap);
+                    Placement::Front
                 } else if back <= t || back.near(&t) {
                     let old_vertex = edge.absolute_back().clone();
                     v.set_point(old_vertex.point());
                     self.change_vertex(&old_vertex, v, emap);
+                    Placement::Back
                 } else {
                     v.set_point(pt);
                     let edge_id = edge.id();
                     let (edge0, edge1) = edge.cut_with_parameter(v, t)?;
                     let new_wire: Wire<_, _> = vec![edge0, edge1].into();
                     self.swap_edge_into_wire(edge_id, &new_wire);
+                    Placement::Cut(t)
                 }
             }
-        }
-        Some(())
+        };
+        Some(placement)
     }
 }
 
@@ -784,7 +821,7 @@ where
                         if let Some(found) =
                             poly_loops_store0.find_polygon_vertex(face_index0, pv0.point(), tol)
                         {
-                            geom_loops_store0.add_geom_vertex(
+                            let placement = geom_loops_store0.add_geom_vertex(
                                 (face_index0, found.0, found.1),
                                 &gv0,
                                 found.2,
@@ -792,14 +829,14 @@ where
                                 &mut gemap0,
                                 tol,
                             )?;
-                            poly_loops_store0.apply_polygon_vertex(face_index0, &pv0, &mut pemap0, found)?;
+                            poly_loops_store0.apply_polygon_vertex(face_index0, &pv0, &mut pemap0, found, placement)?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.first_mut().unwrap() = gv0.point();
                         }
                         if let Some(found) =
                             poly_loops_store0.find_polygon_vertex(face_index0, pv1.point(), tol)
                         {
-                            geom_loops_store0.add_geom_vertex(
+                            let placement = geom_loops_store0.add_geom_vertex(
                                 (face_index0, found.0, found.1),
                                 &gv1,
                                 found.2,
@@ -807,14 +844,14 @@ where
                                 &mut gemap1,
                                 tol,
                             )?;
-                            poly_loops_store0.apply_polygon_vertex(face_index0, &pv1, &mut pemap1, found);
+                            poly_loops_store0.apply_polygon_vertex(face_index0, &pv1, &mut pemap1, found, placement)?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.last_mut().unwrap() = gv1.point();
                         }
                         if let Some(found) =
                             poly_loops_store1.find_polygon_vertex(face_index1, pv0.point(), tol)
                         {
-                            geom_loops_store1.add_geom_vertex(
+                            let placement = geom_loops_store1.add_geom_vertex(
                                 (face_index1, found.0, found.1),
                                 &gv0,
                                 found.2,
@@ -822,14 +859,14 @@ where
                                 &mut gemap0,
                                 tol,
                             )?;
-                            poly_loops_store1.apply_polygon_vertex(face_index1, &pv0, &mut pemap0, found);
+                            poly_loops_store1.apply_polygon_vertex(face_index1, &pv0, &mut pemap0, found, placement)?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.first_mut().unwrap() = gv0.point();
                         }
                         if let Some(found) =
                             poly_loops_store1.find_polygon_vertex(face_index1, pv1.point(), tol)
                         {
-                            geom_loops_store1.add_geom_vertex(
+                            let placement = geom_loops_store1.add_geom_vertex(
                                 (face_index1, found.0, found.1),
                                 &gv1,
                                 found.2,
@@ -837,7 +874,7 @@ where
                                 &mut gemap1,
                                 tol,
                             )?;
-                            poly_loops_store1.apply_polygon_vertex(face_index1, &pv1, &mut pemap1, found);
+                            poly_loops_store1.apply_polygon_vertex(face_index1, &pv1, &mut pemap1, found, placement)?;
                             let polyline = intersection_curve.leader_mut();
                             *polyline.last_mut().unwrap() = gv1.point();
                         }
