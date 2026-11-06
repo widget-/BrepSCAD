@@ -94,6 +94,11 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         input_faces: compressed.faces.len(),
         ..Default::default()
     });
+    // Coincidence of vertices is a `confusion` question, not a modelling one.
+    // Welding within `tol` merged vertices that are merely close, which pinches
+    // a wire through itself (the `NotSimpleWire` class) and collapses edges
+    // (the `SameVertex` class).
+    let weld = Precision::from_modelling(tol).confusion;
     let mut vertices: Vec<Point3> = Vec::new();
     let vertex_map: Vec<usize> = compressed
         .vertices
@@ -101,7 +106,7 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .map(|p| {
             vertices
                 .iter()
-                .position(|q| q.distance(*p) < tol)
+                .position(|q| q.distance(*p) < weld)
                 .unwrap_or_else(|| {
                     vertices.push(*p);
                     vertices.len() - 1
@@ -329,6 +334,7 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
     stats: &mut Option<SewStats>,
 ) {
+    let weld = Precision::from_modelling(tol).confusion;
     let middle = |curve: &C| {
         let (t0, t1) = curve.range_tuple();
         curve.subs((t0 + t1) / 2.0)
@@ -358,10 +364,13 @@ fn merge_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                     presearch_samples(&known.curve, known.curve.range_tuple(), PRESEARCH_DIVISION)
                 });
                 let hint = samples.hint(m);
+                // Coincidence of two edges is a `confusion` question: they were
+                // computed independently, so they agree to rounding, not to the
+                // modelling tolerance.
                 if known
                     .curve
                     .search_nearest_parameter(m, Some(hint), 30)
-                    .is_some_and(|t| known.curve.subs(t).distance(m) < tol)
+                    .is_some_and(|t| known.curve.subs(t).distance(m) < weld)
                 {
                     if let Some(stats) = stats.as_mut() {
                         stats.merge_successes += 1;
