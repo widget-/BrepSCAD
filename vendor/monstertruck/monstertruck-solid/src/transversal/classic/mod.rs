@@ -55,7 +55,17 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 let mut points = ic.leader().as_slice().to_vec();
                 points.dedup_by(|lhs, rhs| (*lhs).near(&*rhs));
                 if points.len() < 2 {
-                    return None;
+                    // A degenerate intersection curve - a single point - carries no
+                    // geometry, but returning `None` here discards the whole pair
+                    // and every face in it. Pass a zero-length curve through
+                    // instead and let the collapsed-edge pass remove it.
+                    let Some(point) = points.first().copied() else {
+                        return None;
+                    };
+                    points = vec![point, point];
+                    if std::env::var_os("BREPSCAD_DEBUG_TRACE").is_some() {
+                        eprintln!("TRACE altshell_to_shell: degenerate intersection curve kept");
+                    }
                 }
                 let denominator = (points.len() - 1) as f64;
                 let knot_vec = KnotVector::from(
@@ -403,7 +413,16 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     and0.append(&mut and1);
     or0.append(&mut or1);
 
-    let (and, or) = (altshell_to_shell(&and0)?, altshell_to_shell(&or0)?);
+    let and_shell = altshell_to_shell(&and0);
+    let or_shell = altshell_to_shell(&or0);
+    if trace.is_some() && (and_shell.is_none() || or_shell.is_none()) {
+        eprintln!(
+            "TRACE failed at altshell_to_shell (and {}, or {})",
+            and_shell.is_some(),
+            or_shell.is_some()
+        );
+    }
+    let (and, or) = (and_shell?, or_shell?);
     timer.mark("assemble");
     if let Some(point) = trace {
         trace_shell("assembled/and", &and, point);
