@@ -494,13 +494,11 @@ fn rounded_offset_scene_is_fully_analytic() {
 /// useless - it would flag good geometry - so this pins the convention the
 /// overlay depends on.
 ///
-/// It fails: the analytic scene reports the bore wall's normal as `[0, 1, 0]`
-/// where the tessellation reports `[0, -1, 0]`. The mesh is right (checked
-/// independently: every bore triangle faces the axis), so `scene_from_solid`
-/// disagrees with the mesh it is meant to mirror, and the viewer paints a
-/// correctly cut hole red.
+/// It used to fail: the analytic scene reported the bore wall's normal as
+/// `[0, 1, 0]` where the tessellation reported `[0, -1, 0]`, because a
+/// revolution surface computes its normal outward from the axis while the
+/// tessellation of the same face winds the other way.
 #[test]
-#[ignore = "known: the analytic scene inverts cavity-wall normals"]
 fn a_cavity_wall_faces_out_of_the_material() {
     let mut kernel = TruckKernel::new();
     let block = cube(&mut kernel, [2.0, 2.0, 2.0], [0.0; 3]);
@@ -539,4 +537,25 @@ fn a_cavity_wall_faces_out_of_the_material() {
         + hit.normal[1] * towards_eye[1]
         + hit.normal[2] * towards_eye[2];
     assert!(facing > 0.0, "the bore wall is not front-facing: {facing}");
+}
+
+/// Baseline for the cavity case: a standalone cylinder's side must face away
+/// from its axis, so a ray arriving from outside meets a front face.
+#[test]
+fn a_cylinder_side_faces_away_from_its_axis() {
+    let mut kernel = TruckKernel::new();
+    let cylinder = kernel
+        .primitive(Primitive::Cylinder {
+            radius: 1.0,
+            height: 2.0,
+        })
+        .expect("cylinder");
+    let scene = kernel.raycast_scene(cylinder, 0.01).expect("scene");
+    let ray = Ray::new([5.0, 0.0, 0.0], [-1.0, 0.0, 0.0]);
+    let hit = scene.cast(&ray).expect("side hit");
+    assert!(
+        hit.normal[0] > 0.5,
+        "the side faces its own axis: {:?}",
+        hit.normal
+    );
 }

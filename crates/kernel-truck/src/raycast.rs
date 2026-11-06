@@ -140,6 +140,11 @@ impl Parameterization {
 
     fn flips_normal(&self) -> bool {
         match self {
+            // A revolution surface computes its normal outward from the axis,
+            // while the tessellation of the same face winds the other way. The
+            // flip has to compensate, so these defer to `face.orientation()`
+            // alone; without this a correctly cut hole renders inside-out.
+            Self::Revolved { .. } => true,
             Self::Sphere { normal_flip, .. } | Self::Spline { normal_flip, .. } => *normal_flip,
             _ => false,
         }
