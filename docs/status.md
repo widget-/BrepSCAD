@@ -247,6 +247,18 @@ vendor/
     window or for a T-spline.
 - Truck is the only implemented backend. OCCT and SolidCore are candidates,
   not adapters yet.
+- Boolean diagnostics, all opt-in and all compiled out of a release build:
+  - `BREPSCAD_DEBUG_BOOLEAN`, `BREPSCAD_DEBUG_PLANAR`, `BREPSCAD_DEBUG_SEW`
+    print per-boolean, per-planar-piece and per-`sew` stage state.
+    `BREPSCAD_DEBUG_SEW_LIMIT` raises the cap on how many defective wires are
+    dumped (default 20).
+  - `BREPSCAD_DUMP_MESH=<prefix>` writes each result mesh as OFF, so its
+    triangles, winding and boundary edges can be inspected outside the engine.
+  - `--features provenance` with `BREPSCAD_PROVENANCE=1` dumps each face's
+    lineage: the operation that created it (with the classification probe and
+    its verdict) and the operation that dropped it (with the defect class and
+    the shell's bounds). Without the feature the recorder does not exist - no
+    field, no allocation, no call site.
 - `truck-shapeops` is vendored with a local fallible-face patch: malformed
   generated wires return `None` and trigger the boolean retry path instead of
   panicking. See [`vendor/README.md`](../vendor/README.md).
@@ -590,15 +602,23 @@ For headless UI snapshots, see
   boundary edges. Its `prism_stack()` tapered prisms collapse to knife edges,
   producing self-intersecting polyhedron faces and coincident faces between
   solids, which is the source of the remaining boolean failures.
-- The planar fallback for those cutouts still cannot close the unions. On the
-  reduced one-clip fixture it fails 401 of 577 face divisions: 299 from
-  `interior_point` (its probe clearance floor, `tol * 4`, is wider than the
-  knife-edge slivers) and 102 from the half-edge walk revisiting a zero-area
-  boundary spike whose edges are a hair above the `tol` vertex snap. Fixing
-  either class alone changes model volumes and adds open edges; the missing
-  step is propagating split points across adjacent faces before sewing.
-  `BREPSCAD_DEBUG_PLANAR` tags each failure exit and reports interior-point
-  geometry; branch `diag/planar-divide` carries the diagnostics.
+- The planar fallback for those cutouts still cannot close the unions. The
+  reduced one-clip fixture now loses 4 shells to `Shell::extract` (3
+  `NotClosedWire`, 1 `NotSimpleWire`), down from 40, and its mesh has 46 welded
+  boundary edges. Two of its edges are inconsistently wound, both on the `x = 6`
+  wall at a pinch point. Volumes are not a usable signal while those holes
+  remain - they move in both directions as faces are kept or lost, so judge by
+  welded boundary edges and by the viewer, not by volume.
+- `sew` runs on the `and` and `or` halves separately, so an open boundary in
+  one of them is expected and `left_boundary > 0` is not a defect. Only
+  `Shell::extract` rejections are unambiguous. Two repairs are in place and both
+  are repairs at the end of the pipeline rather than at the producer:
+  `drop_wire_spikes` unwinds an edge followed by its own reverse, and
+  `split_wire_at_repeats` turns a wire that revisits a vertex into a second
+  face (not a second boundary - `Face::try_new` rejects wires that share a
+  vertex). Where the doubled wires first appear is not yet established; the
+  `sew` stage tags `raw`/`weld`/`merge1`/`split`/`merge2`/`final` make that one
+  run away.
 - Picking uses the analytic part scenes when the analytic preview is on; mesh
   triangles remain the fallback for parts without a scene.
 - Selection:
@@ -645,14 +665,20 @@ usable: `std.scad` loads, and `cube`, `cuboid`, `cylinder`, `sphere`,
      tessellated coverage. Raise the window or add a fallback tracer.
    - Prototype screen-space adaptive sampling for the compute preview.
 2. **Remaining library and kernel gaps**
-   - Close the planar fallback for the OpenGrid knife-edge cutouts: normalize
-     the arrangement boundary (collapse zero-area spikes and near-coincident
-     vertices), split cuts at crossings and T-junctions, use a piece-relative
-     interior point, and propagate split points across adjacent faces before
-     sewing. That last step is what closes the shell. Gate on the model-metrics
-     harness (volume stable, welded boundary edges to 0). See
-     [`notes/2026-11-05.md`](notes/2026-11-05.md); the diagnostics are on
-     `diag/planar-divide`.
+   - Close the planar fallback for the OpenGrid knife-edge cutouts. Done since
+     the last pass: exact curve-curve intersection, the planar arrangement and
+     loop nesting, a piece-relative interior point, and the `sew` repairs
+     (`drop_wire_spikes`, `split_wire_at_repeats`). Remaining, in order:
+     - Find where the doubled wires originate. `sew`'s stage tags
+       (`raw`/`weld`/`merge1`/`split`/`merge2`/`final`) already show which stage
+       first contains the duplicate; the repairs treat the symptom.
+     - Explain the two inconsistently wound edges on the `x = 6` wall.
+     - Drive welded boundary edges to 0 on the one-clip fixture (46 today).
+   - Gate on welded boundary edges and on the viewer, **not on volume**. A mesh
+     with holes gives a meaningless volume in both directions, and two errors
+     can cancel; the back-face overlay (red = you are looking at a face's back)
+     is the direct check. See [`notes/2026-11-06.md`](notes/2026-11-06.md).
+     The diagnostics are on `diag/planar-divide`.
    - Make Truck booleans deterministic: topology IDs hash `Arc` pointers, so
      results depend on the process address layout. A stable per-entity ID would
      make runs reproducible and make failures debuggable.
