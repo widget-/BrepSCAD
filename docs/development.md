@@ -14,10 +14,14 @@ cargo build -p brepscad-lsp -p brepscad-viewer
 scripts/screenshot-viewer.sh /tmp/viewer.png
 ```
 
-`scripts/screenshot-viewer.sh <output.png> [settle-seconds]` starts `Xvfb` on a
-free display, runs `target/debug/brepscad-viewer` at 1280×800, waits four
-seconds by default, captures one frame with ffmpeg's `x11grab`, and shuts
-everything down. The output path is printed on success.
+`scripts/screenshot-viewer.sh <output.png> [settle-seconds] [file.scad]
+[viewer-args...]` starts `Xvfb` on a free display, runs
+`target/debug/brepscad-viewer` at 1280×800, waits four seconds by default,
+captures one frame with ffmpeg's `x11grab`, and shuts everything down. Extra
+arguments after the file are passed to the viewer, so
+`scripts/screenshot-viewer.sh /tmp/legacy.png 6 "" --legacy-centering` captures
+the built-in sample in OpenSCAD placement. The output path is printed on
+success.
 
 Run the script inside the dev shell (`nix-shell --run 'scripts/screenshot-viewer.sh ...'`)
 so the viewer can find `libxkbcommon-x11` and the wgpu libraries through

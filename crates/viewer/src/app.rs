@@ -121,7 +121,11 @@ pub(crate) struct ViewerApp {
 }
 
 impl ViewerApp {
-    pub(crate) fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(
+        cc: &eframe::CreationContext<'_>,
+        path: Option<PathBuf>,
+        legacy_centering: bool,
+    ) -> Self {
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -129,7 +133,7 @@ impl ViewerApp {
 
         let mut mesh_cache = MeshCache::new();
         let (evaluation, error, error_diagnostic) =
-            evaluate_source(SAMPLE, None, &mut mesh_cache, false, true);
+            evaluate_source(SAMPLE, None, &mut mesh_cache, legacy_centering, true);
         let mesh = combine_evaluation(&evaluation);
         let (pick_mesh, pick_parts) = combine_parts(&evaluation);
         let mut camera = Camera::default();
@@ -160,7 +164,7 @@ impl ViewerApp {
             dirty: false,
             evaluation,
             mesh_cache,
-            legacy_centering: false,
+            legacy_centering,
             analytic_preview: true,
             mesh,
             pick_mesh,

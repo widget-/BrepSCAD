@@ -3,9 +3,16 @@
 # the real desktop. Requires Xvfb and ffmpeg with x11grab support.
 set -euo pipefail
 
-output=${1:?usage: $0 <output.png> [settle-seconds] [file.scad]}
+output=${1:?usage: $0 <output.png> [settle-seconds] [file.scad] [viewer-args...]}
 settle=${2:-4}
 file=${3:-}
+viewer_args=()
+if [[ -n "$file" ]]; then
+    viewer_args+=("$file")
+fi
+if (( $# > 3 )); then
+    viewer_args+=("${@:4}")
+fi
 binary=${VIEWER_BIN:-target/debug/brepscad-viewer}
 
 if [[ ! -x "$binary" ]]; then
@@ -36,11 +43,7 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 
-if [[ -n "$file" ]]; then
-    DISPLAY="$display" WAYLAND_DISPLAY= "$binary" "$file" >/dev/null 2>&1 &
-else
-    DISPLAY="$display" WAYLAND_DISPLAY= "$binary" >/dev/null 2>&1 &
-fi
+DISPLAY="$display" WAYLAND_DISPLAY= "$binary" "${viewer_args[@]}" >/dev/null 2>&1 &
 app_pid=$!
 sleep "$settle"
 
