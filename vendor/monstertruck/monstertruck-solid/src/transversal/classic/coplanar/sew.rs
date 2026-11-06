@@ -185,8 +185,44 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if debug {
         report_wire_defects("final", &compressed);
     }
+    // Provenance: record the outcome against the *input* faces, since
+    // `Shell::extract` consumes the compressed shell. A face that disappears
+    // from the result can then be found by its key and its reason read off.
+    #[cfg(feature = "provenance")]
+    let (input_keys, shell_bounds) = {
+        let keys: Vec<usize> = shell
+            .face_iter()
+            .map(|face| face.provenance_key())
+            .collect();
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        for point in &compressed.vertices {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
+            }
+        }
+        (keys, (min, max))
+    };
     let extract_start = debug.then(Instant::now);
     let extracted = Shell::extract(compressed);
+    #[cfg(feature = "provenance")]
+    {
+        use monstertruck_core::provenance;
+        let (min, max) = shell_bounds;
+        let outcome = match &extracted {
+            Ok(_) => format!(
+                "kept, {left_boundary} boundary edges, bounds {min:?}..{max:?}"
+            ),
+            Err(error) => format!(
+                "DROPPED, extract failed {error:?}, {left_boundary} boundary edges, \
+                 bounds {min:?}..{max:?}"
+            ),
+        };
+        for key in &input_keys {
+            provenance::record(*key, "sew", outcome.clone(), &[]);
+        }
+    }
     if debug {
         if let Err(error) = &extracted {
             eprintln!("[sew] extract failed: {error:?}");
