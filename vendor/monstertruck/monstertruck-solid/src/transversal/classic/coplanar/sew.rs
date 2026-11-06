@@ -392,7 +392,13 @@ fn split_wire_at_repeats<C, S: Clone>(compressed: &mut CompressedShell<Point3, C
             if inner_normal.magnitude() * 0.5 <= tol * perimeter(&inner) {
                 continue;
             }
-            let winds_alike = outer_normal.dot(inner_normal) >= 0.0;
+            // Every `winds_alike == false` seen in the snap is decided by
+            // round-off: the remainder is a degenerate out-and-back whose Newell
+            // normal is 1e-16, so the dot with the inner run lands at 1e-15 and
+            // its sign is noise. Only trust the comparison when the remainder
+            // encloses real area.
+            let outer_real = outer_normal.magnitude() * 0.5 > tol * tol;
+            let winds_alike = !outer_real || outer_normal.dot(inner_normal) >= 0.0;
             if diagnostics::sew_enabled() {
                 let show = |wire: &[CompressedEdgeIndex]| -> String {
                     wire.iter()
