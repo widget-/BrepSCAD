@@ -184,7 +184,28 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // point, not a defect in the region. `Shell::extract` rejects the whole
     // shell as `NotSimpleWire`; splitting the inner run out as its own loop
     // keeps every face.
+    // A boundary edge is used by exactly one face. Counting them either side of
+    // the face split says whether the split opens the shell or merely relabels
+    // geometry that was already open.
+    let boundary_edges = |compressed: &CompressedShell<Point3, C, S>| -> usize {
+        let mut uses = vec![0usize; compressed.edges.len()];
+        for face in &compressed.faces {
+            for wire in &face.boundaries {
+                for use_ in wire {
+                    uses[use_.index] += 1;
+                }
+            }
+        }
+        uses.iter().filter(|count| **count == 1).count()
+    };
+    let boundary_before = debug.then(|| boundary_edges(&compressed));
     split_wire_at_repeats(&mut compressed, tol);
+    if let Some(before) = boundary_before {
+        eprintln!(
+            "SEW-SPLIT boundary edges before={before} after={}",
+            boundary_edges(&compressed)
+        );
+    }
     let out_vertices = compressed.vertices.len();
     let out_edges = compressed.edges.len();
     let out_faces = compressed.faces.len();
@@ -281,8 +302,11 @@ fn drop_wire_spikes<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
             false => (end, start),
         }
     };
+    let mut emptied = 0usize;
+    let mut emptied_lengths: Vec<usize> = Vec::new();
     for face in &mut compressed.faces {
         for wire in &mut face.boundaries {
+            let original = wire.len();
             let mut changed = true;
             while changed {
                 changed = false;
@@ -306,7 +330,14 @@ fn drop_wire_spikes<C, S>(compressed: &mut CompressedShell<Point3, C, S>) {
                     }
                 }
             }
+            if wire.is_empty() && original > 0 {
+                emptied += 1;
+                emptied_lengths.push(original);
+            }
         }
+    }
+    if emptied > 0 && diagnostics::sew_enabled() {
+        eprintln!("SEW-SPIKE emptied={emptied} wires, original lengths {emptied_lengths:?}");
     }
 }
 
