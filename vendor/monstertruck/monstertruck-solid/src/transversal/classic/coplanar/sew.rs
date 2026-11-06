@@ -83,6 +83,9 @@ pub(in super::super) fn sew<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Shell<Point3, C, S>> {
     let debug = diagnostics::sew_enabled();
+    if debug {
+        next_sew_call();
+    }
     let started = debug.then(Instant::now);
     let compressed = shell.compress();
     if diagnostics::sew_enabled() {
@@ -433,6 +436,26 @@ fn split_wire_at_repeats<C, S: Clone>(compressed: &mut CompressedShell<Point3, C
     compressed.faces.extend(added);
 }
 
+// Identifies the `sew` call a defect report belongs to. A stage only prints when
+// it has a defect, so without a call id the stage lines cannot be grouped back
+// into the call they came from - and it is the *order* within one call that
+// shows which stage introduced the defect.
+thread_local! {
+    static SEW_CALL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn next_sew_call() -> usize {
+    SEW_CALL.with(|call| {
+        let id = call.get() + 1;
+        call.set(id);
+        id
+    })
+}
+
+fn current_sew_call() -> usize {
+    SEW_CALL.with(std::cell::Cell::get)
+}
+
 /// How many defective wires to dump before going quiet.
 ///
 /// Console noise is the only reason to cap this at all, so the cap is generous
@@ -500,7 +523,8 @@ fn report_wire_defects<C, S>(stage: &str, compressed: &CompressedShell<Point3, C
         return;
     }
     eprintln!(
-        "SEW-WIRES[{stage}] edges={} vertices={} collapsed={} empty_wires={empty} open_wires={} repeated_wires={repeated}",
+        "SEW-WIRES[{stage}] call={} edges={} vertices={} collapsed={} empty_wires={empty} open_wires={} repeated_wires={repeated}",
+        current_sew_call(),
         compressed.edges.len(),
         compressed.vertices.len(),
         collapsed.len(),
@@ -813,6 +837,16 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         if splits.is_empty() {
             return;
         }
+        let endpoints: Vec<(usize, usize)> = match diagnostics::sew_enabled() {
+            true => compressed
+                .edges
+                .iter()
+                .map(|edge| (edge.vertices.0, edge.vertices.1))
+                .collect(),
+            false => Vec::new(),
+        };
+        let mut pinches = 0usize;
+        let split_count = splits.len();
         for (index, vertex, t) in splits {
             let old_uses = uses[index];
             if let Some(stats) = stats.as_mut() {
@@ -839,6 +873,20 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             for face in &mut compressed.faces {
                 for wire in &mut face.boundaries {
                     let mut new_wire = Vec::with_capacity(wire.len() + 1);
+                    if diagnostics::sew_enabled() {
+                        // Does the snapped vertex already sit elsewhere in this
+                        // wire? If so the split is materialising a T-junction and
+                        // the wire will pass through that vertex twice.
+                        let already = wire.iter().any(|use_| {
+                            use_.index != index && {
+                                let (a, b) = endpoints[use_.index];
+                                (if use_.orientation { a } else { b }) == vertex
+                            }
+                        });
+                        if already {
+                            pinches += 1;
+                        }
+                    }
                     for use_ in wire.drain(..) {
                         if use_.index == index {
                             if use_.orientation {
@@ -877,6 +925,9 @@ fn split_boundary_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 boundary.push(first_index);
                 boundary.push(second_index);
             }
+        }
+        if diagnostics::sew_enabled() && pinches > 0 {
+            eprintln!("SEW-SPLIT pinches={pinches} of {split_count} splits in one pass");
         }
     }
 }
