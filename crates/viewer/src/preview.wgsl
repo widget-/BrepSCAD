@@ -137,7 +137,16 @@ fn main(@builtin(global_invocation_id) invocation: vec3<u32>) {
         let normal = normalize(best_normal);
         let light = normalize(-camera.light.xyz);
         let diffuse = abs(dot(normal, light));
-        color = vec3<f32>(0.58, 0.68, 0.82) * (0.22 + 0.78 * diffuse);
+        // A face seen from behind has its normal pointing along the ray. Paint
+        // those red: a missing front face then reads as a red patch you can see
+        // through, instead of a wall whose inside looks like its outside.
+        let backside = dot(normal, direction) > 0.0;
+        let base = select(
+            vec3<f32>(0.58, 0.68, 0.82),
+            vec3<f32>(0.86, 0.16, 0.14),
+            backside,
+        );
+        color = base * (0.22 + 0.78 * diffuse);
     }
     textureStore(output, vec2<i32>(invocation.xy), vec4<f32>(color, 1.0));
 }
