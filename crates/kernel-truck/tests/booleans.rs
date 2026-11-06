@@ -577,6 +577,45 @@ fn through_hole_whose_cutter_cap_is_flush_is_closed() {
     );
 }
 
+/// The same cutter, moved so it also crosses two side faces: a corner groove.
+///
+/// The cut on each planar face is a polygon through the intersection curve's
+/// samples while the cylinder wall is an exact surface, so unrefined
+/// mesh-interference chords leave a visible gap along the rim. The trim
+/// sampling is what this pins: the volume is the exact groove, and the welded
+/// boundary stays at the handful of edges the three-face corner leaves.
+#[test]
+fn corner_groove_follows_the_cylinder_rim() {
+    let mut kernel = TruckKernel::new();
+    let block = cube(&mut kernel, [2.0; 3], [1.0, 1.0, 1.0]);
+    let cutter = kernel
+        .primitive(Primitive::Cylinder {
+            radius: 0.5,
+            height: 4.0,
+        })
+        .expect("cylindrical cutter");
+    let cutter = kernel
+        .transform(cutter, Transform::from_translation([0.2, 0.0, 2.0]))
+        .expect("translate cutter");
+    let result = kernel
+        .boolean(BooleanOp::Difference, block, cutter)
+        .expect("corner groove difference");
+    let mesh = kernel.tessellate(result, 0.05).expect("tessellate");
+
+    // Quarter-circle area inside the cube: the half of the disc above y = 0,
+    // less the half of the left circular segment cut off by x = 0.
+    let disc = std::f64::consts::PI * 0.25;
+    let left_segment = 0.25 * (0.2f64 / 0.5).acos() - 0.2 * (0.25f64 - 0.04).sqrt();
+    let expected = 8.0 - (disc / 2.0 - left_segment / 2.0) * 2.0;
+    let volume = signed_volume(&mesh);
+    assert!((volume - expected).abs() < 0.02, "volume = {volume}");
+    assert!(
+        welded_boundary_edges(&mesh) <= 6,
+        "groove rim is joined: {} boundary edges",
+        welded_boundary_edges(&mesh)
+    );
+}
+
 /// A half-space cut on a closed cube must produce a closed half-cube with a
 /// planar cut face.
 #[test]

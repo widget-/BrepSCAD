@@ -17,6 +17,56 @@ type Polyline = PolylineCurve<Point3>;
 
 /// Re-sample a raw interference polyline onto both surfaces, returning a
 /// cleaned polyline intersection curve. Mirrors 0.3.2
+/// Longest distance a chord may stray from the exact intersection, relative to
+/// the curve's own extent.
+///
+/// The trim on a planar face is a polygon through the curve's samples, while
+/// the surface of revolution it cuts is exact. An unrefined chord therefore
+/// sits inside the exact surface by the chord's sagitta, and the wall bulges
+/// past the planar trim by that amount - a visible sliver along the rim. With
+/// the interference chords at a modelling tolerance, that was several pixels on
+/// the built-in sample.
+const CHORD_TOLERANCE: f64 = 1.0e-4;
+/// Bisection depth for the refinement. Four splits make a chord 1/16 of the
+/// raw interference segment, which is below `CHORD_TOLERANCE` for the
+/// curvature the primitives in this backend produce.
+const REFINE_DEPTH: usize = 4;
+
+/// Insert points on the exact intersection wherever a chord strays further
+/// than `tolerance` from it.
+///
+/// `search_triple` at a fractional index interpolates the raw leader and then
+/// projects the result onto both surfaces, so the inserted point lies on the
+/// exact curve. Recursion stops as soon as the chord is close enough, which
+/// leaves straight intersections (plane-plane) untouched.
+fn refine_chords<S>(
+    curve: &IntersectionCurve<Polyline, S, S>,
+    (t0, p0): (f64, Point3),
+    (t1, p1): (f64, Point3),
+    tolerance: f64,
+    depth: usize,
+    out: &mut Polyline,
+) where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    if depth == 0 {
+        return;
+    }
+    let tm = (t0 + t1) * 0.5;
+    let Some((pm, _, _)) = curve.search_triple(tm, 100) else {
+        return;
+    };
+    if pm.distance(p0.midpoint(p1)) <= tolerance {
+        return;
+    }
+    refine_chords(curve, (t0, p0), (tm, pm), tolerance, depth - 1, out);
+    out.push(pm);
+    refine_chords(curve, (tm, pm), (t1, p1), tolerance, depth - 1, out);
+}
+
 /// `IntersectionCurveWithParameters::try_new`, keeping only the 3D leader.
 fn build_intersection_curve<S>(
     surface0: S,
@@ -50,21 +100,42 @@ where
             Some((q0.midpoint(q1), p0.into(), p1.into()))
         })
     };
-    let mut polyline = PolylineCurve(Vec::new());
+    let mut samples: Vec<(f64, Point3)> = Vec::with_capacity(len);
     for i in 0..len - 1 {
         let (q, _, _) = ic
             .search_triple(i as f64, 100)
             .or_else(|| recover_triple(raw[i]))?;
-        polyline.push(q);
+        samples.push((i as f64, q));
     }
-    let q = if raw[0].near(&raw[len - 1]) {
-        polyline[0]
+    let closed = raw[0].near(&raw[len - 1]);
+    let last = if closed {
+        samples[0].1
     } else {
         ic.search_triple((len - 1) as f64, 100)
             .or_else(|| recover_triple(raw[len - 1]))?
             .0
     };
-    polyline.push(q);
+    samples.push(((len - 1) as f64, last));
+
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (_, point) in &samples {
+        min = Point3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
+        max = Point3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
+    }
+    let extent = (max - min).magnitude();
+    let tolerance = if extent.is_finite() && extent > 0.0 {
+        CHORD_TOLERANCE * extent
+    } else {
+        0.0
+    };
+
+    let mut polyline = PolylineCurve(Vec::new());
+    polyline.push(samples[0].1);
+    for pair in samples.windows(2) {
+        refine_chords(&ic, pair[0], pair[1], tolerance, REFINE_DEPTH, &mut polyline);
+        polyline.push(pair[1].1);
+    }
     Some(IntersectionCurve::new(surface0, surface1, polyline))
 }
 

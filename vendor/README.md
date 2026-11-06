@@ -25,6 +25,17 @@ the source gates code on it.
 
 Local patches:
 
+- `monstertruck-solid/src/transversal/classic/intersection_curve.rs` refines
+  each intersection chord against the exact surfaces before building the
+  curve. The raw leader comes from the tessellated meshes, so a chord sits
+  inside the exact surface it cuts by its sagitta; a planar face's trim is a
+  polygon through those chords while a surface of revolution is exact, and the
+  wall then bulges past the trim. On the built-in sample's corner groove that
+  left a visible red sliver along the rim. `search_triple` at a fractional
+  leader parameter projects onto both surfaces, so bisecting until the chord is
+  within `1e-4` of the curve's extent puts the trim on the exact curve. Straight
+  plane-plane intersections are unchanged (the midpoint already lies on the
+  chord).
 - `monstertruck-solid/src/transversal/classic/divide_face.rs` keeps a divided
   face when `Face::try_new` rejects its wires (boolean-generated wires are often
   non-simple) by falling back to `Face::new_unchecked`, instead of failing the
