@@ -10,6 +10,7 @@ publish = false
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 bytemuck = { version = "1", features = ["derive"] }
 eframe = { version = "0.37", default-features = false, features = [
+    "clipboard",
     "default_fonts",
     "wayland",
     "wgpu",
